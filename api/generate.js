@@ -109,15 +109,19 @@ export default async function handler(req) {
         })
       }
       const user = await userRes.json()
-      // Also verify MFA (AAL2) for extra security
-      const aal = user?.factors?.some(f => f.status === 'verified') ? 'aal2' : 'aal1'
-      if (aal !== 'aal2') {
-        return new Response(JSON.stringify({ error: 'Two-factor authentication required.' }), {
+      userId = user.id
+      // Verify session is at AAL2 (TOTP verified) by reading the aal claim
+      // from the JWT itself — Supabase sets aal:'aal2' in the token payload
+      // after mfa.verify() completes. Checking user.factors is wrong because
+      // it only tells you factors exist, not that they were used this session.
+      const jwtPayload = parseJwt(token)
+      const sessionAal = jwtPayload?.aal || 'aal1'
+      if (sessionAal !== 'aal2') {
+        return new Response(JSON.stringify({ error: 'Two-factor authentication required. Please complete MFA to generate a plan.' }), {
           status: 403,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       }
-      userId = user.id
     } catch (e) {
       return new Response(JSON.stringify({ error: 'Auth validation failed.' }), {
         status: 500,

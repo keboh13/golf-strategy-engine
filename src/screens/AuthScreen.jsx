@@ -140,7 +140,7 @@ const S = {
 
 // ── Sign-up flow ──────────────────────────────────────────────────────────────
 function SignUpForm({ onComplete }) {
-  const [step, setStep]     = useState('form')   // 'form' | 'totp_enroll'
+  const [step, setStep]     = useState('form')   // 'form' | 'confirm_email' | 'totp_enroll'
   const [email, setEmail]   = useState('')
   const [pass, setPass]     = useState('')
   const [pass2, setPass2]   = useState('')
@@ -161,7 +161,17 @@ function SignUpForm({ onComplete }) {
     try {
       const { data, error: signUpErr } = await supabase.auth.signUp({ email, password: pass })
       if (signUpErr) throw signUpErr
-      // Immediately enroll TOTP
+
+      // If Supabase requires email confirmation, the session will be null
+      // and we can't enroll TOTP yet (JWT has no sub claim until confirmed).
+      if (!data.session) {
+        // Email confirmation is on — user must confirm before continuing
+        setStep('confirm_email')
+        setLoading(false)
+        return
+      }
+
+      // Session is live (email confirmation disabled) — enroll TOTP immediately
       await enrollTotp()
     } catch (err) {
       setError(err.message || 'Sign-up failed.')
@@ -203,6 +213,21 @@ function SignUpForm({ onComplete }) {
       setError(err.message || 'TOTP verification failed.')
       setLoading(false)
     }
+  }
+
+  if (step === 'confirm_email') {
+    return (
+      <div>
+        <div style={S.info}>
+          <strong>Check your email</strong><br />
+          We sent a confirmation link to <strong>{email}</strong>.<br />
+          Click it to verify your account, then come back and sign in.
+        </div>
+        <p style={{ fontSize: 12, color: '#475569', marginTop: 8 }}>
+          Once confirmed, sign in and you'll be prompted to set up two-factor authentication.
+        </p>
+      </div>
+    )
   }
 
   if (step === 'totp_enroll') {
