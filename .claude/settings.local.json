@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install *)",
+      "Bash(curl -s \"https://api.opengolfapi.org/v1/courses/40977ee8-33ee-4195-b6a2-99a4ca83c2bc\")",
+      "Bash(python3 -m json.tool)",
+      "mcp__Claude_in_Chrome__tabs_context_mcp",
+      "Bash(npm run *)",
+      "Bash(curl -s http://localhost:3000)",
+      "mcp__Claude_Preview__preview_start",
+      "WebFetch(domain:api.golfcourseapi.com)",
+      "Bash(curl -s https://api.golfcourseapi.com/v1/search?search_query=pebble+beach -H 'Authorization: Key PLACEHOLDER')",
+      "Bash(curl -s \"https://api.golfcourseapi.com/v1/search?search_query=pebble+beach\")",
+      "Bash(curl -s \"https://api.golfcourseapi.com/docs/api/openapi.json\")",
+      "Bash(curl -s \"https://api.golfcourseapi.com/docs/api/openapi.yaml\")",
+      "Bash(curl -s \"https://api.golfcourseapi.com/openapi.json\")",
+      "Bash(curl -s \"https://api.golfcourseapi.com/swagger.json\")",
+      "Bash(curl -s https://api.golfcourseapi.com/v1/search?search_query=pebble+beach -H 'Authorization: Key HEADJLX5IKHBZ5W3GX57LE3RLU')",
+      "Bash(python3 -c ' *)",
+      "Bash(curl -s https://api.golfcourseapi.com/v1/courses/24636 -H 'Authorization: Key HEADJLX5IKHBZ5W3GX57LE3RLU')",
+      "Bash(curl -s https://api.golfcourseapi.com/v1/search?search_query=augusta -H 'Authorization: Key HEADJLX5IKHBZ5W3GX57LE3RLU')",
+      "Bash(npx vite *)",
+      "Bash(curl -s https://api.golfcourseapi.com/v1/search?search_query=torrey+pines+san+diego -H 'Authorization: Key HEADJLX5IKHBZ5W3GX57LE3RLU')",
+      "Bash(curl -s https://api.golfcourseapi.com/v1/search?search_query=torrey+pines -H 'Authorization: Key HEADJLX5IKHBZ5W3GX57LE3RLU')"
+    ]
+  }
+}
