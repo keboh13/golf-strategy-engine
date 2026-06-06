@@ -58,6 +58,25 @@ const LS_HISTORY  = 'gse_history'
 const LS_KEYS     = 'gse_keys'
 const LS_PROFILES = 'gse_profiles'
 const LS_CURRENT_PROFILE = 'gse_current_profile'
+const LS_COURSE_CACHE    = 'gse_course_cache'
+
+function loadCourseCache() {
+  try { return JSON.parse(localStorage.getItem(LS_COURSE_CACHE)) || {} } catch { return {} }
+}
+function saveCourseCache(obj) {
+  try { localStorage.setItem(LS_COURSE_CACHE, JSON.stringify(obj)) } catch {}
+}
+function cacheKey(name, location) {
+  return `${(name || '').toLowerCase().trim()}|${(location || '').toLowerCase().trim()}`
+}
+function getCachedCourse(name, location) {
+  return loadCourseCache()[cacheKey(name, location)] || null
+}
+function setCachedCourse(normalized) {
+  const cache = loadCourseCache()
+  cache[cacheKey(normalized.name, normalized.location)] = { ...normalized, _cachedAt: Date.now() }
+  saveCourseCache(cache)
+}
 
 function loadProfiles() {
   try { return JSON.parse(localStorage.getItem(LS_PROFILES)) || {} } catch { return {} }
@@ -437,10 +456,22 @@ function CourseSearch({ apiKey, golfCourseApiKey, onApiKeyNeeded, onSelect }) {
     const myId = ++loadIdRef.current
     setLoading(true); setError(''); setStatus(''); setDetail(null)
     try {
-      // GolfCourseAPI results already include full tee/hole data — normalize directly
       if (courseStub._source === 'GolfCourseAPI') {
+        // Check cache before hitting API
+        const stubName = courseStub.course_name || courseStub.name || ''
+        const stubLoc  = courseStub.location || ''
+        const cached = getCachedCourse(stubName, stubLoc)
+        if (cached) {
+          if (myId !== loadIdRef.current) return
+          setDetail(cached)
+          setSource('cache')
+          setStatus('')
+          setLoading(false)
+          return
+        }
         const normalized = normalizeGolfCourseAPICourse(courseStub)
         if (myId !== loadIdRef.current) return
+        setCachedCourse(normalized)
         setDetail(normalized)
         setSource('GolfCourseAPI')
       } else {
@@ -449,13 +480,12 @@ function CourseSearch({ apiKey, golfCourseApiKey, onApiKeyNeeded, onSelect }) {
         if (myId !== loadIdRef.current) return
         const normalized = normalizeOpenGolfCourse(raw)
         const missingYardages = normalized.holes.every(h => !h.yardage)
-
         if (missingYardages && apiKey) {
           setStatus('Fetching yardages via web search…')
           try {
             const webData = await fetchScorecardViaClaudeSearch(apiKey, normalized.name, normalized.location)
             if (myId !== loadIdRef.current) return
-            setDetail({
+            const merged = {
               ...normalized,
               yardage: webData.yardage || normalized.yardage,
               rating:  webData.rating  || normalized.rating,
@@ -467,7 +497,9 @@ function CourseSearch({ apiKey, golfCourseApiKey, onApiKeyNeeded, onSelect }) {
                 par:      webData.holes?.[i]?.par      || h.par,
                 handicap: webData.holes?.[i]?.handicap || h.handicap,
               })),
-            })
+            }
+            setCachedCourse(merged)
+            setDetail(merged)
             setSource(webData.source || 'web search')
           } catch {
             if (myId !== loadIdRef.current) return
@@ -475,6 +507,7 @@ function CourseSearch({ apiKey, golfCourseApiKey, onApiKeyNeeded, onSelect }) {
             setSource('OpenGolfAPI (no yardages — enter manually)')
           }
         } else {
+          setCachedCourse(normalized)
           setDetail(normalized)
           setSource(normalized.source || 'OpenGolfAPI')
         }
@@ -567,7 +600,9 @@ function CourseSearch({ apiKey, golfCourseApiKey, onApiKeyNeeded, onSelect }) {
                 {detail.location} · Par {detail.par} · {detail.yardage ? Number(detail.yardage).toLocaleString() + 'y' : ''}
                 {detail.rating && ` · Rating ${detail.rating}`}{detail.slope && ` / Slope ${detail.slope}`}
               </p>
-              <p style={{ fontSize: 11, color: C.green, margin: '4px 0 0' }}>✓ Verified from {source}</p>
+              <p style={{ fontSize: 11, color: source === 'cache' ? C.amber : C.green, margin: '4px 0 0' }}>
+                {source === 'cache' ? '⚡ Loaded from local cache — no API call' : `✓ Verified from ${source}`}
+              </p>
             </div>
             <button style={btnP} onClick={() => onSelect(detail)}>Use this scorecard →</button>
           </div>
@@ -1315,11 +1350,11 @@ Use actual yardages throughout. Be direct — no filler.`
     { id: 'player',  label: 'Bag & player',    icon: '🏌️' },
     { id: 'history', label: 'Scoring history', icon: '📊' },
     { id: 'course',  label: 'Course setup',    icon: '⛳' },
-    // { id: 'map',     label: 'Course map',      icon: '🛰️' },
     { id: 'plan',    label: 'Game plan',       icon: '⚡' },
+    { id: 'admin',   label: 'Course cache',    icon: '🗄️' },
   ]
 
-  const nextTab = { player: 'history', history: 'course', course: 'plan', /* map: 'plan' */ }
+  const nextTab = { player: 'history', history: 'course', course: 'plan' }
 
   return (
     <div style={{ background: C.bg, minHeight: '100vh', fontFamily: F }}>
@@ -1996,8 +2031,83 @@ Use actual yardages throughout. Be direct — no filler.`
           </div>
         )}
 
+        {/* ── COURSE CACHE ADMIN ── */}
+        {tab === 'admin' && (() => {
+          const cache = loadCourseCache()
+          const entries = Object.values(cache).sort((a, b) => (b._cachedAt || 0) - (a._cachedAt || 0))
+          return (
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+                <div>
+                  <h2 style={{ fontSize: 18, fontWeight: 600, color: C.text, margin: 0 }}>Course cache</h2>
+                  <p style={{ fontSize: 12, color: C.textMuted, margin: '3px 0 0' }}>
+                    {entries.length} course{entries.length !== 1 ? 's' : ''} stored locally — loaded instantly, no API call needed
+                  </p>
+                </div>
+                {entries.length > 0 && (
+                  <button style={{ ...btnG, color: C.red, borderColor: C.red }}
+                    onClick={() => { if (window.confirm('Clear all cached courses?')) { localStorage.removeItem(LS_COURSE_CACHE); setTab('admin') } }}>
+                    Clear all cache
+                  </button>
+                )}
+              </div>
+              {entries.length === 0 ? (
+                <div style={{ ...card, textAlign: 'center', padding: '3rem 2rem' }}>
+                  <div style={{ fontSize: 32, marginBottom: 12 }}>🗄️</div>
+                  <p style={{ fontSize: 16, color: C.textMuted, margin: 0 }}>No courses cached yet</p>
+                  <p style={{ fontSize: 12, color: C.textFaint, marginTop: 6 }}>Courses are saved automatically after the first search — future loads are instant</p>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {entries.map((c, i) => (
+                    <div key={i} style={{ ...card, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                          <p style={{ fontSize: 14, fontWeight: 600, color: C.text, margin: 0 }}>{c.name}</p>
+                          <Badge
+                            label={c.source === 'GolfCourseAPI' ? '✓ Verified' : '⚠ Web search'}
+                            bg={c.source === 'GolfCourseAPI' ? C.greenMuted : C.amberMuted}
+                            fg={c.source === 'GolfCourseAPI' ? C.green : C.amber}
+                          />
+                        </div>
+                        <p style={{ fontSize: 12, color: C.textMuted, margin: '0 0 6px' }}>
+                          {c.location} · Par {c.par} · {c.yardage ? Number(c.yardage).toLocaleString() + 'y' : '—'}
+                          {c.rating ? ` · Rating ${c.rating}` : ''}{c.slope ? ` / Slope ${c.slope}` : ''}
+                        </p>
+                        <div style={{ display: 'flex', gap: 16 }}>
+                          <span style={{ fontSize: 11, color: C.textFaint }}>{c.holes?.length || 18} holes</span>
+                          <span style={{ fontSize: 11, color: C.textFaint }}>
+                            Cached {c._cachedAt ? new Date(c._cachedAt).toLocaleDateString() : '—'}
+                          </span>
+                          {c.tees?.length > 0 && (
+                            <span style={{ fontSize: 11, color: C.textFaint }}>
+                              Tees: {c.tees.map(t => t.name).join(', ')}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, marginLeft: 16, flexShrink: 0 }}>
+                        <button style={btnG} onClick={() => { applyScorecard(c); setTab('course') }}>Load →</button>
+                        <button style={{ ...btnG, color: C.red, borderColor: C.red }}
+                          onClick={() => {
+                            const updated = loadCourseCache()
+                            delete updated[cacheKey(c.name, c.location)]
+                            saveCourseCache(updated)
+                            setTab('admin')
+                          }}>
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )
+        })()}
+
         {/* Footer nav */}
-        {tab !== 'plan' && (
+        {tab !== 'plan' && tab !== 'admin' && (
           <div style={{ marginTop: 16, ...card, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
               <p style={{ fontSize: 13, fontWeight: 500, color: C.text, margin: 0 }}>
