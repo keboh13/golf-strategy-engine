@@ -1,4 +1,7 @@
 import { useState, useCallback, useEffect, useRef, Component } from 'react'
+import { supabase, loadUserProfiles, saveUserProfile, deleteUserProfile, loadUserHistory, saveUserHistory, loadUserSettings, saveUserSettings, getCachedCourseDB, setCachedCourseDB, getAllCachedCoursesDB, deleteCachedCourseDB } from './lib/supabase.js'
+import AuthScreen from './screens/AuthScreen.jsx'
+import OnboardingScreen from './screens/OnboardingScreen.jsx'
 
 // ─── Error boundary ───────────────────────────────────────────────────────────
 class ErrorBoundary extends Component {
@@ -890,7 +893,7 @@ function CourseMapEmbed({ courseName, location, mapsKey }) {
 }
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
-function AppInner() {
+function AppInner({ user, session, onSignOut }) {
   // ── API keys — loaded from localStorage, falling back to .env ────────────
   const [apiKey,          setApiKeyRaw]       = useState(() => loadSavedKeys().anthropic  || ENV_ANTHROPIC_KEY)
   const [mapsKey,         setMapsKeyRaw]      = useState(() => loadSavedKeys().maps        || ENV_MAPS_KEY)
@@ -1028,13 +1031,50 @@ function AppInner() {
   }
 
   // ── Persistence ──────────────────────────────────────────────────────────
+  // Load user data from Supabase on mount (when authenticated)
+  useEffect(() => {
+    if (!user) return
+    ;(async () => {
+      try {
+        // Load profiles
+        const dbProfiles = await loadUserProfiles(user.id)
+        if (Object.keys(dbProfiles).length > 0) {
+          saveProfiles(dbProfiles)
+          const settings = await loadUserSettings(user.id)
+          const profileName = settings.current_profile || Object.keys(dbProfiles)[0]
+          setCurrentProfile(profileName)
+          if (dbProfiles[profileName]) setPlayerInfo(dbProfiles[profileName])
+        }
+        // Load history
+        const dbHistory = await loadUserHistory(user.id)
+        if (dbHistory.length > 0) setScoringHistory(dbHistory)
+        // Load settings (API keys)
+        const settings = await loadUserSettings(user.id)
+        if (settings.golf_course_api_key) setGolfKeyRaw(settings.golf_course_api_key)
+      } catch (e) {
+        console.warn('[supabase] load error:', e.message)
+      }
+    })()
+  }, [user?.id])
+
   useEffect(() => {
     localStorage.setItem(LS_PLAYER, JSON.stringify(playerInfo))
     const profiles = loadProfiles()
     profiles[currentProfile] = playerInfo
     saveProfiles(profiles)
+    // Sync to Supabase
+    if (user) {
+      saveUserProfile(user.id, currentProfile, playerInfo).catch(e => console.warn('[supabase] profile save:', e.message))
+      saveUserSettings(user.id, { current_profile: currentProfile }).catch(e => console.warn('[supabase] settings save:', e.message))
+    }
   }, [playerInfo, currentProfile])
-  useEffect(() => { localStorage.setItem(LS_HISTORY, JSON.stringify(scoringHistory)) }, [scoringHistory])
+  useEffect(() => {
+    localStorage.setItem(LS_HISTORY, JSON.stringify(scoringHistory))
+    // Sync to Supabase
+    if (user) {
+      saveUserHistory(user.id, scoringHistory).catch(e => console.warn('[supabase] history save:', e.message))
+    }
+  }, [scoringHistory])
 
   const holeTimes   = computeHoleTimes(teeTime, pace)
   const holeWeather = holeTimes.map(dt => weather ? getWeatherAtHour(weather, dt) : null)
@@ -1243,10 +1283,12 @@ Use actual yardages throughout. Be direct — no filler.`
       }],
     }
     try {
+      // Get the current session token for the proxy (rate limiting + auth verification)
+      const authToken = session?.access_token || ''
       const res = await fetch(useProxy ? '/api/generate' : 'https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: useProxy
-          ? { 'Content-Type': 'application/json' }
+          ? { 'Content-Type': 'application/json', ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {}) }
           : {
               'Content-Type': 'application/json',
               'x-api-key': apiKey,
@@ -2037,6 +2079,24 @@ Use actual yardages throughout. Be direct — no filler.`
           const entries = Object.values(cache).sort((a, b) => (b._cachedAt || 0) - (a._cachedAt || 0))
           return (
             <div>
+              {/* Account section */}
+              {user && (
+                <div style={{ ...card, marginBottom: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div>
+                    <p style={{ fontSize: 13, fontWeight: 600, color: C.text, margin: 0 }}>Signed in as</p>
+                    <p style={{ fontSize: 12, color: C.textMuted, margin: '2px 0 0' }}>{user.email}</p>
+                  </div>
+                  <button style={{ ...btnG, color: C.red, borderColor: C.red }}
+                    onClick={async () => {
+                      if (window.confirm('Sign out of Golf Strategy Engine?')) {
+                        await supabase.auth.signOut()
+                        if (onSignOut) onSignOut()
+                      }
+                    }}>
+                    Sign out
+                  </button>
+                </div>
+              )}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
                 <div>
                   <h2 style={{ fontSize: 18, fontWeight: 600, color: C.text, margin: 0 }}>Course cache</h2>
@@ -2133,6 +2193,84 @@ Use actual yardages throughout. Be direct — no filler.`
   )
 }
 
+// ─── Auth gate ────────────────────────────────────────────────────────────────
+function AuthGate() {
+  const [session,     setSession]     = useState(undefined)   // undefined = loading, null = signed out
+  const [user,        setUser]        = useState(null)
+  const [needsOnboarding, setNeedsOnboarding] = useState(false)
+
+  // Check existing session on mount
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session)
+      setUser(session?.user ?? null)
+    })
+
+    // Listen for auth changes (login, logout, token refresh)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session)
+      setUser(session?.user ?? null)
+    })
+    return () => subscription.unsubscribe()
+  }, [])
+
+  // Handle AuthScreen completion
+  const handleAuth = async (type) => {
+    const { data: { session } } = await supabase.auth.getSession()
+    setSession(session)
+    setUser(session?.user ?? null)
+    if (type === 'new') setNeedsOnboarding(true)
+  }
+
+  // Handle sign out
+  const handleSignOut = () => {
+    setSession(null)
+    setUser(null)
+    setNeedsOnboarding(false)
+  }
+
+  // Handle onboarding completion — save initial profile + bag to Supabase
+  const handleOnboardingComplete = async ({ player, clubs, golfApiKey }) => {
+    const u = user
+    if (u) {
+      const playerData = { ...player, clubs }
+      try {
+        await saveUserProfile(u.id, player.name || 'Default', playerData)
+        if (golfApiKey) await saveUserSettings(u.id, { golf_course_api_key: golfApiKey, current_profile: player.name || 'Default' })
+        else await saveUserSettings(u.id, { current_profile: player.name || 'Default' })
+      } catch (e) {
+        console.warn('[onboarding] save error:', e.message)
+      }
+    }
+    setNeedsOnboarding(false)
+  }
+
+  // Loading state
+  if (session === undefined) {
+    return (
+      <div style={{ minHeight: '100dvh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#0f1117', fontFamily: 'Inter,system-ui,sans-serif' }}>
+        <div style={{ textAlign: 'center', color: '#64748b' }}>
+          <div style={{ fontSize: 40, marginBottom: 12 }}>⛳</div>
+          <p style={{ fontSize: 14 }}>Loading…</p>
+        </div>
+      </div>
+    )
+  }
+
+  // Not authenticated
+  if (!session || !user) {
+    return <AuthScreen onAuth={handleAuth} />
+  }
+
+  // New user — show onboarding wizard
+  if (needsOnboarding) {
+    return <OnboardingScreen onComplete={handleOnboardingComplete} />
+  }
+
+  // Authenticated — show main app
+  return <AppInner user={user} session={session} onSignOut={handleSignOut} />
+}
+
 export default function App() {
-  return <ErrorBoundary><AppInner /></ErrorBoundary>
+  return <ErrorBoundary><AuthGate /></ErrorBoundary>
 }
