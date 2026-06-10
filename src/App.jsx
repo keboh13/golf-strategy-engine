@@ -471,7 +471,11 @@ function CourseSearch({ apiKey, golfCourseApiKey, onApiKeyNeeded, onSelect }) {
       if (courseStub._source === 'GolfCourseAPI') {
         // Check cache before hitting API
         const stubName = courseStub.course_name || courseStub.name || ''
-        const stubLoc  = courseStub.location || ''
+        // GolfCourseAPI returns location as a nested object before normalization
+        const rawLoc   = courseStub.location
+        const stubLoc  = typeof rawLoc === 'object' && rawLoc !== null
+          ? [rawLoc.city, rawLoc.state].filter(Boolean).join(', ')
+          : (rawLoc || '')
         const cached = getCachedCourse(stubName, stubLoc)
         if (cached) {
           if (myId !== loadIdRef.current) return
