@@ -62,6 +62,15 @@ const LS_KEYS     = 'gse_keys'
 const LS_PROFILES = 'gse_profiles'
 const LS_CURRENT_PROFILE = 'gse_current_profile'
 const LS_COURSE_CACHE    = 'gse_course_cache'
+const LS_MODEL           = 'gse_model'
+
+// ─── AI models available for plan generation ──────────────────────────────────
+const AVAILABLE_MODELS = [
+  { id: 'claude-haiku-4-5-20251001', name: 'Haiku',   desc: 'Fastest · Good for quick briefs',          tier: 'Free'     },
+  { id: 'claude-sonnet-4-6',         name: 'Sonnet',  desc: 'Balanced · Recommended (default)',          tier: 'Standard' },
+  { id: 'claude-opus-4-8',           name: 'Opus',    desc: 'Most capable · Deeper analysis',            tier: 'Premium'  },
+  { id: 'claude-fable-5',            name: 'Fable 5', desc: 'Flagship · Best strategy & reasoning',      tier: 'Premium'  },
+]
 
 function loadCourseCache() {
   try { return JSON.parse(localStorage.getItem(LS_COURSE_CACHE)) || {} } catch { return {} }
@@ -905,6 +914,24 @@ function AppInner({ user, session, onSignOut }) {
   const [draftGolfKey,       setDraftGolfKey]       = useState('')
   const [keyErrors,          setKeyErrors]          = useState({})
 
+  // ── AI model selection ────────────────────────────────────────────────────
+  const [selectedModel, setSelectedModelRaw] = useState(() => localStorage.getItem(LS_MODEL) || 'claude-sonnet-4-6')
+  const setSelectedModel = (m) => { setSelectedModelRaw(m); localStorage.setItem(LS_MODEL, m) }
+
+  // ── Account management state ──────────────────────────────────────────────
+  const [acctSection,     setAcctSection]     = useState(null)  // null | 'password' | 'email' | 'delete'
+  const [acctNewPass,     setAcctNewPass]     = useState('')
+  const [acctConfirmPass, setAcctConfirmPass] = useState('')
+  const [acctNewEmail,    setAcctNewEmail]    = useState('')
+  const [acctMsg,         setAcctMsg]         = useState(null)  // { type: 'ok'|'err', text }
+  const [acctLoading,     setAcctLoading]     = useState(false)
+
+  // ── Admin user management state ───────────────────────────────────────────
+  const [adminUsers,      setAdminUsers]      = useState(null)  // null = not loaded
+  const [adminUsersLoading, setAdminUsersLoading] = useState(false)
+  const [adminUsersError, setAdminUsersError] = useState('')
+  const [adminDeleteMsg,  setAdminDeleteMsg]  = useState('')
+
   // Persist all keys together whenever any changes
   const setApiKey = (v) => { setApiKeyRaw(v);       saveKeys({ ...loadSavedKeys(), anthropic:  v }) }
   const setMapsKey = (v) => { setMapsKeyRaw(v);     saveKeys({ ...loadSavedKeys(), maps:        v }) }
@@ -1274,7 +1301,7 @@ Use actual yardages throughout. Be direct — no filler.`
     if (!useProxy && !apiKey) { setShowKeysPanel(true); setPlanError('Add your Anthropic API key (top-right 🔑) to generate a game plan.'); return }
     setPlanLoading(true); setPlanError(''); setPlan(''); setTab('plan')
     const payload = {
-      model: MODEL,
+      model: selectedModel,
       max_tokens: 6000,
       stream: true,
       messages: [{
@@ -1393,7 +1420,7 @@ Use actual yardages throughout. Be direct — no filler.`
     { id: 'history', label: 'Scoring history', icon: '📊' },
     { id: 'course',  label: 'Course setup',    icon: '⛳' },
     { id: 'plan',    label: 'Game plan',       icon: '⚡' },
-    { id: 'admin',   label: 'Course cache',    icon: '🗄️' },
+    { id: 'admin',   label: 'Settings',        icon: '⚙️' },
   ]
 
   const nextTab = { player: 'history', history: 'course', course: 'plan' }
@@ -2073,18 +2100,108 @@ Use actual yardages throughout. Be direct — no filler.`
           </div>
         )}
 
-        {/* ── COURSE CACHE ADMIN ── */}
+        {/* ── SETTINGS / ADMIN ── */}
         {tab === 'admin' && (() => {
           const cache = loadCourseCache()
           const entries = Object.values(cache).sort((a, b) => (b._cachedAt || 0) - (a._cachedAt || 0))
+
+          const acctAction = async (fn) => {
+            setAcctLoading(true); setAcctMsg(null)
+            try {
+              await fn()
+            } catch (e) {
+              setAcctMsg({ type: 'err', text: e.message })
+            } finally {
+              setAcctLoading(false)
+            }
+          }
+
+          const handleChangePassword = () => acctAction(async () => {
+            if (acctNewPass.length < 8) throw new Error('Password must be at least 8 characters.')
+            if (acctNewPass !== acctConfirmPass) throw new Error('Passwords do not match.')
+            const { error } = await supabase.auth.updateUser({ password: acctNewPass })
+            if (error) throw error
+            setAcctMsg({ type: 'ok', text: 'Password updated successfully.' })
+            setAcctNewPass(''); setAcctConfirmPass(''); setAcctSection(null)
+          })
+
+          const handleChangeEmail = () => acctAction(async () => {
+            if (!acctNewEmail || !acctNewEmail.includes('@')) throw new Error('Enter a valid email address.')
+            const { error } = await supabase.auth.updateUser({ email: acctNewEmail })
+            if (error) throw error
+            setAcctMsg({ type: 'ok', text: 'Confirmation sent to your new email. Check your inbox.' })
+            setAcctNewEmail(''); setAcctSection(null)
+          })
+
+          const handleDeleteAccount = () => acctAction(async () => {
+            const authToken = session?.access_token || ''
+            const res = await fetch('/api/delete-account', {
+              method: 'DELETE',
+              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+            })
+            if (!res.ok) {
+              const d = await res.json().catch(() => ({}))
+              throw new Error(d.error || `Request failed (${res.status})`)
+            }
+            await supabase.auth.signOut()
+            if (onSignOut) onSignOut()
+          })
+
+          const loadAdminUsers = async () => {
+            setAdminUsersLoading(true); setAdminUsersError(''); setAdminDeleteMsg('')
+            const authToken = session?.access_token || ''
+            try {
+              const res = await fetch('/api/admin-users', { headers: { Authorization: `Bearer ${authToken}` } })
+              if (!res.ok) {
+                const d = await res.json().catch(() => ({}))
+                throw new Error(d.error || `${res.status}`)
+              }
+              setAdminUsers(await res.json())
+            } catch (e) {
+              setAdminUsersError(e.message)
+            }
+            setAdminUsersLoading(false)
+          }
+
+          const handleDeleteUser = async (userId, email) => {
+            if (!window.confirm(`Permanently delete user ${email}? This cannot be undone.`)) return
+            setAdminDeleteMsg('')
+            const authToken = session?.access_token || ''
+            try {
+              const res = await fetch('/api/admin-users', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+                body: JSON.stringify({ userId }),
+              })
+              if (!res.ok) {
+                const d = await res.json().catch(() => ({}))
+                throw new Error(d.error || `${res.status}`)
+              }
+              setAdminDeleteMsg(`Deleted ${email}`)
+              setAdminUsers(prev => prev ? prev.filter(u => u.id !== userId) : prev)
+            } catch (e) {
+              setAdminDeleteMsg(`Error: ${e.message}`)
+            }
+          }
+
+          const sectionHead = (title, sub) => (
+            <div style={{ marginBottom: 14 }}>
+              <h3 style={{ fontSize: 15, fontWeight: 600, color: C.text, margin: 0 }}>{title}</h3>
+              {sub && <p style={{ fontSize: 12, color: C.textMuted, margin: '3px 0 0' }}>{sub}</p>}
+            </div>
+          )
+
           return (
             <div>
-              {/* Account section */}
-              {user && (
-                <div style={{ ...card, marginBottom: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h2 style={{ fontSize: 18, fontWeight: 600, color: C.text, margin: '0 0 20px' }}>Settings</h2>
+
+              {/* ── Account ── */}
+              <div style={{ ...card, marginBottom: 16 }}>
+                {sectionHead('Your account')}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
                   <div>
-                    <p style={{ fontSize: 13, fontWeight: 600, color: C.text, margin: 0 }}>Signed in as</p>
-                    <p style={{ fontSize: 12, color: C.textMuted, margin: '2px 0 0' }}>{user.email}</p>
+                    <p style={{ fontSize: 13, color: C.textMuted, margin: 0 }}>Signed in as</p>
+                    <p style={{ fontSize: 14, fontWeight: 600, color: C.text, margin: '2px 0 0' }}>{user?.email}</p>
                   </div>
                   <button style={{ ...btnG, color: C.red, borderColor: C.red }}
                     onClick={async () => {
@@ -2096,72 +2213,216 @@ Use actual yardages throughout. Be direct — no filler.`
                     Sign out
                   </button>
                 </div>
-              )}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
-                <div>
-                  <h2 style={{ fontSize: 18, fontWeight: 600, color: C.text, margin: 0 }}>Course cache</h2>
-                  <p style={{ fontSize: 12, color: C.textMuted, margin: '3px 0 0' }}>
-                    {entries.length} course{entries.length !== 1 ? 's' : ''} stored locally — loaded instantly, no API call needed
-                  </p>
-                </div>
-                {entries.length > 0 && (
-                  <button style={{ ...btnG, color: C.red, borderColor: C.red }}
-                    onClick={() => { if (window.confirm('Clear all cached courses?')) { localStorage.removeItem(LS_COURSE_CACHE); setTab('admin') } }}>
-                    Clear all cache
-                  </button>
+
+                {acctMsg && (
+                  <div style={{ padding: '8px 12px', borderRadius: 8, marginBottom: 12, fontSize: 13,
+                    background: acctMsg.type === 'ok' ? C.greenMuted : C.redMuted,
+                    border: `1px solid ${acctMsg.type === 'ok' ? C.green : C.red}`,
+                    color: acctMsg.type === 'ok' ? C.green : C.red,
+                  }}>{acctMsg.text}</div>
                 )}
-              </div>
-              {entries.length === 0 ? (
-                <div style={{ ...card, textAlign: 'center', padding: '3rem 2rem' }}>
-                  <div style={{ fontSize: 32, marginBottom: 12 }}>🗄️</div>
-                  <p style={{ fontSize: 16, color: C.textMuted, margin: 0 }}>No courses cached yet</p>
-                  <p style={{ fontSize: 12, color: C.textFaint, marginTop: 6 }}>Courses are saved automatically after the first search — future loads are instant</p>
+
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <button style={btnG} onClick={() => { setAcctSection(acctSection === 'password' ? null : 'password'); setAcctMsg(null) }}>
+                    Change password
+                  </button>
+                  <button style={btnG} onClick={() => { setAcctSection(acctSection === 'email' ? null : 'email'); setAcctMsg(null) }}>
+                    Change email
+                  </button>
+                  <button style={{ ...btnG, color: C.red, borderColor: C.red, marginLeft: 'auto' }}
+                    onClick={() => { setAcctSection(acctSection === 'delete' ? null : 'delete'); setAcctMsg(null) }}>
+                    Delete account
+                  </button>
                 </div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  {entries.map((c, i) => (
-                    <div key={i} style={{ ...card, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                          <p style={{ fontSize: 14, fontWeight: 600, color: C.text, margin: 0 }}>{c.name}</p>
-                          <Badge
-                            label={c.source === 'GolfCourseAPI' ? '✓ Verified' : '⚠ Web search'}
-                            bg={c.source === 'GolfCourseAPI' ? C.greenMuted : C.amberMuted}
-                            fg={c.source === 'GolfCourseAPI' ? C.green : C.amber}
-                          />
-                        </div>
-                        <p style={{ fontSize: 12, color: C.textMuted, margin: '0 0 6px' }}>
-                          {c.location} · Par {c.par} · {c.yardage ? Number(c.yardage).toLocaleString() + 'y' : '—'}
-                          {c.rating ? ` · Rating ${c.rating}` : ''}{c.slope ? ` / Slope ${c.slope}` : ''}
-                        </p>
-                        <div style={{ display: 'flex', gap: 16 }}>
-                          <span style={{ fontSize: 11, color: C.textFaint }}>{c.holes?.length || 18} holes</span>
-                          <span style={{ fontSize: 11, color: C.textFaint }}>
-                            Cached {c._cachedAt ? new Date(c._cachedAt).toLocaleDateString() : '—'}
-                          </span>
-                          {c.tees?.length > 0 && (
-                            <span style={{ fontSize: 11, color: C.textFaint }}>
-                              Tees: {c.tees.map(t => t.name).join(', ')}
-                            </span>
-                          )}
-                        </div>
+
+                {acctSection === 'password' && (
+                  <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${C.border}` }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+                      <div>
+                        <label style={lbl}>New password</label>
+                        <input type="password" style={inp} placeholder="8+ characters" value={acctNewPass}
+                          onChange={e => setAcctNewPass(e.target.value)} autoFocus />
                       </div>
-                      <div style={{ display: 'flex', gap: 8, marginLeft: 16, flexShrink: 0 }}>
-                        <button style={btnG} onClick={() => { applyScorecard(c); setTab('course') }}>Load →</button>
-                        <button style={{ ...btnG, color: C.red, borderColor: C.red }}
-                          onClick={() => {
-                            const updated = loadCourseCache()
-                            delete updated[cacheKey(c.name, c.location)]
-                            saveCourseCache(updated)
-                            setTab('admin')
-                          }}>
-                          Remove
-                        </button>
+                      <div>
+                        <label style={lbl}>Confirm new password</label>
+                        <input type="password" style={inp} placeholder="Repeat password" value={acctConfirmPass}
+                          onChange={e => setAcctConfirmPass(e.target.value)} />
                       </div>
                     </div>
-                  ))}
+                    <button style={{ ...btnP, width: 'auto', padding: '8px 18px' }}
+                      onClick={handleChangePassword} disabled={acctLoading}>
+                      {acctLoading ? 'Updating…' : 'Update password'}
+                    </button>
+                  </div>
+                )}
+
+                {acctSection === 'email' && (
+                  <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${C.border}` }}>
+                    <p style={{ fontSize: 12, color: C.textMuted, margin: '0 0 10px' }}>
+                      A confirmation link will be sent to the new address. Your current email remains active until confirmed.
+                    </p>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 10, alignItems: 'flex-end' }}>
+                      <div>
+                        <label style={lbl}>New email address</label>
+                        <input type="email" style={inp} placeholder="new@email.com" value={acctNewEmail}
+                          onChange={e => setAcctNewEmail(e.target.value)} autoFocus />
+                      </div>
+                      <button style={{ ...btnP, padding: '8px 18px', whiteSpace: 'nowrap' }}
+                        onClick={handleChangeEmail} disabled={acctLoading}>
+                        {acctLoading ? 'Sending…' : 'Send confirmation'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {acctSection === 'delete' && (
+                  <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${C.border}` }}>
+                    <div style={{ padding: '10px 14px', background: C.redMuted, border: `1px solid ${C.red}`, borderRadius: 8, marginBottom: 12 }}>
+                      <p style={{ fontSize: 13, color: C.red, margin: 0, fontWeight: 600 }}>⚠ This permanently deletes your account and all data</p>
+                      <p style={{ fontSize: 12, color: C.red, margin: '4px 0 0' }}>All profiles, scoring history, and settings will be erased. This cannot be undone.</p>
+                    </div>
+                    <button style={{ background: C.red, color: '#fff', border: 'none', borderRadius: 8, padding: '9px 20px', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: F }}
+                      onClick={() => { if (window.confirm('Are you absolutely sure? Your account and all data will be permanently deleted.')) handleDeleteAccount() }}
+                      disabled={acctLoading}>
+                      {acctLoading ? 'Deleting…' : 'Yes, delete my account'}
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* ── AI Model ── */}
+              <div style={{ ...card, marginBottom: 16 }}>
+                {sectionHead('AI model', 'Choose which Claude model generates your game plans. More capable models produce deeper analysis.')}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 10 }}>
+                  {AVAILABLE_MODELS.map(m => {
+                    const active = selectedModel === m.id
+                    return (
+                      <button key={m.id} onClick={() => setSelectedModel(m.id)} style={{
+                        background: active ? C.accentMuted : C.bgInput,
+                        border: `1px solid ${active ? C.accent : C.border}`,
+                        borderRadius: 10, padding: '12px 14px', cursor: 'pointer', textAlign: 'left',
+                        fontFamily: F, transition: 'border-color .15s',
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                          <span style={{ fontSize: 14, fontWeight: 600, color: active ? C.accent : C.text }}>{m.name}</span>
+                          <span style={{ fontSize: 10, fontWeight: 600, padding: '2px 7px', borderRadius: 99,
+                            background: m.tier === 'Free' ? C.greenMuted : m.tier === 'Standard' ? C.blueMuted : C.amberMuted,
+                            color:      m.tier === 'Free' ? C.green      : m.tier === 'Standard' ? C.blue      : C.amber,
+                          }}>{m.tier}</span>
+                        </div>
+                        <p style={{ fontSize: 12, color: C.textMuted, margin: 0, lineHeight: 1.4 }}>{m.desc}</p>
+                        <p style={{ fontSize: 10, color: C.textFaint, margin: '6px 0 0', fontFamily: 'monospace' }}>{m.id}</p>
+                      </button>
+                    )
+                  })}
                 </div>
-              )}
+                <p style={{ fontSize: 11, color: C.textFaint, margin: '12px 0 0' }}>
+                  Current selection: <strong style={{ color: C.text }}>{AVAILABLE_MODELS.find(m => m.id === selectedModel)?.name || selectedModel}</strong> — counts toward your daily rate limit per generation.
+                </p>
+              </div>
+
+              {/* ── Course cache ── */}
+              <div style={{ ...card, marginBottom: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+                  <div>
+                    {sectionHead('Course cache', `${entries.length} course${entries.length !== 1 ? 's' : ''} stored — loaded instantly, no API call needed`)}
+                  </div>
+                  {entries.length > 0 && (
+                    <button style={{ ...btnG, color: C.red, borderColor: C.red, flexShrink: 0 }}
+                      onClick={() => { if (window.confirm('Clear all cached courses?')) { localStorage.removeItem(LS_COURSE_CACHE); setTab('admin') } }}>
+                      Clear all
+                    </button>
+                  )}
+                </div>
+                {entries.length === 0 ? (
+                  <p style={{ fontSize: 12, color: C.textFaint, fontStyle: 'italic', textAlign: 'center', padding: '1rem 0', margin: 0 }}>
+                    No courses cached yet — courses save automatically after the first search.
+                  </p>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {entries.map((c, i) => (
+                      <div key={i} style={{ background: C.bgInput, border: `1px solid ${C.border}`, borderRadius: 8, padding: '10px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 2 }}>
+                            <p style={{ fontSize: 13, fontWeight: 600, color: C.text, margin: 0 }}>{c.name}</p>
+                            <Badge
+                              label={c.source === 'GolfCourseAPI' ? '✓ Verified' : '⚠ Web search'}
+                              bg={c.source === 'GolfCourseAPI' ? C.greenMuted : C.amberMuted}
+                              fg={c.source === 'GolfCourseAPI' ? C.green : C.amber}
+                            />
+                          </div>
+                          <p style={{ fontSize: 11, color: C.textMuted, margin: 0 }}>
+                            {c.location} · Par {c.par} · {c.yardage ? Number(c.yardage).toLocaleString() + 'y' : '—'}
+                            {c.rating ? ` · ${c.rating}/${c.slope}` : ''}
+                            {' · '}Cached {c._cachedAt ? new Date(c._cachedAt).toLocaleDateString() : '—'}
+                          </p>
+                        </div>
+                        <div style={{ display: 'flex', gap: 8, marginLeft: 12, flexShrink: 0 }}>
+                          <button style={btnG} onClick={() => { applyScorecard(c); setTab('course') }}>Load →</button>
+                          <button style={{ ...btnG, color: C.red, borderColor: C.red }}
+                            onClick={() => {
+                              const updated = loadCourseCache()
+                              delete updated[cacheKey(c.name, c.location)]
+                              saveCourseCache(updated)
+                              setTab('admin')
+                            }}>
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* ── User management (admin only) ── */}
+              <div style={{ ...card, marginBottom: 16 }}>
+                {sectionHead('User management', 'Admin only — list and remove user accounts.')}
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10 }}>
+                  <button style={btnG} onClick={loadAdminUsers} disabled={adminUsersLoading}>
+                    {adminUsersLoading ? 'Loading…' : adminUsers ? 'Refresh' : 'Load users'}
+                  </button>
+                  {adminDeleteMsg && (
+                    <span style={{ fontSize: 12, color: adminDeleteMsg.startsWith('Error') ? C.red : C.green }}>{adminDeleteMsg}</span>
+                  )}
+                </div>
+                {adminUsersError && (
+                  <div style={{ padding: '8px 12px', background: C.redMuted, border: `1px solid ${C.red}`, borderRadius: 8, marginBottom: 10 }}>
+                    <p style={{ fontSize: 12, color: C.red, margin: 0 }}>⚠ {adminUsersError}</p>
+                  </div>
+                )}
+                {adminUsers && (
+                  <div>
+                    <p style={{ fontSize: 12, color: C.textMuted, margin: '0 0 10px' }}>
+                      {adminUsers.length} registered user{adminUsers.length !== 1 ? 's' : ''}
+                    </p>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {adminUsers.map(u => (
+                        <div key={u.id} style={{ background: C.bgInput, border: `1px solid ${C.border}`, borderRadius: 8, padding: '10px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <div>
+                            <p style={{ fontSize: 13, fontWeight: 600, color: C.text, margin: 0 }}>{u.email}</p>
+                            <p style={{ fontSize: 11, color: C.textMuted, margin: '2px 0 0' }}>
+                              Joined {u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'}
+                              {u.last_sign_in_at ? ` · Last login ${new Date(u.last_sign_in_at).toLocaleDateString()}` : ''}
+                              {u.usage_today != null ? ` · ${u.usage_today} plans today` : ''}
+                              {u.usage_total != null ? ` / ${u.usage_total} total` : ''}
+                            </p>
+                          </div>
+                          {u.id !== user?.id && (
+                            <button style={{ ...btnG, color: C.red, borderColor: C.red, fontSize: 11 }}
+                              onClick={() => handleDeleteUser(u.id, u.email)}>
+                              Delete user
+                            </button>
+                          )}
+                          {u.id === user?.id && (
+                            <span style={{ fontSize: 11, color: C.textFaint }}>You</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           )
         })()}
