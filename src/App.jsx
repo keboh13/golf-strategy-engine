@@ -106,7 +106,7 @@ function saveKeys(obj) {
   try { localStorage.setItem(LS_KEYS, JSON.stringify(obj)) } catch {}
 }
 
-// ─── Default club distances (session-only — resets each visit, change per course/day) ──
+// ─── Default club distances (starting point for new profiles — saved with the profile) ──
 const DEFAULT_CLUBS = [
   { club: 'Driver',          carry: 275, shape: 'Slight fade' },
   { club: '3-wood',          carry: 245, shape: 'Fade'        },
@@ -122,6 +122,17 @@ const DEFAULT_CLUBS = [
   { club: 'SW (56°)',        carry:  85, shape: 'Straight'    },
   { club: 'LW (60°)',        carry:  65, shape: 'Straight'    },
 ]
+
+// Clubs ride inside the persisted profile blob (localStorage + Supabase player_data).
+// These helpers split that blob back into clubs and clubs-free player info.
+function clubsFromProfile(data) {
+  return (data && Array.isArray(data.clubs) && data.clubs.length > 0) ? data.clubs : DEFAULT_CLUBS
+}
+function stripClubs(data) {
+  if (!data || typeof data !== 'object') return data
+  const { clubs: _ignored, ...info } = data
+  return info
+}
 
 const DEFAULT_PLAYER = {
   name: '', handicap: '+0.7', ghin: '',
@@ -912,9 +923,10 @@ function AppInner({ user, session, onSignOut }) {
 
   const [tab, setTab] = useState('player')
 
-  // Player profile — persisted to localStorage across sessions
+  // Player profile — persisted to localStorage across sessions (clubs live alongside in the
+  // saved blob but are kept in their own state, so playerInfo's shape stays unchanged)
   const [playerInfo, setPlayerInfo] = useState(() => {
-    try { return JSON.parse(localStorage.getItem(LS_PLAYER)) || DEFAULT_PLAYER } catch { return DEFAULT_PLAYER }
+    try { return stripClubs(JSON.parse(localStorage.getItem(LS_PLAYER))) || DEFAULT_PLAYER } catch { return DEFAULT_PLAYER }
   })
 
   // Profile switcher
@@ -926,12 +938,15 @@ function AppInner({ user, session, onSignOut }) {
 
   const switchProfile = (name) => {
     const profiles = loadProfiles()
-    if (JSON.stringify(profiles[currentProfile]) !== JSON.stringify(playerInfo)) {
-      profiles[currentProfile] = playerInfo
+    const currentData = { ...playerInfo, clubs }
+    if (JSON.stringify(profiles[currentProfile]) !== JSON.stringify(currentData)) {
+      profiles[currentProfile] = currentData
       saveProfiles(profiles)
     }
     const next = profiles[name] || DEFAULT_PLAYER
-    setPlayerInfo(next)
+    setPlayerInfo(stripClubs(next))
+    setClubs(clubsFromProfile(next))
+    setExpandedClubs({})
     setCurrentProfile(name)
     localStorage.setItem(LS_CURRENT_PROFILE, name)
   }
@@ -939,10 +954,12 @@ function AppInner({ user, session, onSignOut }) {
     const name = newProfileName.trim()
     if (!name) return
     const profiles = loadProfiles()
-    profiles[currentProfile] = playerInfo
-    profiles[name] = DEFAULT_PLAYER
+    profiles[currentProfile] = { ...playerInfo, clubs }
+    profiles[name] = { ...DEFAULT_PLAYER, clubs: DEFAULT_CLUBS }
     saveProfiles(profiles)
     setPlayerInfo(DEFAULT_PLAYER)
+    setClubs(DEFAULT_CLUBS)
+    setExpandedClubs({})
     setCurrentProfile(name)
     localStorage.setItem(LS_CURRENT_PROFILE, name)
     setNewProfileName('')
@@ -956,13 +973,17 @@ function AppInner({ user, session, onSignOut }) {
     const next = remaining[0] || 'Default'
     if (!profiles[next]) profiles[next] = DEFAULT_PLAYER
     saveProfiles(profiles)
-    setPlayerInfo(profiles[next])
+    setPlayerInfo(stripClubs(profiles[next]))
+    setClubs(clubsFromProfile(profiles[next]))
+    setExpandedClubs({})
     setCurrentProfile(next)
     localStorage.setItem(LS_CURRENT_PROFILE, next)
   }
 
-  // Club distances — session-only, always reset to defaults (change per course/day)
-  const [clubs, setClubs] = useState(DEFAULT_CLUBS)
+  // Club distances — persisted with the player profile (localStorage + Supabase)
+  const [clubs, setClubs] = useState(() => {
+    try { return clubsFromProfile(JSON.parse(localStorage.getItem(LS_PLAYER))) } catch { return DEFAULT_CLUBS }
+  })
   const [expandedClubs, setExpandedClubs] = useState({})
 
   // Scoring history — persisted to localStorage
@@ -1043,7 +1064,10 @@ function AppInner({ user, session, onSignOut }) {
           const settings = await loadUserSettings(user.id)
           const profileName = settings.current_profile || Object.keys(dbProfiles)[0]
           setCurrentProfile(profileName)
-          if (dbProfiles[profileName]) setPlayerInfo(dbProfiles[profileName])
+          if (dbProfiles[profileName]) {
+            setPlayerInfo(stripClubs(dbProfiles[profileName]))
+            setClubs(clubsFromProfile(dbProfiles[profileName]))
+          }
         }
         // Load history
         const dbHistory = await loadUserHistory(user.id)
@@ -1058,16 +1082,17 @@ function AppInner({ user, session, onSignOut }) {
   }, [user?.id])
 
   useEffect(() => {
-    localStorage.setItem(LS_PLAYER, JSON.stringify(playerInfo))
+    const profileData = { ...playerInfo, clubs }
+    localStorage.setItem(LS_PLAYER, JSON.stringify(profileData))
     const profiles = loadProfiles()
-    profiles[currentProfile] = playerInfo
+    profiles[currentProfile] = profileData
     saveProfiles(profiles)
     // Sync to Supabase
     if (user) {
-      saveUserProfile(user.id, currentProfile, playerInfo).catch(e => console.warn('[supabase] profile save:', e.message))
+      saveUserProfile(user.id, currentProfile, profileData).catch(e => console.warn('[supabase] profile save:', e.message))
       saveUserSettings(user.id, { current_profile: currentProfile }).catch(e => console.warn('[supabase] settings save:', e.message))
     }
-  }, [playerInfo, currentProfile])
+  }, [playerInfo, clubs, currentProfile])
   useEffect(() => {
     localStorage.setItem(LS_HISTORY, JSON.stringify(scoringHistory))
     // Sync to Supabase
@@ -1559,7 +1584,7 @@ Use actual yardages throughout. Be direct — no filler.`
             </div>
             <SectionHead
               title="Bag & player profile"
-              sub="Player profile saves automatically across sessions. Club distances are session-only — adjust per course or day."
+              sub="Player profile and club distances save automatically with your profile across sessions."
             />
             <div style={{ ...card, marginBottom: 12 }}>
               <p style={{ ...lbl, marginBottom: 12 }}>Player details</p>
@@ -1611,7 +1636,7 @@ Use actual yardages throughout. Be direct — no filler.`
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
                 <p style={{ ...lbl, margin: 0 }}>Club distances</p>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontSize: 11, color: C.textFaint }}>Session-only — resets each visit</span>
+                  <span style={{ fontSize: 11, color: C.textFaint }}>Saved automatically with your profile</span>
                   <button style={{ ...btnG, fontSize: 11, padding: '4px 10px' }}
                     onClick={() => setClubs(c => [...c, { club: 'New club', carry: '', shape: 'Straight' }])}>
                     + Add club
