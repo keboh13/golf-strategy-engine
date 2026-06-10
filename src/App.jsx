@@ -951,6 +951,9 @@ function AppInner({ user, session, onSignOut }) {
   const deleteProfile = () => {
     const profiles = loadProfiles()
     delete profiles[currentProfile]
+    if (user) {
+      deleteUserProfile(user.id, currentProfile).catch(e => console.warn('[supabase] profile delete:', e.message))
+    }
     saveProfiles(profiles)
     const remaining = Object.keys(profiles)
     const next = remaining[0] || 'Default'
