@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef, Component } from 'react'
 import { supabase, loadUserProfiles, saveUserProfile, deleteUserProfile, loadUserHistory, saveUserHistory, loadUserSettings, saveUserSettings, getCachedCourseDB, setCachedCourseDB, getAllCachedCoursesDB, deleteCachedCourseDB } from './lib/supabase.js'
+import { buildBagSection } from './lib/promptSections.js'
 import AuthScreen from './screens/AuthScreen.jsx'
 import OnboardingScreen from './screens/OnboardingScreen.jsx'
 
@@ -1172,17 +1173,7 @@ function AppInner({ user, session, onSignOut }) {
 
   const buildPrompt = useCallback(() => {
     // ── Shared: club list ──
-    const clubList = clubs.map(c => {
-      let s = `${c.club}: ${c.carry}y (${c.shape})`
-      const analytics = [
-        c.ballSpeed   ? `${c.ballSpeed}mph ball speed`                                                       : '',
-        c.launchAngle ? `${c.launchAngle}° launch`                                                           : '',
-        c.spinRate    ? `${c.spinRate}rpm spin`                                                               : '',
-        (c.dispLeft || c.dispRight) ? `${c.dispLeft || 0}yd left / ${c.dispRight || 0}yd right dispersion`  : '',
-      ].filter(Boolean)
-      if (analytics.length) s += ` | ${analytics.join(', ')}`
-      return s
-    }).join(', ')
+    const clubList = buildBagSection(clubs)
 
     // ── Shared: history analytics block ──
     const validRounds = scoringHistory.filter(r => r.course && r.score)
