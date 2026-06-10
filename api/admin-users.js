@@ -1,16 +1,27 @@
 // Vercel Edge Function — admin-only user management.
-// GET  /api/admin-users  → list all users with usage stats
-// DELETE /api/admin-users { userId } → delete a user and their data
+// GET    /api/admin-users              → list all users with usage stats
+// POST   /api/admin-users { grantId } → grant admin to a user by ID
+// DELETE /api/admin-users { userId }  → delete a user and their data
 //
-// Access is gated to ADMIN_EMAIL env var. Any request from a different account gets 403.
-// Required Vercel env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, ADMIN_EMAIL
+// Access is gated to the `admins` Supabase table. The initial row is seeded
+// from ADMIN_EMAIL. Admins can grant access to others via POST.
+// Required Vercel env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 
 export const config = { runtime: 'edge' }
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin':  process.env.ALLOWED_ORIGIN || '*',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-  'Access-Control-Allow-Methods': 'GET, DELETE, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+}
+
+async function isAdmin(supabaseUrl, supabaseServiceKey, userId) {
+  const res = await fetch(
+    `${supabaseUrl}/rest/v1/admins?user_id=eq.${userId}&select=user_id&limit=1`,
+    { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` } }
+  )
+  const rows = res.ok ? await res.json() : []
+  return Array.isArray(rows) && rows.length > 0
 }
 
 export default async function handler(req) {
@@ -18,7 +29,6 @@ export default async function handler(req) {
 
   const supabaseUrl        = process.env.SUPABASE_URL
   const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-  const adminEmail         = process.env.ADMIN_EMAIL
 
   if (!supabaseUrl || !supabaseServiceKey) {
     return new Response(JSON.stringify({ error: 'Server not configured.' }), {
@@ -44,8 +54,8 @@ export default async function handler(req) {
   }
   const requester = await userRes.json()
 
-  // Gate: admin only
-  if (!adminEmail || requester.email !== adminEmail) {
+  // Gate: admins table check
+  if (!(await isAdmin(supabaseUrl, supabaseServiceKey, requester.id))) {
     return new Response(JSON.stringify({ error: 'Forbidden — admin access only.' }), {
       status: 403, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
     })
@@ -87,6 +97,11 @@ export default async function handler(req) {
       for (const r of totalRows) totalByUser[r.user_id] = (totalByUser[r.user_id] || 0) + 1
     }
 
+    // Fetch current admin IDs
+    const adminsRes = await fetch(`${supabaseUrl}/rest/v1/admins?select=user_id`, { headers: svcHeaders })
+    const adminRows = adminsRes.ok ? await adminsRes.json() : []
+    const adminIds  = new Set((adminRows || []).map(r => r.user_id))
+
     const enriched = (users || []).map(u => ({
       id:              u.id,
       email:           u.email,
@@ -94,9 +109,40 @@ export default async function handler(req) {
       last_sign_in_at: u.last_sign_in_at,
       usage_today:     todayByUser[u.id] || 0,
       usage_total:     totalByUser[u.id] || 0,
+      isAdmin:         adminIds.has(u.id),
     }))
 
     return new Response(JSON.stringify(enriched), {
+      status: 200, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+    })
+  }
+
+  // ── POST: grant admin to a user ─────────────────────────────────────────
+  if (req.method === 'POST') {
+    let body
+    try { body = await req.json() } catch {
+      return new Response(JSON.stringify({ error: 'Invalid JSON body.' }), {
+        status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+    const { grantId } = body
+    if (!grantId) {
+      return new Response(JSON.stringify({ error: 'grantId is required.' }), {
+        status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+    const grantRes = await fetch(`${supabaseUrl}/rest/v1/admins`, {
+      method: 'POST',
+      headers: { ...svcHeaders, Prefer: 'resolution=ignore-duplicates' },
+      body: JSON.stringify({ user_id: grantId, granted_by: requester.id }),
+    })
+    if (!grantRes.ok) {
+      const err = await grantRes.text()
+      return new Response(JSON.stringify({ error: `Failed to grant admin: ${err}` }), {
+        status: 500, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+    return new Response(JSON.stringify({ ok: true }), {
       status: 200, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
     })
   }

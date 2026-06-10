@@ -927,10 +927,12 @@ function AppInner({ user, session, onSignOut }) {
   const [acctLoading,     setAcctLoading]     = useState(false)
 
   // ── Admin user management state ───────────────────────────────────────────
+  const [isAdmin,         setIsAdmin]         = useState(null)  // null = unknown (not yet checked)
   const [adminUsers,      setAdminUsers]      = useState(null)  // null = not loaded
   const [adminUsersLoading, setAdminUsersLoading] = useState(false)
   const [adminUsersError, setAdminUsersError] = useState('')
   const [adminDeleteMsg,  setAdminDeleteMsg]  = useState('')
+  const [adminGrantMsg,   setAdminGrantMsg]   = useState('')
 
   // Persist all keys together whenever any changes
   const setApiKey = (v) => { setApiKeyRaw(v);       saveKeys({ ...loadSavedKeys(), anthropic:  v }) }
@@ -1102,6 +1104,17 @@ function AppInner({ user, session, onSignOut }) {
       saveUserHistory(user.id, scoringHistory).catch(e => console.warn('[supabase] history save:', e.message))
     }
   }, [scoringHistory])
+
+  // Check admin status once when the Settings tab is opened
+  useEffect(() => {
+    if (tab !== 'admin' || isAdmin !== null) return
+    const authToken = session?.access_token || ''
+    if (!authToken) { setIsAdmin(false); return }
+    fetch('/api/check-admin', { headers: { Authorization: `Bearer ${authToken}` } })
+      .then(r => r.json())
+      .then(d => setIsAdmin(!!d.isAdmin))
+      .catch(() => setIsAdmin(false))
+  }, [tab, isAdmin, session])
 
   const holeTimes   = computeHoleTimes(teeTime, pace)
   const holeWeather = holeTimes.map(dt => weather ? getWeatherAtHour(weather, dt) : null)
@@ -2148,7 +2161,7 @@ Use actual yardages throughout. Be direct — no filler.`
           })
 
           const loadAdminUsers = async () => {
-            setAdminUsersLoading(true); setAdminUsersError(''); setAdminDeleteMsg('')
+            setAdminUsersLoading(true); setAdminUsersError(''); setAdminDeleteMsg(''); setAdminGrantMsg('')
             const authToken = session?.access_token || ''
             try {
               const res = await fetch('/api/admin-users', { headers: { Authorization: `Bearer ${authToken}` } })
@@ -2375,54 +2388,82 @@ Use actual yardages throughout. Be direct — no filler.`
                 )}
               </div>
 
-              {/* ── User management (admin only) ── */}
-              <div style={{ ...card, marginBottom: 16 }}>
-                {sectionHead('User management', 'Admin only — list and remove user accounts.')}
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10 }}>
-                  <button style={btnG} onClick={loadAdminUsers} disabled={adminUsersLoading}>
-                    {adminUsersLoading ? 'Loading…' : adminUsers ? 'Refresh' : 'Load users'}
-                  </button>
-                  {adminDeleteMsg && (
-                    <span style={{ fontSize: 12, color: adminDeleteMsg.startsWith('Error') ? C.red : C.green }}>{adminDeleteMsg}</span>
+              {/* ── User management (admin only — hidden entirely for non-admins) ── */}
+              {isAdmin === true && (
+                <div style={{ ...card, marginBottom: 16 }}>
+                  {sectionHead('User management', 'List registered users, grant admin access, and remove accounts.')}
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
+                    <button style={btnG} onClick={loadAdminUsers} disabled={adminUsersLoading}>
+                      {adminUsersLoading ? 'Loading…' : adminUsers ? 'Refresh' : 'Load users'}
+                    </button>
+                    {adminDeleteMsg && (
+                      <span style={{ fontSize: 12, color: adminDeleteMsg.startsWith('Error') ? C.red : C.green }}>{adminDeleteMsg}</span>
+                    )}
+                    {adminGrantMsg && (
+                      <span style={{ fontSize: 12, color: adminGrantMsg.startsWith('Error') ? C.red : C.green }}>{adminGrantMsg}</span>
+                    )}
+                  </div>
+                  {adminUsersError && (
+                    <div style={{ padding: '8px 12px', background: C.redMuted, border: `1px solid ${C.red}`, borderRadius: 8, marginBottom: 10 }}>
+                      <p style={{ fontSize: 12, color: C.red, margin: 0 }}>⚠ {adminUsersError}</p>
+                    </div>
+                  )}
+                  {adminUsers && (
+                    <div>
+                      <p style={{ fontSize: 12, color: C.textMuted, margin: '0 0 10px' }}>
+                        {adminUsers.length} registered user{adminUsers.length !== 1 ? 's' : ''}
+                      </p>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        {adminUsers.map(u => (
+                          <div key={u.id} style={{ background: C.bgInput, border: `1px solid ${C.border}`, borderRadius: 8, padding: '10px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+                            <div style={{ flex: 1 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <p style={{ fontSize: 13, fontWeight: 600, color: C.text, margin: 0 }}>{u.email}</p>
+                                {u.id === user?.id && <Badge label="You" bg={C.accentMuted} fg={C.accent} />}
+                                {u.isAdmin && <Badge label="Admin" bg={C.amberMuted} fg={C.amber} />}
+                              </div>
+                              <p style={{ fontSize: 11, color: C.textMuted, margin: '3px 0 0' }}>
+                                Joined {u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'}
+                                {u.last_sign_in_at ? ` · Last login ${new Date(u.last_sign_in_at).toLocaleDateString()}` : ''}
+                                {' · '}{u.usage_today ?? 0} plans today · {u.usage_total ?? 0} total
+                              </p>
+                            </div>
+                            {u.id !== user?.id && (
+                              <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                                {!u.isAdmin && (
+                                  <button style={{ ...btnG, fontSize: 11 }}
+                                    onClick={async () => {
+                                      setAdminGrantMsg('')
+                                      const authToken = session?.access_token || ''
+                                      try {
+                                        const res = await fetch('/api/admin-users', {
+                                          method: 'POST',
+                                          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+                                          body: JSON.stringify({ grantId: u.id }),
+                                        })
+                                        if (!res.ok) throw new Error((await res.json()).error || res.status)
+                                        setAdminGrantMsg(`Admin granted to ${u.email}`)
+                                        setAdminUsers(prev => prev ? prev.map(x => x.id === u.id ? { ...x, isAdmin: true } : x) : prev)
+                                      } catch (e) {
+                                        setAdminGrantMsg(`Error: ${e.message}`)
+                                      }
+                                    }}>
+                                    Grant admin
+                                  </button>
+                                )}
+                                <button style={{ ...btnG, color: C.red, borderColor: C.red, fontSize: 11 }}
+                                  onClick={() => handleDeleteUser(u.id, u.email)}>
+                                  Delete
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                   )}
                 </div>
-                {adminUsersError && (
-                  <div style={{ padding: '8px 12px', background: C.redMuted, border: `1px solid ${C.red}`, borderRadius: 8, marginBottom: 10 }}>
-                    <p style={{ fontSize: 12, color: C.red, margin: 0 }}>⚠ {adminUsersError}</p>
-                  </div>
-                )}
-                {adminUsers && (
-                  <div>
-                    <p style={{ fontSize: 12, color: C.textMuted, margin: '0 0 10px' }}>
-                      {adminUsers.length} registered user{adminUsers.length !== 1 ? 's' : ''}
-                    </p>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      {adminUsers.map(u => (
-                        <div key={u.id} style={{ background: C.bgInput, border: `1px solid ${C.border}`, borderRadius: 8, padding: '10px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <div>
-                            <p style={{ fontSize: 13, fontWeight: 600, color: C.text, margin: 0 }}>{u.email}</p>
-                            <p style={{ fontSize: 11, color: C.textMuted, margin: '2px 0 0' }}>
-                              Joined {u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'}
-                              {u.last_sign_in_at ? ` · Last login ${new Date(u.last_sign_in_at).toLocaleDateString()}` : ''}
-                              {u.usage_today != null ? ` · ${u.usage_today} plans today` : ''}
-                              {u.usage_total != null ? ` / ${u.usage_total} total` : ''}
-                            </p>
-                          </div>
-                          {u.id !== user?.id && (
-                            <button style={{ ...btnG, color: C.red, borderColor: C.red, fontSize: 11 }}
-                              onClick={() => handleDeleteUser(u.id, u.email)}>
-                              Delete user
-                            </button>
-                          )}
-                          {u.id === user?.id && (
-                            <span style={{ fontSize: 11, color: C.textFaint }}>You</span>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
+              )}
             </div>
           )
         })()}
