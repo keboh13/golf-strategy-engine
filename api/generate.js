@@ -49,7 +49,7 @@ async function checkAndRecordUsage(userId) {
 
   // Count recent requests
   const countRes = await fetch(
-    `${base}/api_usage?user_id=eq.${userId}&used_at=gte.${encodeURIComponent(windowStart)}&select=id`,
+    `${base}/api_usage?user_id=eq.${userId}&endpoint=eq.generate&used_at=gte.${encodeURIComponent(windowStart)}&select=id`,
     { headers: { ...headers, 'Prefer': 'count=exact' } }
   )
   const count = parseInt(countRes.headers.get('Content-Range')?.split('/')[1] || '0', 10)
