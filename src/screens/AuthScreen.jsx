@@ -256,6 +256,10 @@ function SignUpForm({ onComplete }) {
         <button type="submit" style={S.btn()} disabled={loading}>
           {loading ? 'Verifying…' : 'Verify & finish setup'}
         </button>
+        <button type="button" style={{ ...S.btn('secondary'), marginTop: 8 }}
+          onClick={() => onComplete('new')} disabled={loading}>
+          Skip for now — set up 2FA later in Settings
+        </button>
       </form>
     )
   }
