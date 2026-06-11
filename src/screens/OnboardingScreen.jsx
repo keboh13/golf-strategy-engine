@@ -1,4 +1,15 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
+
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 640)
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 640px)')
+    const handler = (e) => setIsMobile(e.matches)
+    mq.addEventListener('change', handler)
+    return () => mq.removeEventListener('change', handler)
+  }, [])
+  return isMobile
+}
 
 const DEFAULT_CLUBS = [
   { club: 'Driver',  carry: '', shape: 'Straight' },
@@ -119,7 +130,7 @@ const S = {
   },
   grid2: {
     display: 'grid',
-    gridTemplateColumns: '1fr 1fr',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
     gap: 12,
     marginBottom: 4,
   },
@@ -183,6 +194,7 @@ const S = {
 const TOTAL_STEPS = 3
 
 export default function OnboardingScreen({ onComplete }) {
+  const isMobile = useIsMobile()
   const [step, setStep] = useState(0)
 
   // Step 0 — Player profile
@@ -225,9 +237,13 @@ export default function OnboardingScreen({ onComplete }) {
     onComplete({ player, clubs, golfApiKey: golfApiKey.trim() })
   }
 
+  const cardStyle = isMobile
+    ? { ...S.card, padding: '24px 16px', borderRadius: 12 }
+    : S.card
+
   return (
     <div style={S.wrap}>
-      <div style={S.card}>
+      <div style={cardStyle}>
         <div style={S.header}>
           <div style={{ fontSize: 32, marginBottom: 8 }}>⛳</div>
           <h2 style={S.title}>Welcome! Let's set you up.</h2>

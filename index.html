@@ -12,6 +12,10 @@
     <style>
       *, *::before, *::after { box-sizing: border-box; }
       html, body { margin: 0; padding: 0; background: #0f1117; }
+      /* Prevent iOS Safari auto-zoom on input focus (requires font-size >= 16px) */
+      @media (max-width: 640px) {
+        input, select, textarea { font-size: 16px !important; }
+      }
     </style>
   </head>
   <body>
