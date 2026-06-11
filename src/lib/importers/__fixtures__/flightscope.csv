@@ -1,0 +1,8 @@
+club,Shot,Ball (mph),Club (mph),Smash,Carry (yds),Total (yds),Roll (yds),Spin (rpm),Height (ft),Time (s),AOA (°),Spin Loft (°),Spin Axis (°),Lateral (yds),Shot Type,Launch H (°),Launch V (°),Mode,Location,Altitude (ft)
+Driver,1,143,96.4,1.48,263.5,273.3,9.9,2253,114.2,7,8.4,7.9,16.7 L,27.8 L,Hook,1.5 R,15.8,Outdoor,View,206.7 ft
+Driver,2,141.9,97.4,1.46,262,271.3,9.3,2286,126.1,7.1,8.6,10.9,1.2 L,13.4 R,Push,3.5 R,18.4,Outdoor,View,206.7 ft
+7 Iron,3,112.4,84.1,1.34,158.7,164.2,5.5,6420,88.9,5.6,-3.1,28.4,4.2 L,6.3 L,Draw,1.1 L,19.2,Outdoor,View,206.7 ft
+7 Iron,4,109.8,83.6,1.31,152.1,157.9,5.8,-,82.3,5.4,-2.8,27.9,-,-,Straight,0.4 R,18.6,Outdoor,View,206.7 ft
+Pitching Wedge,5,88.2,74.3,1.19,118.4,120.1,1.7,8950,76.5,5.1,-4.6,38.2,2.8 R,1.9 R,Fade,0.8 R,26.4,Outdoor,View,206.7 ft
+,6,90.1,75.0,1.20,120.5,122.2,1.7,8800,77.0,5.2,-4.2,37.8,1.1 L,0.6 L,Straight,0.2 L,25.9,Outdoor,View,206.7 ft
+3 Hybrid,7,128.6,90.2,1.43,205.3,213.8,8.5,3870,98.6,6.3,2.1,15.4,5.6 R,9.2 R,Fade,2.0 R,14.7,Outdoor,View,206.7 ft
