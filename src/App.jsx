@@ -635,7 +635,7 @@ function CourseSearch({ apiKey, golfCourseApiKey, onApiKeyNeeded, onSelect }) {
 
       {detail && (
         <div style={{ marginTop: 12, background: C.bgInput, border: `1px solid ${C.border}`, borderRadius: 10, padding: '12px 14px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
             <div>
               <p style={{ fontSize: 14, fontWeight: 600, color: C.text, margin: 0 }}>{detail.name}</p>
               <p style={{ fontSize: 12, color: C.textMuted, margin: '2px 0 0' }}>
@@ -1580,9 +1580,9 @@ Use actual yardages throughout. Be direct — no filler.`
               </div>
             )}
 
-            <button style={{ ...btnP, padding: '7px 18px', fontSize: 12, opacity: planLoading ? 0.6 : 1 }}
+            <button style={{ ...btnP, padding: '7px 18px', fontSize: 12, opacity: planLoading ? 0.6 : 1, whiteSpace: 'nowrap' }}
               onClick={generate} disabled={planLoading}>
-              {planLoading ? 'Generating...' : '⚡ Generate game plan'}
+              {planLoading ? 'Generating...' : isMobile ? '⚡ Generate' : '⚡ Generate game plan'}
             </button>
           </div>
         </div>
@@ -1608,7 +1608,7 @@ Use actual yardages throughout. Be direct — no filler.`
       </div>
 
       {/* Content */}
-      <div style={{ maxWidth: 1020, margin: '0 auto', padding: '1.5rem 1.5rem 4rem' }}>
+      <div style={{ maxWidth: 1020, margin: '0 auto', padding: isMobile ? '1rem 0.75rem 4rem' : '1.5rem 1.5rem 4rem' }}>
 
         {/* ── BAG & PLAYER ── */}
         {tab === 'player' && (
@@ -1707,20 +1707,20 @@ Use actual yardages throughout. Be direct — no filler.`
                   </button>
                 </div>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '24px 2fr 1fr 1.5fr 24px', gap: '5px 10px', marginBottom: 6, marginTop: 12 }}>
-                {['','Club','Carry (yds)','Shot shape',''].map((h, i) => <span key={i} style={{ fontSize: 10, color: C.textFaint, letterSpacing: '0.08em', textTransform: 'uppercase' }}>{h}</span>)}
+              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 60px 72px 22px' : '24px 2fr 1fr 1.5fr 24px', gap: isMobile ? '4px 6px' : '5px 10px', marginBottom: 6, marginTop: 12 }}>
+                {(isMobile ? ['Club','Carry','Shape',''] : ['','Club','Carry (yds)','Shot shape','']).map((h, i) => <span key={i} style={{ fontSize: 10, color: C.textFaint, letterSpacing: '0.08em', textTransform: 'uppercase' }}>{h}</span>)}
               </div>
               {clubs.map((c, i) => {
                 const isOpen = !!expandedClubs[i]
                 const analyticsInp = { ...inp, padding: '4px 6px', fontSize: 12 }
                 return (
                   <div key={i} style={{ marginBottom: 4 }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: '24px 2fr 1fr 1.5fr 24px', gap: '4px 10px', alignItems: 'center' }}>
-                      <button
+                    <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 60px 72px 22px' : '24px 2fr 1fr 1.5fr 24px', gap: isMobile ? '3px 6px' : '4px 10px', alignItems: 'center' }}>
+                      {!isMobile && <button
                         onClick={() => setExpandedClubs(prev => ({ ...prev, [i]: !prev[i] }))}
                         style={{ background: 'none', border: 'none', color: C.textFaint, cursor: 'pointer', fontSize: 10, padding: 0, textAlign: 'center', transform: isOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }}
                         title="Expand analytics"
-                      >▼</button>
+                      >▼</button>}
                       <input style={{ ...inp, padding: '5px 8px', fontSize: 13 }} value={c.club}
                         onChange={e => setClubs(clubs.map((cl, j) => j === i ? { ...cl, club: e.target.value } : cl))} />
                       <input type="number" style={{ ...inp, textAlign: 'center', padding: '5px 8px' }} value={c.carry}
@@ -1780,6 +1780,114 @@ Use actual yardages throughout. Be direct — no filler.`
                 <p style={{ fontSize: 12, color: C.textFaint, fontStyle: 'italic', textAlign: 'center', padding: '1rem 0' }}>
                   No rounds yet — hit "+ Add round" to start tracking scoring history.
                 </p>
+              ) : isMobile ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {scoringHistory.map((r, i) => {
+                    const hs = historySearch[i] || {}
+                    return (
+                      <div key={i} style={{ background: C.bgInput, border: `1px solid ${C.border}`, borderRadius: 10, padding: '12px 14px' }}>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+                          <input style={{ ...inp, flex: 1, padding: '6px 10px', fontSize: 13 }} value={r.course}
+                            onChange={e => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, course: e.target.value } : rr))}
+                            placeholder="Course name" />
+                          <button style={{ background: 'transparent', border: 'none', color: C.textFaint, cursor: 'pointer', fontSize: 18, padding: '2px 6px', flexShrink: 0 }}
+                            onClick={() => setScoringHistory(h => h.filter((_, j) => j !== i))} title="Remove">×</button>
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px 8px', marginBottom: 8 }}>
+                          <div>
+                            <label style={lbl}>City / State</label>
+                            <input style={{ ...inp, padding: '5px 8px', fontSize: 12 }} value={r.location}
+                              onChange={e => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, location: e.target.value } : rr))}
+                              placeholder="City, ST" />
+                          </div>
+                          <div>
+                            <label style={lbl}>Date</label>
+                            <input type="date" style={{ ...inp, padding: '5px 8px', fontSize: 12 }} value={r.date}
+                              onChange={e => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, date: e.target.value } : rr))} />
+                          </div>
+                          <div>
+                            <label style={lbl}>Score</label>
+                            <input type="number" style={{ ...inp, padding: '5px 8px', fontSize: 12 }} value={r.score}
+                              onChange={e => {
+                                const score = e.target.value
+                                setScoringHistory(h => h.map((rr, j) => j === i ? {
+                                  ...rr, score,
+                                  toPar: !rr.toPar || rr.toPar === toParStr(rr.score, rr.par || 72) ? toParStr(score, rr.par || 72) : rr.toPar,
+                                } : rr))
+                              }}
+                              placeholder="70" />
+                          </div>
+                          <div>
+                            <label style={lbl}>+/− vs par</label>
+                            <input style={{ ...inp, padding: '5px 8px', fontSize: 12 }} value={r.toPar}
+                              onChange={e => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, toPar: e.target.value } : rr))}
+                              placeholder="E" />
+                          </div>
+                          <div>
+                            <label style={lbl}>Round type</label>
+                            <select style={{ ...inp, padding: '5px 6px', fontSize: 12 }} value={r.roundType || ''}
+                              onChange={e => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, roundType: e.target.value } : rr))}>
+                              <option value="">Type</option>
+                              {['Tournament','Qualifier','Stroke play','Match play','Practice round','Casual'].map(o => <option key={o}>{o}</option>)}
+                            </select>
+                          </div>
+                          <div>
+                            <label style={lbl}>Conditions</label>
+                            <select style={{ ...inp, padding: '5px 6px', fontSize: 12 }} value={r.conditions}
+                              onChange={e => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, conditions: e.target.value } : rr))}>
+                              <option value="">Conditions</option>
+                              {['Normal','Firm & fast','Soft','Windy','Hot & dry','Wet'].map(o => <option key={o}>{o}</option>)}
+                            </select>
+                          </div>
+                        </div>
+                        <div style={{ marginBottom: 8 }}>
+                          <label style={lbl}>Notes</label>
+                          <input style={{ ...inp, padding: '5px 8px', fontSize: 12 }} value={r.notes}
+                            onChange={e => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, notes: e.target.value } : rr))}
+                            placeholder="Drove it well, 3-putted twice..." />
+                        </div>
+                        {r.courseData ? (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{ fontSize: 11, color: C.green }}>⛳ {r.courseData.name} linked</span>
+                            <button style={{ background: 'none', border: 'none', color: C.red, fontSize: 10, cursor: 'pointer', padding: 0 }}
+                              onClick={() => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, courseData: null } : rr))}>remove</button>
+                          </div>
+                        ) : (
+                          <div>
+                            {!hs.open ? (
+                              <button style={{ ...btnG, fontSize: 10, padding: '4px 10px' }} onClick={() => updateHS(i, { open: true, query: r.course || '', results: [], error: '' })}>
+                                + Link scorecard
+                              </button>
+                            ) : (
+                              <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                                <input style={{ ...inp, fontSize: 12, padding: '3px 8px', flex: 1, minWidth: 120 }}
+                                  placeholder="Search course name…"
+                                  value={hs.query || ''}
+                                  onChange={e => updateHS(i, { query: e.target.value })}
+                                  onKeyDown={e => e.key === 'Enter' && historySearchCourse(i, hs.query)} />
+                                <button style={{ ...btnP, fontSize: 11, padding: '4px 12px' }} onClick={() => historySearchCourse(i, hs.query)}>
+                                  {hs.loading ? '…' : 'Search'}
+                                </button>
+                                <button style={{ ...btnG, fontSize: 10, padding: '3px 8px' }} onClick={() => updateHS(i, { open: false })}>Cancel</button>
+                                {hs.error && <span style={{ fontSize: 11, color: C.red }}>{hs.error}</span>}
+                              </div>
+                            )}
+                            {(hs.results || []).length > 0 && (
+                              <div style={{ marginTop: 4, background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: 6, overflow: 'hidden' }}>
+                                {hs.results.slice(0, 5).map((r2, k) => (
+                                  <button key={k} style={{ display: 'block', width: '100%', background: 'none', border: 'none', borderBottom: `1px solid ${C.border}`, color: C.text, textAlign: 'left', padding: '8px 10px', fontSize: 12, cursor: 'pointer', fontFamily: F }}
+                                    onClick={() => attachCourseToRound(i, r2)}>
+                                    {r2.course_name || r2.name} {r2.location ? `— ${r2.location}` : ''}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
               ) : (
                 <div style={{ overflowX: 'auto' }}>
                   <div style={{ minWidth: 740 }}>
@@ -2261,7 +2369,7 @@ Use actual yardages throughout. Be direct — no filler.`
               {/* ── Account ── */}
               <div style={{ ...card, marginBottom: 16 }}>
                 {sectionHead('Your account')}
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, flexWrap: 'wrap', gap: 8 }}>
                   <div>
                     <p style={{ fontSize: 13, color: C.textMuted, margin: 0 }}>Signed in as</p>
                     <p style={{ fontSize: 14, fontWeight: 600, color: C.text, margin: '2px 0 0' }}>{user?.email}</p>
@@ -2520,7 +2628,7 @@ Use actual yardages throughout. Be direct — no filler.`
 
         {/* Footer nav */}
         {tab !== 'plan' && tab !== 'admin' && (
-          <div style={{ marginTop: 16, ...card, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ marginTop: 16, ...card, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
             <div>
               <p style={{ fontSize: 13, fontWeight: 500, color: C.text, margin: 0 }}>
                 {tab === 'player'  ? 'Next: add recent scoring history' :
