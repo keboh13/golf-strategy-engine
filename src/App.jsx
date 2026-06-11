@@ -1468,12 +1468,12 @@ Use actual yardages throughout. Be direct — no filler.`
   }
 
   const TABS = [
-    { id: 'player',  label: 'Bag & player',    icon: '🏌️' },
-    { id: 'import',  label: 'Import data',     icon: '📥' },
-    { id: 'history', label: 'Scoring history', icon: '📊' },
-    { id: 'course',  label: 'Course setup',    icon: '⛳' },
-    { id: 'plan',    label: 'Game plan',       icon: '⚡' },
-    { id: 'admin',   label: 'Settings',        icon: '⚙️' },
+    { id: 'player',  label: 'Bag & player',    short: 'Player',  icon: '🏌️' },
+    { id: 'import',  label: 'Import data',     short: 'Import',  icon: '📥' },
+    { id: 'history', label: 'Scoring history', short: 'History', icon: '📊' },
+    { id: 'course',  label: 'Course setup',    short: 'Course',  icon: '⛳' },
+    { id: 'plan',    label: 'Game plan',       short: 'Plan',    icon: '⚡' },
+    { id: 'admin',   label: 'Settings',        short: 'Settings',icon: '⚙️' },
   ]
 
   const nextTab = { player: 'history', history: 'course', course: 'plan' }
@@ -1595,13 +1595,13 @@ Use actual yardages throughout. Be direct — no filler.`
             <button key={t.id} onClick={() => setTab(t.id)} style={{
               background: 'transparent', border: 'none',
               borderBottom: tab === t.id ? `2px solid ${C.accent}` : '2px solid transparent',
-              padding: isMobile ? '12px 14px' : '13px 18px',
-              fontSize: isMobile ? 12 : 13, fontFamily: F,
+              padding: isMobile ? '12px 10px' : '13px 18px',
+              fontSize: isMobile ? 11 : 13, fontFamily: F,
               color: tab === t.id ? C.text : C.textMuted, cursor: 'pointer',
-              display: 'flex', alignItems: 'center', gap: isMobile ? 4 : 6,
+              display: 'flex', alignItems: 'center', gap: isMobile ? 3 : 6,
               flexShrink: 0, whiteSpace: 'nowrap',
             }}>
-              {t.icon} {t.label}
+              {t.icon} {isMobile ? t.short : t.label}
             </button>
           ))}
         </div>
@@ -2221,7 +2221,7 @@ Use actual yardages throughout. Be direct — no filler.`
                 </p>
               </div>
             )}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: isMobile ? 'flex-start' : 'center', marginBottom: 14, flexWrap: 'wrap', gap: isMobile ? 10 : 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <h2 style={{ fontSize: 18, fontWeight: 600, color: C.text, margin: 0 }}>Game plan</h2>
                 {!course.name && <Badge label="Profile-only brief" bg={C.blueMuted} fg={C.blue} />}
@@ -2408,7 +2408,7 @@ Use actual yardages throughout. Be direct — no filler.`
 
                 {acctSection === 'password' && (
                   <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${C.border}` }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 10, marginBottom: 10 }}>
                       <div>
                         <label style={lbl}>New password</label>
                         <input type="password" style={inp} placeholder="8+ characters" value={acctNewPass}
@@ -2432,13 +2432,13 @@ Use actual yardages throughout. Be direct — no filler.`
                     <p style={{ fontSize: 12, color: C.textMuted, margin: '0 0 10px' }}>
                       A confirmation link will be sent to the new address. Your current email remains active until confirmed.
                     </p>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 10, alignItems: 'flex-end' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr auto', gap: 10, alignItems: 'flex-end' }}>
                       <div>
                         <label style={lbl}>New email address</label>
                         <input type="email" style={inp} placeholder="new@email.com" value={acctNewEmail}
                           onChange={e => setAcctNewEmail(e.target.value)} autoFocus />
                       </div>
-                      <button style={{ ...btnP, padding: '8px 18px', whiteSpace: 'nowrap' }}
+                      <button style={{ ...btnP, padding: '8px 18px', whiteSpace: 'nowrap', ...(isMobile && { width: '100%' }) }}
                         onClick={handleChangeEmail} disabled={acctLoading}>
                         {acctLoading ? 'Sending…' : 'Send confirmation'}
                       </button>
@@ -2573,7 +2573,7 @@ Use actual yardages throughout. Be direct — no filler.`
                       </p>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                         {adminUsers.map(u => (
-                          <div key={u.id} style={{ background: C.bgInput, border: `1px solid ${C.border}`, borderRadius: 8, padding: '10px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+                          <div key={u.id} style={{ background: C.bgInput, border: `1px solid ${C.border}`, borderRadius: 8, padding: '10px 14px', display: 'flex', justifyContent: 'space-between', alignItems: isMobile ? 'flex-start' : 'center', gap: 10, flexWrap: isMobile ? 'wrap' : 'nowrap' }}>
                             <div style={{ flex: 1 }}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                                 <p style={{ fontSize: 13, fontWeight: 600, color: C.text, margin: 0 }}>{u.email}</p>
@@ -2583,7 +2583,12 @@ Use actual yardages throughout. Be direct — no filler.`
                               <p style={{ fontSize: 11, color: C.textMuted, margin: '3px 0 0' }}>
                                 Joined {u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'}
                                 {u.last_sign_in_at ? ` · Last login ${new Date(u.last_sign_in_at).toLocaleDateString()}` : ''}
-                                {' · '}{u.usage_today ?? 0} plans today · {u.usage_total ?? 0} total
+                              </p>
+                              <p style={{ fontSize: 11, color: C.textMuted, margin: '2px 0 0' }}>
+                                Today: {u.usage_today ?? 0} calls
+                                {u.tokens_today > 0 ? ` · ${u.tokens_today.toLocaleString()} tokens` : ''}
+                                {' · '}All-time: {u.usage_total ?? 0} calls
+                                {u.tokens_total > 0 ? ` · ${u.tokens_total.toLocaleString()} tokens` : ''}
                               </p>
                             </div>
                             {u.id !== user?.id && (
