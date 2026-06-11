@@ -96,13 +96,25 @@ create policy "authenticated users can delete course cache"
   using (auth.role() = 'authenticated');
 
 -- ─── api_usage ───────────────────────────────────────────────────────────────
--- Rate limiting: count AI plan generations per user per day
+-- Rate limiting: count AI plan generations per user per day.
+-- Token columns are nullable and back-filled after each Anthropic call completes.
 create table if not exists public.api_usage (
-  id         uuid primary key default uuid_generate_v4(),
-  user_id    uuid not null references auth.users(id) on delete cascade,
-  endpoint   text not null default 'generate',
-  used_at    timestamptz not null default now()
+  id                    uuid primary key default uuid_generate_v4(),
+  user_id               uuid not null references auth.users(id) on delete cascade,
+  endpoint              text not null default 'generate',
+  used_at               timestamptz not null default now(),
+  input_tokens          integer,
+  output_tokens         integer,
+  cache_read_tokens     integer,
+  cache_creation_tokens integer
 );
+
+-- Migration (idempotent): add token columns to existing deployments
+alter table public.api_usage
+  add column if not exists input_tokens          integer,
+  add column if not exists output_tokens         integer,
+  add column if not exists cache_read_tokens     integer,
+  add column if not exists cache_creation_tokens integer;
 
 alter table public.api_usage enable row level security;
 

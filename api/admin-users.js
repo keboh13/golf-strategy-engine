@@ -78,27 +78,36 @@ export default async function handler(req) {
     }
     const { users } = await listRes.json()
 
-    // Pull today's usage counts from api_usage table
+    // Pull usage stats from api_usage table (counts + token sums)
     const windowStart = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
-    const [todayRes, totalRes] = await Promise.all([
-      fetch(`${supabaseUrl}/rest/v1/api_usage?used_at=gte.${encodeURIComponent(windowStart)}&select=user_id`, { headers: { ...svcHeaders, Prefer: 'count=exact' } }),
-      fetch(`${supabaseUrl}/rest/v1/api_usage?select=user_id`, { headers: svcHeaders }),
+    const [todayRes, totalRes, adminsRes] = await Promise.all([
+      fetch(`${supabaseUrl}/rest/v1/api_usage?used_at=gte.${encodeURIComponent(windowStart)}&select=user_id,input_tokens,output_tokens`, { headers: svcHeaders }),
+      fetch(`${supabaseUrl}/rest/v1/api_usage?select=user_id,input_tokens,output_tokens`, { headers: svcHeaders }),
+      fetch(`${supabaseUrl}/rest/v1/admins?select=user_id`, { headers: svcHeaders }),
     ])
 
-    let todayByUser = {}
-    let totalByUser = {}
+    let todayByUser  = {}
+    let totalByUser  = {}
+    let tokensTodayByUser = {}
+    let tokensTotalByUser = {}
 
     if (todayRes.ok) {
       const todayRows = await todayRes.json()
-      for (const r of todayRows) todayByUser[r.user_id] = (todayByUser[r.user_id] || 0) + 1
+      for (const r of todayRows) {
+        todayByUser[r.user_id] = (todayByUser[r.user_id] || 0) + 1
+        const t = (r.input_tokens || 0) + (r.output_tokens || 0)
+        tokensTodayByUser[r.user_id] = (tokensTodayByUser[r.user_id] || 0) + t
+      }
     }
     if (totalRes.ok) {
       const totalRows = await totalRes.json()
-      for (const r of totalRows) totalByUser[r.user_id] = (totalByUser[r.user_id] || 0) + 1
+      for (const r of totalRows) {
+        totalByUser[r.user_id] = (totalByUser[r.user_id] || 0) + 1
+        const t = (r.input_tokens || 0) + (r.output_tokens || 0)
+        tokensTotalByUser[r.user_id] = (tokensTotalByUser[r.user_id] || 0) + t
+      }
     }
 
-    // Fetch current admin IDs
-    const adminsRes = await fetch(`${supabaseUrl}/rest/v1/admins?select=user_id`, { headers: svcHeaders })
     const adminRows = adminsRes.ok ? await adminsRes.json() : []
     const adminIds  = new Set((adminRows || []).map(r => r.user_id))
 
@@ -107,8 +116,10 @@ export default async function handler(req) {
       email:           u.email,
       created_at:      u.created_at,
       last_sign_in_at: u.last_sign_in_at,
-      usage_today:     todayByUser[u.id] || 0,
-      usage_total:     totalByUser[u.id] || 0,
+      usage_today:     todayByUser[u.id]       || 0,
+      usage_total:     totalByUser[u.id]       || 0,
+      tokens_today:    tokensTodayByUser[u.id] || 0,
+      tokens_total:    tokensTotalByUser[u.id] || 0,
       isAdmin:         adminIds.has(u.id),
     }))
 
