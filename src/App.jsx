@@ -5,6 +5,18 @@ import AuthScreen from './screens/AuthScreen.jsx'
 import ImportTab from './components/ImportTab.jsx'
 import OnboardingScreen from './screens/OnboardingScreen.jsx'
 
+// ─── Responsive breakpoint ────────────────────────────────────────────────────
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 640)
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 640px)')
+    const handler = (e) => setIsMobile(e.matches)
+    mq.addEventListener('change', handler)
+    return () => mq.removeEventListener('change', handler)
+  }, [])
+  return isMobile
+}
+
 // ─── Error boundary ───────────────────────────────────────────────────────────
 class ErrorBoundary extends Component {
   constructor(props) { super(props); this.state = { error: null } }
@@ -417,6 +429,7 @@ If not found: {"error": "No verified scorecard found"}`,
 
 // ─── Course Search component ──────────────────────────────────────────────────
 function CourseSearch({ apiKey, golfCourseApiKey, onApiKeyNeeded, onSelect }) {
+  const isMobile = useIsMobile()
   const [query,    setQuery]    = useState('')
   const [location, setLocation] = useState('')
   const [results,  setResults]  = useState([])
@@ -563,7 +576,7 @@ function CourseSearch({ apiKey, golfCourseApiKey, onApiKeyNeeded, onSelect }) {
           ? 'Primary: GolfCourseAPI (verified yardages). Falls back to OpenGolfAPI then Claude web search.'
           : 'Primary: OpenGolfAPI (free). Add VITE_GOLF_COURSE_API_KEY to .env for verified yardages.'}
       </p>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 160px auto', gap: 8 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 160px auto', gap: 8 }}>
         <div>
           <label style={lbl}>Course name</label>
           <input style={inp} value={query} onChange={e => setQuery(e.target.value)}
@@ -605,7 +618,7 @@ function CourseSearch({ apiKey, golfCourseApiKey, onApiKeyNeeded, onSelect }) {
               || maleTees.find(t => /blue/i.test(t.tee_name))
               || maleTees.reduce((best, t) => (!best || t.total_yards > best.total_yards) ? t : best, null)
             return (
-              <div key={i} style={{ background: C.bgInput, border: `1px solid ${C.border}`, borderRadius: 8, padding: '10px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div key={i} style={{ background: C.bgInput, border: `1px solid ${C.border}`, borderRadius: 8, padding: '10px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
                 <div>
                   <p style={{ fontSize: 13, fontWeight: 500, color: C.text, margin: 0 }}>{name}</p>
                   <p style={{ fontSize: 11, color: C.textMuted, margin: '2px 0 0' }}>
@@ -685,6 +698,7 @@ function ScorecardPreview({ holes }) {
 function WeatherPanel({ apiKey, course, coords, setCoords,
                         teeTime, setTeeTime, teeDate, setTeeDate, pace, setPace,
                         timezone, weather, setWeather, weatherLoading, setWeatherLoading }) {
+  const isMobile = useIsMobile()
   const [status,     setStatus]     = useState('')
   const [error,      setError]      = useState('')
   const [manualLat,  setManualLat]  = useState('')
@@ -750,7 +764,7 @@ function WeatherPanel({ apiKey, course, coords, setCoords,
   return (
     <div style={{ ...card, marginBottom: 12 }}>
       <p style={{ ...lbl, marginBottom: 12 }}>Tee time & live weather</p>
-      <div style={{ display: 'grid', gridTemplateColumns: '140px 120px 110px 1fr auto', gap: 10, alignItems: 'flex-end' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : '140px 120px 110px 1fr auto', gap: 10, alignItems: 'flex-end' }}>
         <div>
           <label style={lbl}>Date</label>
           <input type="date" style={inp} value={teeDate} onChange={e => setTeeDate(e.target.value)} />
@@ -763,8 +777,8 @@ function WeatherPanel({ apiKey, course, coords, setCoords,
           <label style={lbl}>Pace (min/hole)</label>
           <input type="number" style={inp} value={pace} onChange={e => setPace(Number(e.target.value))} min={8} max={20} />
         </div>
-        <div />
-        <button style={{ ...btnP, display: 'flex', alignItems: 'center', gap: 7, whiteSpace: 'nowrap' }}
+        {!isMobile && <div />}
+        <button style={{ ...btnP, display: 'flex', alignItems: 'center', gap: 7, whiteSpace: 'nowrap', ...(isMobile ? { gridColumn: '1 / -1' } : {}) }}
           onClick={fetchWeather} disabled={weatherLoading}>
           {weatherLoading ? <><Spin /> Fetching...</> : '🌤 Fetch live weather'}
         </button>
@@ -784,7 +798,7 @@ function WeatherPanel({ apiKey, course, coords, setCoords,
           <p style={{ fontSize: 11, color: C.textMuted, margin: '0 0 10px' }}>
             Find on Google Maps: right-click the course → "What's here?" → copy the coordinates shown.
           </p>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 8 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : '1fr 1fr auto', gap: 8 }}>
             <div>
               <label style={lbl}>Latitude</label>
               <input style={inp} value={manualLat} onChange={e => setManualLat(e.target.value)} placeholder="e.g. 36.0430" />
@@ -793,8 +807,8 @@ function WeatherPanel({ apiKey, course, coords, setCoords,
               <label style={lbl}>Longitude</label>
               <input style={inp} value={manualLng} onChange={e => setManualLng(e.target.value)} placeholder="e.g. -115.2889" />
             </div>
-            <div style={{ display: 'flex', alignItems: 'flex-end' }}>
-              <button style={btnP} onClick={fetchManual} disabled={weatherLoading}>Fetch →</button>
+            <div style={{ display: 'flex', alignItems: 'flex-end', ...(isMobile ? { gridColumn: '1 / -1' } : {}) }}>
+              <button style={{ ...btnP, width: isMobile ? '100%' : 'auto' }} onClick={fetchManual} disabled={weatherLoading}>Fetch →</button>
             </div>
           </div>
         </div>
@@ -920,6 +934,7 @@ function CourseMapEmbed({ courseName, location, mapsKey }) {
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
 function AppInner({ user, session, onSignOut }) {
+  const isMobile = useIsMobile()
   // ── API keys — loaded from localStorage, falling back to .env ────────────
   const [apiKey,          setApiKeyRaw]       = useState(() => loadSavedKeys().anthropic  || ENV_ANTHROPIC_KEY)
   const [mapsKey,         setMapsKeyRaw]      = useState(() => loadSavedKeys().maps        || ENV_MAPS_KEY)
@@ -1472,20 +1487,22 @@ Use actual yardages throughout. Be direct — no filler.`
         input:focus,textarea:focus,select:focus{border-color:${C.accentDim}!important;outline:none}
         select option{background:${C.bgInput}}
         code{background:${C.bgInput};padding:1px 5px;border-radius:4px;font-size:0.9em}
+        .tab-bar::-webkit-scrollbar{display:none}
+        @media(max-width:640px){input,select,textarea{font-size:16px!important}}
       `}</style>
 
       {/* Header */}
       <div style={{ borderBottom: `1px solid ${C.border}`, padding: '0 1.5rem' }}>
-        <div style={{ maxWidth: 1020, margin: '0 auto', display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: 52 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <span style={{ fontSize: 14, fontWeight: 600, color: C.text, letterSpacing: '-0.01em' }}>Strategy Engine</span>
-            <span style={{ color: C.border }}>|</span>
-            <span style={{ fontSize: 13, color: C.textMuted }}>{playerInfo.name || 'Player'} · {playerInfo.handicap}</span>
-            {currentProfile !== 'Default' && <span style={{ fontSize: 11, color: C.textFaint }}>({currentProfile})</span>}
-            {course.name && <span style={{ fontSize: 13, color: C.textFaint }}>· {course.name}</span>}
+        <div style={{ maxWidth: 1020, margin: '0 auto', display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: isMobile ? 'auto' : 52, minHeight: 52, flexWrap: isMobile ? 'wrap' : 'nowrap', padding: isMobile ? '8px 0' : 0, gap: isMobile ? 6 : 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 12, flexShrink: 1, overflow: 'hidden' }}>
+            <span style={{ fontSize: isMobile ? 13 : 14, fontWeight: 600, color: C.text, letterSpacing: '-0.01em', whiteSpace: 'nowrap' }}>Strategy Engine</span>
+            {!isMobile && <span style={{ color: C.border }}>|</span>}
+            {!isMobile && <span style={{ fontSize: 13, color: C.textMuted }}>{playerInfo.name || 'Player'} · {playerInfo.handicap}</span>}
+            {!isMobile && currentProfile !== 'Default' && <span style={{ fontSize: 11, color: C.textFaint }}>({currentProfile})</span>}
+            {!isMobile && course.name && <span style={{ fontSize: 13, color: C.textFaint, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 200 }}>· {course.name}</span>}
             {weather && <Badge label="Weather live" bg={C.blueMuted} fg={C.blue} />}
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, position: 'relative' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, position: 'relative', flexShrink: 0 }}>
             {/* Keys panel toggle */}
             <button
               style={{ ...btnG, fontSize: 11, padding: '5px 12px',
@@ -1501,7 +1518,8 @@ Use actual yardages throughout. Be direct — no filler.`
               <div style={{
                 position: 'absolute', top: 42, right: 0, zIndex: 100,
                 background: C.bgCard, border: `1px solid ${C.border}`,
-                borderRadius: 12, padding: '16px 18px', width: 380,
+                borderRadius: 12, padding: '16px 18px',
+                width: 'min(380px, calc(100vw - 24px))',
                 boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
               }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
@@ -1572,14 +1590,16 @@ Use actual yardages throughout. Be direct — no filler.`
 
       {/* Tabs */}
       <div style={{ borderBottom: `1px solid ${C.border}`, padding: '0 1.5rem' }}>
-        <div style={{ maxWidth: 1020, margin: '0 auto', display: 'flex' }}>
+        <div className="tab-bar" style={{ maxWidth: 1020, margin: '0 auto', display: 'flex', overflowX: 'auto', scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
           {TABS.map(t => (
             <button key={t.id} onClick={() => setTab(t.id)} style={{
               background: 'transparent', border: 'none',
               borderBottom: tab === t.id ? `2px solid ${C.accent}` : '2px solid transparent',
-              padding: '13px 18px', fontSize: 13, fontFamily: F,
+              padding: isMobile ? '12px 14px' : '13px 18px',
+              fontSize: isMobile ? 12 : 13, fontFamily: F,
               color: tab === t.id ? C.text : C.textMuted, cursor: 'pointer',
-              display: 'flex', alignItems: 'center', gap: 6,
+              display: 'flex', alignItems: 'center', gap: isMobile ? 4 : 6,
+              flexShrink: 0, whiteSpace: 'nowrap',
             }}>
               {t.icon} {t.label}
             </button>
@@ -1628,7 +1648,7 @@ Use actual yardages throughout. Be direct — no filler.`
             />
             <div style={{ ...card, marginBottom: 12 }}>
               <p style={{ ...lbl, marginBottom: 12 }}>Player details</p>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 10 }}>
                 {[['Name','name','Player name'],['Handicap index','handicap','+0.7'],['GHIN number','ghin','Optional — for reference']].map(([l2,k,ph]) => (
                   <div key={k}>
                     <label style={lbl}>{l2}</label>
@@ -1650,7 +1670,7 @@ Use actual yardages throughout. Be direct — no filler.`
                   </select>
                 </div>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 10 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 10, marginTop: 10 }}>
                 <div>
                   <label style={lbl}>Goals — fed directly into AI strategy</label>
                   <textarea style={{ ...inp, height: 68, resize: 'vertical' }} value={playerInfo.goals || ''}
@@ -1716,7 +1736,7 @@ Use actual yardages throughout. Be direct — no filler.`
                       >×</button>
                     </div>
                     {isOpen && (
-                      <div style={{ marginLeft: 34, marginTop: 4, marginBottom: 6, display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '4px 8px' }}>
+                      <div style={{ marginLeft: 34, marginTop: 4, marginBottom: 6, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(100px, 1fr))', gap: '4px 8px' }}>
                         {[
                           { key: 'ballSpeed',   label: 'Ball speed (mph)', placeholder: '158' },
                           { key: 'launchAngle', label: 'Launch angle (°)',  placeholder: '10.5' },
@@ -1901,7 +1921,7 @@ Use actual yardages throughout. Be direct — no filler.`
 
               return (
                 <div style={{ marginBottom: 12 }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 8 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: 10, marginBottom: 8 }}>
                     {statCard('Overall avg', fmtF(avg), C.text, `${scores.length} rounds`)}
                     {statCard('Best round',  fmt(best),  C.green)}
                     {statCard('Worst round', fmt(worst), worst>2?C.red:C.textMuted)}
@@ -1951,7 +1971,7 @@ Use actual yardages throughout. Be direct — no filler.`
 
             <div style={{ ...card, marginBottom: 12 }}>
               <p style={{ ...lbl, marginBottom: 12 }}>Course details</p>
-              <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr', gap: 10 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : '2fr 1fr 1fr 1fr', gap: 10 }}>
                 <div>
                   <label style={lbl}>Course name</label>
                   <input style={inp} value={course.name} onChange={e => setCourse({ ...course, name: e.target.value })} placeholder="e.g. Rhodes Ranch Golf Club" />
@@ -1972,7 +1992,7 @@ Use actual yardages throughout. Be direct — no filler.`
                     placeholder="70.6 / 128" />
                 </div>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginTop: 10 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 10, marginTop: 10 }}>
                 <div>
                   <label style={lbl}>Conditions</label>
                   <select style={inp} value={course.conditions} onChange={e => setCourse({ ...course, conditions: e.target.value })}>
@@ -2101,7 +2121,7 @@ Use actual yardages throughout. Be direct — no filler.`
                 {plan && !planLoading && <Badge label="Ready" />}
               </div>
               {!planLoading && plan && (
-                <div style={{ display: 'flex', gap: 8 }}>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                   <button style={btnG} onClick={copyPlan}>{copied ? '✓ Copied' : 'Copy text'}</button>
                   <button style={btnG} onClick={printPlan}>Print / PDF</button>
                   <button style={btnG} onClick={generate}>↺ Regenerate</button>
@@ -2384,7 +2404,7 @@ Use actual yardages throughout. Be direct — no filler.`
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                     {entries.map((c, i) => (
-                      <div key={i} style={{ background: C.bgInput, border: `1px solid ${C.border}`, borderRadius: 8, padding: '10px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div key={i} style={{ background: C.bgInput, border: `1px solid ${C.border}`, borderRadius: 8, padding: '10px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
                         <div style={{ flex: 1 }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 2 }}>
                             <p style={{ fontSize: 13, fontWeight: 600, color: C.text, margin: 0 }}>{c.name}</p>
