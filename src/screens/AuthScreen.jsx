@@ -1,145 +1,171 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase.js'
 
-// ── Shared styles ─────────────────────────────────────────────────────────────
-const S = {
-  wrap: {
-    minHeight: '100dvh',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    background: 'linear-gradient(135deg,#0f1117 0%,#1a1f2e 100%)',
-    padding: 16,
-    fontFamily: 'Inter,system-ui,sans-serif',
-  },
-  card: {
-    background: '#1e2130',
-    border: '1px solid #2a2f45',
-    borderRadius: 16,
-    padding: '40px 36px',
-    width: '100%',
-    maxWidth: 420,
-    boxShadow: '0 24px 64px rgba(0,0,0,.45)',
-  },
-  logo: {
-    textAlign: 'center',
-    marginBottom: 28,
-  },
-  logoIcon: { fontSize: 40, lineHeight: 1 },
-  logoTitle: {
-    fontSize: 22,
-    fontWeight: 700,
-    color: '#f1f5f9',
-    margin: '8px 0 4px',
-  },
-  logoSub: { fontSize: 13, color: '#64748b' },
-  tabs: {
-    display: 'flex',
-    gap: 0,
-    marginBottom: 28,
-    background: '#141720',
-    borderRadius: 10,
-    padding: 3,
-  },
-  tab: (active) => ({
-    flex: 1,
-    padding: '8px 0',
-    border: 'none',
-    borderRadius: 8,
-    cursor: 'pointer',
-    fontSize: 14,
-    fontWeight: 600,
-    transition: 'all .18s',
-    background: active ? '#3b82f6' : 'transparent',
-    color:      active ? '#fff'    : '#64748b',
-  }),
-  label: {
-    display: 'block',
-    fontSize: 12,
-    fontWeight: 600,
-    color: '#94a3b8',
-    textTransform: 'uppercase',
-    letterSpacing: '.06em',
-    marginBottom: 6,
-  },
-  input: {
-    width: '100%',
-    padding: '10px 12px',
-    background: '#141720',
-    border: '1px solid #2a2f45',
-    borderRadius: 8,
-    color: '#f1f5f9',
-    fontSize: 14,
-    outline: 'none',
-    marginBottom: 16,
-    boxSizing: 'border-box',
-  },
-  btn: (variant = 'primary') => ({
-    width: '100%',
-    padding: '11px 0',
-    borderRadius: 8,
-    cursor: 'pointer',
-    fontSize: 15,
-    fontWeight: 600,
-    marginTop: 4,
-    transition: 'opacity .15s',
-    background:  variant === 'primary' ? '#3b82f6' : '#1e2130',
-    color:       variant === 'primary' ? '#fff'    : '#94a3b8',
-    borderColor: variant === 'primary' ? 'transparent' : '#2a2f45',
-    borderWidth:  1,
-    borderStyle: 'solid',
-  }),
-  err: {
-    background: '#2d1b1b',
-    border: '1px solid #7f1d1d',
-    color: '#fca5a5',
-    borderRadius: 8,
-    padding: '10px 12px',
-    fontSize: 13,
-    marginBottom: 16,
-  },
-  info: {
-    background: '#1a2436',
-    border: '1px solid #1e40af',
-    color: '#93c5fd',
-    borderRadius: 8,
-    padding: '10px 12px',
-    fontSize: 13,
-    marginBottom: 16,
-  },
-  qr: {
-    display: 'block',
-    margin: '12px auto 16px',
-    borderRadius: 8,
-    border: '3px solid #fff',
-  },
-  secret: {
-    background: '#141720',
-    border: '1px solid #2a2f45',
-    borderRadius: 8,
-    padding: '8px 12px',
-    fontSize: 12,
-    color: '#94a3b8',
-    wordBreak: 'break-all',
-    marginBottom: 16,
-    fontFamily: 'monospace',
-  },
-  divider: {
-    height: 1,
-    background: '#2a2f45',
-    margin: '20px 0',
-  },
-  small: {
-    fontSize: 12,
-    color: '#475569',
-    textAlign: 'center',
-    marginTop: 16,
-    lineHeight: 1.5,
-  },
+// ── Responsive hook ───────────────────────────────────────────────────────────
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 640)
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 640px)')
+    const handler = (e) => setIsMobile(e.matches)
+    mq.addEventListener('change', handler)
+    return () => mq.removeEventListener('change', handler)
+  }, [])
+  return isMobile
+}
+
+// ── Style factory ─────────────────────────────────────────────────────────────
+function makeStyles(isMobile) {
+  return {
+    wrap: {
+      minHeight: '100dvh',
+      display: 'flex',
+      alignItems: isMobile ? 'flex-start' : 'center',
+      justifyContent: 'center',
+      background: 'linear-gradient(135deg,#0f1117 0%,#1a1f2e 100%)',
+      padding: isMobile ? '16px 12px 40px' : 16,
+      fontFamily: 'Inter,system-ui,sans-serif',
+    },
+    card: {
+      background: '#1e2130',
+      border: isMobile ? 'none' : '1px solid #2a2f45',
+      borderRadius: isMobile ? 12 : 16,
+      padding: isMobile ? '28px 20px 24px' : '40px 36px',
+      width: '100%',
+      maxWidth: 420,
+      boxShadow: isMobile ? '0 8px 32px rgba(0,0,0,.4)' : '0 24px 64px rgba(0,0,0,.45)',
+      marginTop: isMobile ? 12 : 0,
+    },
+    logo: {
+      textAlign: 'center',
+      marginBottom: isMobile ? 20 : 28,
+    },
+    logoIcon: { fontSize: isMobile ? 36 : 40, lineHeight: 1 },
+    logoTitle: {
+      fontSize: isMobile ? 20 : 22,
+      fontWeight: 700,
+      color: '#f1f5f9',
+      margin: '8px 0 4px',
+    },
+    logoSub: { fontSize: isMobile ? 12 : 13, color: '#64748b', lineHeight: 1.4 },
+    tabs: {
+      display: 'flex',
+      gap: 0,
+      marginBottom: isMobile ? 20 : 28,
+      background: '#141720',
+      borderRadius: 10,
+      padding: 3,
+    },
+    tab: (active) => ({
+      flex: 1,
+      padding: isMobile ? '10px 0' : '8px 0',
+      border: 'none',
+      borderRadius: 8,
+      cursor: 'pointer',
+      fontSize: isMobile ? 15 : 14,
+      fontWeight: 600,
+      transition: 'all .18s',
+      background: active ? '#3b82f6' : 'transparent',
+      color:      active ? '#fff'    : '#64748b',
+      WebkitTapHighlightColor: 'transparent',
+    }),
+    label: {
+      display: 'block',
+      fontSize: 12,
+      fontWeight: 600,
+      color: '#94a3b8',
+      textTransform: 'uppercase',
+      letterSpacing: '.06em',
+      marginBottom: 6,
+    },
+    input: {
+      width: '100%',
+      padding: isMobile ? '14px 14px' : '10px 12px',
+      background: '#141720',
+      border: '1px solid #2a2f45',
+      borderRadius: 8,
+      color: '#f1f5f9',
+      fontSize: isMobile ? 16 : 14, // 16px prevents iOS zoom on focus
+      outline: 'none',
+      marginBottom: isMobile ? 14 : 16,
+      boxSizing: 'border-box',
+      WebkitAppearance: 'none',
+    },
+    btn: (variant = 'primary') => ({
+      width: '100%',
+      padding: isMobile ? '14px 0' : '11px 0',
+      borderRadius: 8,
+      cursor: 'pointer',
+      fontSize: isMobile ? 16 : 15,
+      fontWeight: 600,
+      marginTop: 4,
+      transition: 'opacity .15s',
+      background:  variant === 'primary' ? '#3b82f6' : '#1e2130',
+      color:       variant === 'primary' ? '#fff'    : '#94a3b8',
+      borderColor: variant === 'primary' ? 'transparent' : '#2a2f45',
+      borderWidth:  1,
+      borderStyle: 'solid',
+      WebkitTapHighlightColor: 'transparent',
+      touchAction: 'manipulation',
+    }),
+    err: {
+      background: '#2d1b1b',
+      border: '1px solid #7f1d1d',
+      color: '#fca5a5',
+      borderRadius: 8,
+      padding: isMobile ? '12px 14px' : '10px 12px',
+      fontSize: 13,
+      marginBottom: isMobile ? 14 : 16,
+      lineHeight: 1.5,
+    },
+    info: {
+      background: '#1a2436',
+      border: '1px solid #1e40af',
+      color: '#93c5fd',
+      borderRadius: 8,
+      padding: isMobile ? '12px 14px' : '10px 12px',
+      fontSize: 13,
+      marginBottom: isMobile ? 14 : 16,
+      lineHeight: 1.5,
+    },
+    qr: {
+      display: 'block',
+      margin: '12px auto 16px',
+      borderRadius: 8,
+      border: '3px solid #fff',
+      width: isMobile ? '100%' : 180,
+      maxWidth: 200,
+      height: 'auto',
+    },
+    secret: {
+      background: '#141720',
+      border: '1px solid #2a2f45',
+      borderRadius: 8,
+      padding: '8px 12px',
+      fontSize: 12,
+      color: '#94a3b8',
+      wordBreak: 'break-all',
+      marginBottom: 16,
+      fontFamily: 'monospace',
+      lineHeight: 1.6,
+    },
+    divider: {
+      height: 1,
+      background: '#2a2f45',
+      margin: '20px 0',
+    },
+    small: {
+      fontSize: 12,
+      color: '#475569',
+      textAlign: 'center',
+      marginTop: 16,
+      lineHeight: 1.5,
+    },
+  }
 }
 
 // ── Sign-up flow ──────────────────────────────────────────────────────────────
-function SignUpForm({ onComplete }) {
+function SignUpForm({ onComplete, isMobile }) {
+  const S = makeStyles(isMobile)
   const [step, setStep]     = useState('form')   // 'form' | 'confirm_email' | 'totp_enroll'
   const [email, setEmail]   = useState('')
   const [pass, setPass]     = useState('')
@@ -162,16 +188,12 @@ function SignUpForm({ onComplete }) {
       const { data, error: signUpErr } = await supabase.auth.signUp({ email, password: pass })
       if (signUpErr) throw signUpErr
 
-      // If Supabase requires email confirmation, the session will be null
-      // and we can't enroll TOTP yet (JWT has no sub claim until confirmed).
       if (!data.session) {
-        // Email confirmation is on — user must confirm before continuing
         setStep('confirm_email')
         setLoading(false)
         return
       }
 
-      // Session is live (email confirmation disabled) — enroll TOTP immediately
       await enrollTotp()
     } catch (err) {
       setError(err.message || 'Sign-up failed.')
@@ -207,7 +229,6 @@ function SignUpForm({ onComplete }) {
         code: totpCode.replace(/\s/g, ''),
       })
       if (vErr) throw vErr
-      // TOTP verified — account is ready; let App.jsx pick up the session
       onComplete('new')
     } catch (err) {
       setError(err.message || 'TOTP verification failed.')
@@ -223,7 +244,7 @@ function SignUpForm({ onComplete }) {
           We sent a confirmation link to <strong>{email}</strong>.<br />
           Click it to verify your account, then come back and sign in.
         </div>
-        <p style={{ fontSize: 12, color: '#475569', marginTop: 8 }}>
+        <p style={{ fontSize: 12, color: '#475569', marginTop: 8, lineHeight: 1.5 }}>
           Once confirmed, sign in and you'll be prompted to set up two-factor authentication.
         </p>
       </div>
@@ -235,9 +256,9 @@ function SignUpForm({ onComplete }) {
       <form onSubmit={handleVerifyTotp}>
         <div style={S.info}>
           <strong>Set up two-factor authentication</strong><br />
-          Scan the QR code below with Google Authenticator, Authy, or any TOTP app, then enter the 6-digit code to confirm.
+          Scan the QR code with Google Authenticator, Authy, or any TOTP app, then enter the 6-digit code to confirm.
         </div>
-        {qrUrl && <img src={qrUrl} alt="TOTP QR code" width={180} height={180} style={S.qr} />}
+        {qrUrl && <img src={qrUrl} alt="TOTP QR code" style={S.qr} />}
         <div style={S.label}>Or enter this secret manually</div>
         <div style={S.secret}>{secret}</div>
         {error && <div style={S.err}>{error}</div>}
@@ -294,7 +315,8 @@ function SignUpForm({ onComplete }) {
 }
 
 // ── Sign-in flow ──────────────────────────────────────────────────────────────
-function SignInForm({ onComplete }) {
+function SignInForm({ onComplete, isMobile }) {
+  const S = makeStyles(isMobile)
   const [step, setStep]     = useState('form')   // 'form' | 'totp_challenge'
   const [email, setEmail]   = useState('')
   const [pass, setPass]     = useState('')
@@ -311,12 +333,10 @@ function SignInForm({ onComplete }) {
       const { data, error: signInErr } = await supabase.auth.signInWithPassword({ email, password: pass })
       if (signInErr) throw signInErr
 
-      // Check if MFA is required
       const { data: aal, error: aalErr } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
       if (aalErr) throw aalErr
 
       if (aal.nextLevel === 'aal2' && aal.nextLevel !== aal.currentLevel) {
-        // Need TOTP challenge
         const { data: factors } = await supabase.auth.mfa.listFactors()
         const totp = factors?.totp?.[0]
         if (!totp) throw new Error('No TOTP factor found. Contact support.')
@@ -404,6 +424,8 @@ function SignInForm({ onComplete }) {
 // ── Root AuthScreen ───────────────────────────────────────────────────────────
 export default function AuthScreen({ onAuth }) {
   const [activeTab, setActiveTab] = useState('signin')
+  const isMobile = useIsMobile()
+  const S = makeStyles(isMobile)
 
   return (
     <div style={S.wrap}>
@@ -420,8 +442,8 @@ export default function AuthScreen({ onAuth }) {
         </div>
 
         {activeTab === 'signin'
-          ? <SignInForm onComplete={onAuth} />
-          : <SignUpForm onComplete={onAuth} />
+          ? <SignInForm onComplete={onAuth} isMobile={isMobile} />
+          : <SignUpForm onComplete={onAuth} isMobile={isMobile} />
         }
 
         <div style={S.divider} />
