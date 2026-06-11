@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef, Component } from 'react'
 import { supabase, loadUserProfiles, saveUserProfile, deleteUserProfile, loadUserHistory, saveUserHistory, loadUserSettings, saveUserSettings, getCachedCourseDB, setCachedCourseDB, getAllCachedCoursesDB, deleteCachedCourseDB } from './lib/supabase.js'
 import { buildBagSection } from './lib/promptSections.js'
 import AuthScreen from './screens/AuthScreen.jsx'
+import ImportTab from './components/ImportTab.jsx'
 import OnboardingScreen from './screens/OnboardingScreen.jsx'
 
 // ─── Error boundary ───────────────────────────────────────────────────────────
@@ -1450,6 +1451,7 @@ Use actual yardages throughout. Be direct — no filler.`
 
   const TABS = [
     { id: 'player',  label: 'Bag & player',    icon: '🏌️' },
+    { id: 'import',  label: 'Import data',     icon: '📥' },
     { id: 'history', label: 'Scoring history', icon: '📊' },
     { id: 'course',  label: 'Course setup',    icon: '⛳' },
     { id: 'plan',    label: 'Game plan',       icon: '⚡' },
@@ -2131,6 +2133,11 @@ Use actual yardages throughout. Be direct — no filler.`
               </div>
             )}
           </div>
+        )}
+
+        {/* ── IMPORT DATA ── */}
+        {tab === 'import' && (
+          <ImportTab clubs={clubs} setClubs={setClubs} C={C} card={card} inp={inp} lbl={lbl} btnP={btnP} btnG={btnG} />
         )}
 
         {/* ── SETTINGS / ADMIN ── */}
