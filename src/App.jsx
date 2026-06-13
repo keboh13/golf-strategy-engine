@@ -63,6 +63,125 @@ const C = {
 }
 const F = "'Inter', 'Helvetica Neue', sans-serif"
 
+// ─── Green View SVG Component ─────────────────────────────────────────────────
+function GreenView({ green, holeNum }) {
+  if (!green) return null
+  const W = 320, H = 260
+  const cx = W / 2, cy = 130
+
+  const greenW = Math.min((green.width_y || 24) * 3.5, 160)
+  const greenH = Math.min((green.depth_y || 28) * 3, 120)
+
+  const shapes = {
+    kidney: (cx, cy, w, h) => {
+      const hw = w / 2, hh = h / 2
+      return `M${cx - hw},${cy} C${cx - hw},${cy - hh * 1.1} ${cx - hw * 0.3},${cy - hh} ${cx},${cy - hh} C${cx + hw * 0.5},${cy - hh} ${cx + hw},${cy - hh * 0.7} ${cx + hw},${cy - hh * 0.2} C${cx + hw},${cy + hh * 0.3} ${cx + hw * 0.6},${cy + hh} ${cx},${cy + hh} C${cx - hw * 0.4},${cy + hh} ${cx - hw},${cy + hh * 0.6} ${cx - hw},${cy} Z`
+    },
+    oval: (cx, cy, w, h) => {
+      const hw = w / 2, hh = h / 2
+      return `M${cx},${cy - hh} C${cx + hw},${cy - hh} ${cx + hw},${cy + hh} ${cx},${cy + hh} C${cx - hw},${cy + hh} ${cx - hw},${cy - hh} ${cx},${cy - hh} Z`
+    },
+    round: (cx, cy, w, h) => {
+      const r = Math.min(w, h) / 2
+      return `M${cx},${cy - r} A${r},${r} 0 1,1 ${cx},${cy + r} A${r},${r} 0 1,1 ${cx},${cy - r} Z`
+    },
+  }
+  const shapeFn = shapes[green.shape] || shapes.oval
+  const greenPath = shapeFn(cx, cy, greenW, greenH)
+
+  const pinPositions = {
+    'front-right': { x: cx + greenW * 0.2, y: cy + greenH * 0.3 },
+    'front-left':  { x: cx - greenW * 0.2, y: cy + greenH * 0.3 },
+    'back-right':  { x: cx + greenW * 0.2, y: cy - greenH * 0.3 },
+    'back-left':   { x: cx - greenW * 0.2, y: cy - greenH * 0.3 },
+    'center':      { x: cx, y: cy },
+    'center-right':{ x: cx + greenW * 0.2, y: cy },
+    'center-left': { x: cx - greenW * 0.2, y: cy },
+  }
+  const pin = pinPositions[green.pin] || pinPositions.center
+
+  const hazardElems = (green.hazards || []).map((hz, i) => {
+    const locs = {
+      'left':        { x: cx - greenW / 2 - 22, y: cy },
+      'right':       { x: cx + greenW / 2 + 22, y: cy },
+      'front':       { x: cx, y: cy + greenH / 2 + 22 },
+      'back':        { x: cx, y: cy - greenH / 2 - 22 },
+      'front-left':  { x: cx - greenW / 2 - 12, y: cy + greenH / 2 + 8 },
+      'front-right': { x: cx + greenW / 2 + 12, y: cy + greenH / 2 + 8 },
+      'back-left':   { x: cx - greenW / 2 - 12, y: cy - greenH / 2 - 8 },
+      'back-right':  { x: cx + greenW / 2 + 12, y: cy - greenH / 2 - 8 },
+    }
+    const pos = locs[hz.loc] || locs.right
+    const isBunker = hz.type === 'bunker'
+    const isWater = hz.type === 'water'
+    return (
+      <g key={i}>
+        {isBunker && <ellipse cx={pos.x} cy={pos.y} rx={16} ry={10} fill="#d4a94433" stroke="#d4a944" strokeWidth={1.5} />}
+        {isWater && <ellipse cx={pos.x} cy={pos.y} rx={18} ry={10} fill="#38bdf822" stroke="#38bdf8" strokeWidth={1.5} />}
+        {hz.type === 'false_front' && <line x1={pos.x - 18} y1={pos.y} x2={pos.x + 18} y2={pos.y} stroke="#f59e0b" strokeWidth={2} strokeDasharray="4 3" />}
+        {hz.type === 'mound' && <ellipse cx={pos.x} cy={pos.y} rx={12} ry={8} fill="none" stroke="#8b8fa8" strokeWidth={1.5} strokeDasharray="3 2" />}
+        {hz.carry_y && <text x={pos.x} y={pos.y + 18} textAnchor="middle" fill={C.textMuted} fontSize={9} fontFamily={F}>{hz.carry_y}y</text>}
+        <text x={pos.x} y={pos.y - 14} textAnchor="middle" fill={C.textFaint} fontSize={8} fontFamily={F}>{hz.type === 'false_front' ? 'false front' : hz.type}</text>
+      </g>
+    )
+  })
+
+  return (
+    <div style={{ background: C.bgInput, borderRadius: 10, padding: '12px 8px', marginTop: 10 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, padding: '0 8px' }}>
+        <span style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Green view — Hole {holeNum}</span>
+        <span style={{ fontSize: 14, fontWeight: 700, color: C.green }}>Depth: {green.depth_y || '?'}y</span>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ display: 'block' }}>
+        {/* Green surface */}
+        <path d={greenPath} fill="#1a4d2e" stroke={C.green} strokeWidth={1.5} />
+
+        {/* Front / Mid / Back distance labels */}
+        <line x1={cx - greenW / 2 - 30} y1={cy + greenH / 2} x2={cx - greenW / 2 - 8} y2={cy + greenH / 2} stroke={C.textFaint} strokeWidth={0.5} />
+        <text x={cx - greenW / 2 - 34} y={cy + greenH / 2 + 3} textAnchor="end" fill={C.green} fontSize={11} fontWeight="600" fontFamily={F}>F {green.front_y || '?'}</text>
+
+        <line x1={cx - greenW / 2 - 30} y1={cy} x2={cx - greenW / 2 - 8} y2={cy} stroke={C.textFaint} strokeWidth={0.5} />
+        <text x={cx - greenW / 2 - 34} y={cy + 3} textAnchor="end" fill={C.accent} fontSize={11} fontWeight="600" fontFamily={F}>M {green.mid_y || '?'}</text>
+
+        <line x1={cx - greenW / 2 - 30} y1={cy - greenH / 2} x2={cx - greenW / 2 - 8} y2={cy - greenH / 2} stroke={C.textFaint} strokeWidth={0.5} />
+        <text x={cx - greenW / 2 - 34} y={cy - greenH / 2 + 3} textAnchor="end" fill={C.blue} fontSize={11} fontWeight="600" fontFamily={F}>B {green.back_y || '?'}</text>
+
+        {/* Pin position */}
+        <line x1={pin.x} y1={pin.y} x2={pin.x} y2={pin.y - 18} stroke="#fff" strokeWidth={1.5} />
+        <circle cx={pin.x} cy={pin.y - 18} r={3} fill={C.red} />
+        <circle cx={pin.x} cy={pin.y} r={2} fill="#fff" />
+
+        {/* Slope arrow */}
+        {green.slope && green.slope !== 'flat' && (() => {
+          const dirs = {
+            'back-to-front':  { x1: cx + greenW * 0.3, y1: cy - greenH * 0.2, x2: cx + greenW * 0.3, y2: cy + greenH * 0.2 },
+            'front-to-back':  { x1: cx + greenW * 0.3, y1: cy + greenH * 0.2, x2: cx + greenW * 0.3, y2: cy - greenH * 0.2 },
+            'left-to-right':  { x1: cx - greenW * 0.15, y1: cy + greenH * 0.35, x2: cx + greenW * 0.15, y2: cy + greenH * 0.35 },
+            'right-to-left':  { x1: cx + greenW * 0.15, y1: cy + greenH * 0.35, x2: cx - greenW * 0.15, y2: cy + greenH * 0.35 },
+          }
+          const d = dirs[green.slope]
+          if (!d) return null
+          return (
+            <g>
+              <defs><marker id="arrowhead" markerWidth="6" markerHeight="4" refX="5" refY="2" orient="auto"><polygon points="0 0, 6 2, 0 4" fill={C.textFaint} /></marker></defs>
+              <line {...d} stroke={C.textFaint} strokeWidth={1} markerEnd="url(#arrowhead)" />
+              <text x={(d.x1 + d.x2) / 2 + 10} y={(d.y1 + d.y2) / 2 + 3} fill={C.textFaint} fontSize={8} fontFamily={F}>slope</text>
+            </g>
+          )
+        })()}
+
+        {/* Hazards */}
+        {hazardElems}
+
+        {/* Approach direction arrow at bottom */}
+        <polygon points={`${cx - 4},${H - 8} ${cx + 4},${H - 8} ${cx},${H - 16}`} fill={C.textFaint} />
+        <text x={cx} y={H - 2} textAnchor="middle" fill={C.textFaint} fontSize={8} fontFamily={F}>approach</text>
+      </svg>
+      {green.slope && <p style={{ fontSize: 10, color: C.textFaint, textAlign: 'center', margin: '4px 0 0' }}>Slope: {green.slope.replace(/-/g, ' → ').replace(/to →/, '→')}</p>}
+    </div>
+  )
+}
+
 // ─── Env keys (set in .env) ───────────────────────────────────────────────────
 const ENV_ANTHROPIC_KEY    = import.meta.env.VITE_ANTHROPIC_API_KEY    || ''
 const ENV_MAPS_KEY         = import.meta.env.VITE_GOOGLE_MAPS_KEY      || ''
@@ -82,10 +201,10 @@ const LS_MODEL           = 'gse_model'
 
 // ─── AI models available for plan generation ──────────────────────────────────
 const AVAILABLE_MODELS = [
-  { id: 'claude-haiku-4-5-20251001', name: 'Haiku',   desc: 'Fastest · Good for quick briefs',          tier: 'Free'     },
-  { id: 'claude-sonnet-4-6',         name: 'Sonnet',  desc: 'Balanced · Recommended (default)',          tier: 'Standard' },
-  { id: 'claude-opus-4-8',           name: 'Opus',    desc: 'Most capable · Deeper analysis',            tier: 'Premium'  },
-  { id: 'claude-fable-5',            name: 'Fable 5', desc: 'Flagship · Best strategy & reasoning',      tier: 'Premium'  },
+  { id: 'claude-haiku-4-5-20251001', name: 'Haiku',   desc: 'Fastest · Good for quick briefs',          tier: 'Free',     speed: '~8s',  cost: '$' },
+  { id: 'claude-sonnet-4-6',         name: 'Sonnet',  desc: 'Balanced · Recommended (default)',          tier: 'Standard', speed: '~15s', cost: '$$' },
+  { id: 'claude-opus-4-8',           name: 'Opus',    desc: 'Most capable · Deeper analysis',            tier: 'Premium',  speed: '~30s', cost: '$$$' },
+  { id: 'claude-fable-5',            name: 'Fable 5', desc: 'Flagship · Best strategy & reasoning',      tier: 'Premium',  speed: '~25s', cost: '$$$' },
 ]
 
 function loadCourseCache() {
@@ -1076,6 +1195,10 @@ function AppInner({ user, session, onSignOut }) {
   const [planView,    setPlanView]    = useState('companion')
   const [currentHole, setCurrentHole] = useState(0)
   const [copied,      setCopied]      = useState(false)
+  const [holeScores,  setHoleScores]  = useState({})
+
+  const setScore = (holeNum, val) => setHoleScores(s => ({ ...s, [holeNum]: Math.max(1, val) }))
+  const clearScores = () => setHoleScores({})
 
   // History course-lookup state: { [roundIndex]: { query, results, loading, error } }
   const [historySearch, setHistorySearch] = useState({})
@@ -1342,6 +1465,11 @@ One line per hole: "Hole N (Par X, Yds) — [attack / par / damage control] — 
 - **Tee shot**: Club, target, shape, where NOT to miss given ${playerInfo.miss} tendency
 - **Approach**: Distance from ideal position, club, landing zone
 - **Caddy note**: Green tendencies, weather adjustment, specific intel
+- **Green data**: After the caddy note, include a JSON code block with green details:
+\`\`\`green-json
+{"depth_y":28,"width_y":24,"shape":"kidney|oval|round|oblong","front_y":165,"mid_y":172,"back_y":180,"pin":"front-right|front-left|center|back-right|back-left|center-right|center-left","slope":"back-to-front|front-to-back|left-to-right|right-to-left|flat","hazards":[{"type":"bunker|water|false_front|mound","loc":"left|right|front|back|front-left|front-right|back-left|back-right","carry_y":145}]}
+\`\`\`
+Use your best estimate for green depth/width based on the course data. front_y/mid_y/back_y are approach distances from the player's likely layup or tee position. Include all relevant hazards around the green.
 
 ## Weather adjustments
 How conditions shift across the round. Club up/down notes on key holes.
@@ -1413,6 +1541,16 @@ Use actual yardages throughout. Be direct — no filler.`
       setPlanError(e.message)
     }
     setPlanLoading(false)
+    setPlan(p => {
+      if (p) {
+        try {
+          const saved = JSON.parse(localStorage.getItem('golf_saved_briefs') || '[]')
+          saved.unshift({ course: course.name || 'Profile brief', date: new Date().toISOString().slice(0, 10), plan: p })
+          localStorage.setItem('golf_saved_briefs', JSON.stringify(saved.slice(0, 5)))
+        } catch {}
+      }
+      return p
+    })
   }
 
   const copyPlan = async () => {
@@ -1507,10 +1645,16 @@ Use actual yardages throughout. Be direct — no filler.`
     const postStart = holes.length ? holes[holes.length - 1].end : lines.length
     const postamble = lines.slice(postStart).join('\n')
 
-    const holeData = holes.map(h => ({
-      num: h.num,
-      content: lines.slice(h.start, h.end).join('\n'),
-    }))
+    const greenJsonRegex = /```green-json\s*\n([\s\S]*?)\n```/
+    const holeData = holes.map(h => {
+      const content = lines.slice(h.start, h.end).join('\n')
+      const gm = content.match(greenJsonRegex)
+      let green = null
+      if (gm) {
+        try { green = JSON.parse(gm[1].trim()) } catch {}
+      }
+      return { num: h.num, content: content.replace(greenJsonRegex, '').trim(), green }
+    })
 
     return { preamble, holes: holeData, postamble }
   }, [plan])
@@ -1552,7 +1696,11 @@ Use actual yardages throughout. Be direct — no filler.`
       <style>{`
         @keyframes spin{to{transform:rotate(360deg)}}
         @keyframes blink{50%{opacity:0}}
-        input::placeholder,textarea::placeholder{color:${C.textFaint}}
+        input::placeholder,textarea::placeholder{color:${C.textMuted};opacity:0.7}
+        summary::-webkit-details-marker{display:none}
+        summary::marker{display:none;content:''}
+        details summary::after{content:'▸';color:${C.textFaint};font-size:10px;margin-left:auto;transition:transform 0.15s}
+        details[open] summary::after{transform:rotate(90deg)}
         input:focus,textarea:focus,select:focus{border-color:${C.accentDim}!important;outline:none}
         select option{background:${C.bgInput}}
         code{background:${C.bgInput};padding:1px 5px;border-radius:4px;font-size:0.9em}
@@ -1664,10 +1812,10 @@ Use actual yardages throughout. Be direct — no filler.`
             <button key={t.id} onClick={() => setTab(t.id)} style={{
               background: 'transparent', border: 'none',
               borderBottom: tab === t.id ? `2px solid ${C.accent}` : '2px solid transparent',
-              padding: isMobile ? '12px 10px' : '13px 18px',
-              fontSize: isMobile ? 11 : 13, fontFamily: F,
+              padding: isMobile ? '12px 14px' : '13px 18px',
+              fontSize: isMobile ? 12 : 13, fontFamily: F,
               color: tab === t.id ? C.text : C.textMuted, cursor: 'pointer',
-              display: 'flex', alignItems: 'center', gap: isMobile ? 3 : 6,
+              display: 'flex', alignItems: 'center', gap: isMobile ? 4 : 6,
               flexShrink: 0, whiteSpace: 'nowrap',
             }}>
               {t.icon} {isMobile ? t.short : t.label}
@@ -1776,20 +1924,49 @@ Use actual yardages throughout. Be direct — no filler.`
                   </button>
                 </div>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 60px 72px 22px' : '24px 2fr 1fr 1.5fr 24px', gap: isMobile ? '4px 6px' : '5px 10px', marginBottom: 6, marginTop: 12 }}>
-                {(isMobile ? ['Club','Carry','Shape',''] : ['','Club','Carry (yds)','Shot shape','']).map((h, i) => <span key={i} style={{ fontSize: 10, color: C.textFaint, letterSpacing: '0.08em', textTransform: 'uppercase' }}>{h}</span>)}
+              {isMobile ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 12 }}>
+                  {clubs.map((c, i) => (
+                    <details key={i} style={{ background: C.bgInput, border: `1px solid ${C.border}`, borderRadius: 8 }}>
+                      <summary style={{ padding: '10px 12px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between', listStyle: 'none', WebkitAppearance: 'none' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <span style={{ fontSize: 13, fontWeight: 500, color: C.text }}>{c.club}</span>
+                          <span style={{ fontSize: 12, color: C.accent, fontWeight: 600 }}>{c.carry}y</span>
+                          <span style={{ fontSize: 11, color: C.textFaint }}>{c.shape}</span>
+                        </div>
+                        <button onClick={e => { e.preventDefault(); setClubs(clubs.filter((_, j) => j !== i)) }}
+                          style={{ background: 'none', border: 'none', color: C.textFaint, cursor: 'pointer', fontSize: 15, padding: 0 }}>×</button>
+                      </summary>
+                      <div style={{ padding: '8px 12px 12px', borderTop: `1px solid ${C.border}`, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        <input style={{ ...inp, padding: '6px 10px', fontSize: 13 }} value={c.club} placeholder="Club name"
+                          onChange={e => setClubs(clubs.map((cl, j) => j === i ? { ...cl, club: e.target.value } : cl))} />
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          <input type="number" style={{ ...inp, padding: '6px 10px', fontSize: 13, flex: 1 }} value={c.carry} placeholder="Carry (yds)"
+                            onChange={e => setClubs(clubs.map((cl, j) => j === i ? { ...cl, carry: e.target.value } : cl))} />
+                          <select style={{ ...inp, padding: '6px 10px', fontSize: 13, flex: 1 }} value={c.shape}
+                            onChange={e => setClubs(clubs.map((cl, j) => j === i ? { ...cl, shape: e.target.value } : cl))}>
+                            {['Fade','Draw','Straight','Slight fade','Slight draw'].map(s => <option key={s}>{s}</option>)}
+                          </select>
+                        </div>
+                      </div>
+                    </details>
+                  ))}
+                </div>
+              ) : (<>
+              <div style={{ display: 'grid', gridTemplateColumns: '24px 2fr 1fr 1.5fr 24px', gap: '5px 10px', marginBottom: 6, marginTop: 12 }}>
+                {['','Club','Carry (yds)','Shot shape',''].map((h, i) => <span key={i} style={{ fontSize: 10, color: C.textFaint, letterSpacing: '0.08em', textTransform: 'uppercase' }}>{h}</span>)}
               </div>
               {clubs.map((c, i) => {
                 const isOpen = !!expandedClubs[i]
                 const analyticsInp = { ...inp, padding: '4px 6px', fontSize: 12 }
                 return (
                   <div key={i} style={{ marginBottom: 4 }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 60px 72px 22px' : '24px 2fr 1fr 1.5fr 24px', gap: isMobile ? '3px 6px' : '4px 10px', alignItems: 'center' }}>
-                      {!isMobile && <button
+                    <div style={{ display: 'grid', gridTemplateColumns: '24px 2fr 1fr 1.5fr 24px', gap: '4px 10px', alignItems: 'center' }}>
+                      <button
                         onClick={() => setExpandedClubs(prev => ({ ...prev, [i]: !prev[i] }))}
                         style={{ background: 'none', border: 'none', color: C.textFaint, cursor: 'pointer', fontSize: 10, padding: 0, textAlign: 'center', transform: isOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }}
                         title="Expand analytics"
-                      >▼</button>}
+                      >▼</button>
                       <input style={{ ...inp, padding: '5px 8px', fontSize: 13 }} value={c.club}
                         onChange={e => setClubs(clubs.map((cl, j) => j === i ? { ...cl, club: e.target.value } : cl))} />
                       <input type="number" style={{ ...inp, textAlign: 'center', padding: '5px 8px' }} value={c.carry}
@@ -1824,6 +2001,7 @@ Use actual yardages throughout. Be direct — no filler.`
                   </div>
                 )
               })}
+              </>)}
             </div>
           </div>
         )}
@@ -2209,48 +2387,86 @@ Use actual yardages throughout. Be direct — no filler.`
 
             {/* Hole table */}
             <div style={card}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 4 }}>
                 <p style={{ ...lbl, margin: 0 }}>Hole-by-hole</p>
                 <p style={{ fontSize: 11, color: C.textFaint, margin: 0 }}>Notes = caddy intel for AI (green slopes, OB, pin tendencies…)</p>
               </div>
-              <div style={{ overflowX: 'auto' }}>
-                <div style={{ minWidth: 500 }}>
-                  {['Front 9', 'Back 9'].map((label, half) => (
-                    <div key={half}>
-                      <p style={{ fontSize: 10, color: C.textFaint, textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 }}>
-                        {label} — {course.holes.slice(half * 9, half * 9 + 9).reduce((s, h) => s + (parseInt(h.yardage) || 0), 0)}y · Par {course.holes.slice(half * 9, half * 9 + 9).reduce((s, h) => s + h.par, 0)}
-                      </p>
-                      <div style={{ display: 'grid', gridTemplateColumns: '28px 48px 66px 50px 1fr', gap: '4px 8px', marginBottom: 4 }}>
-                        {half === 0 && ['#','Par','Yds','HCP','Caddy notes'].map((h, i) =>
-                          <span key={i} style={{ fontSize: 10, color: C.textFaint, letterSpacing: '0.06em', textTransform: 'uppercase' }}>{h}</span>
-                        )}
-                      </div>
-                      {course.holes.slice(half * 9, half * 9 + 9).map((h, i) => {
-                        const idx = half * 9 + i
-                        const upd = (field, val) => setCourse({ ...course, holes: course.holes.map((hh, j) => j === idx ? { ...hh, [field]: val } : hh) })
-                        return (
-                          <div key={idx} style={{ display: 'grid', gridTemplateColumns: '28px 48px 66px 50px 1fr', gap: '3px 8px', marginBottom: 3, alignItems: 'center' }}>
-                            <span style={{ fontSize: 11, color: C.textMuted, textAlign: 'center' }}>{idx + 1}</span>
-                            <select style={{ ...inp, padding: '4px 6px', fontSize: 12 }} value={h.par} onChange={e => upd('par', Number(e.target.value))}>
-                              {[3,4,5].map(p => <option key={p}>{p}</option>)}
+              {isMobile ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {course.holes.map((h, idx) => {
+                    const upd = (field, val) => setCourse({ ...course, holes: course.holes.map((hh, j) => j === idx ? { ...hh, [field]: val } : hh) })
+                    const noteChips = ['Slopes B→F', 'False front', 'OB left', 'OB right', 'Bunker short', 'Pin front', 'Pin back', 'Elevated green']
+                    return (
+                      <details key={idx} style={{ background: C.bgInput, border: `1px solid ${C.border}`, borderRadius: 8 }}>
+                        <summary style={{ padding: '10px 12px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, listStyle: 'none', WebkitAppearance: 'none' }}>
+                          <span style={{ fontSize: 13, fontWeight: 600, color: C.accent, minWidth: 28 }}>{idx + 1}</span>
+                          <span style={{ fontSize: 12, color: C.textMuted }}>Par {h.par} · {h.yardage || '?'}y</span>
+                          {h.notes && <span style={{ fontSize: 10, color: C.green, marginLeft: 'auto' }}>has notes</span>}
+                        </summary>
+                        <div style={{ padding: '8px 12px 12px', borderTop: `1px solid ${C.border}` }}>
+                          <div style={{ display: 'flex', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
+                            <select style={{ ...inp, padding: '6px 8px', fontSize: 12, flex: '0 0 auto', width: 70 }} value={h.par} onChange={e => upd('par', Number(e.target.value))}>
+                              {[3,4,5].map(p => <option key={p}>Par {p}</option>)}
                             </select>
-                            <input type="number" style={{ ...inp, padding: '4px 6px', fontSize: 12 }} value={h.yardage} onChange={e => upd('yardage', e.target.value)} placeholder="yds" />
-                            <input type="number" style={{ ...inp, padding: '4px 6px', fontSize: 12 }} value={h.handicap} onChange={e => upd('handicap', e.target.value)} placeholder="HCP" />
-                            <input style={{ ...inp, padding: '4px 8px', fontSize: 12 }} value={h.notes} onChange={e => upd('notes', e.target.value)}
-                              placeholder="e.g. Green slopes back-to-front, false front, OB left, pin usually front-right..." />
+                            <input type="number" style={{ ...inp, padding: '6px 8px', fontSize: 12, flex: 1, minWidth: 70 }} value={h.yardage} onChange={e => upd('yardage', e.target.value)} placeholder="Yards" />
+                            <input type="number" style={{ ...inp, padding: '6px 8px', fontSize: 12, flex: '0 0 auto', width: 60 }} value={h.handicap} onChange={e => upd('handicap', e.target.value)} placeholder="HCP" />
                           </div>
-                        )
-                      })}
-                      {half === 0 && <div style={{ borderTop: `1px solid ${C.border}`, margin: '10px 0 10px' }} />}
+                          <textarea style={{ ...inp, padding: '8px 10px', fontSize: 13, width: '100%', minHeight: 60, resize: 'vertical' }}
+                            value={h.notes} onChange={e => upd('notes', e.target.value)}
+                            placeholder="Green slopes, hazards, pin tendency..." />
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
+                            {noteChips.map(chip => (
+                              <button key={chip} onClick={() => upd('notes', (h.notes ? h.notes + ', ' : '') + chip.toLowerCase())} style={{
+                                fontSize: 10, padding: '3px 8px', borderRadius: 12, border: `1px solid ${C.border}`,
+                                background: C.bgCard, color: C.textMuted, cursor: 'pointer', fontFamily: F,
+                              }}>{chip}</button>
+                            ))}
+                          </div>
+                        </div>
+                      </details>
+                    )
+                  })}
+                </div>
+              ) : (
+                <div style={{ overflowX: 'auto' }}>
+                  <div style={{ minWidth: 500 }}>
+                    {['Front 9', 'Back 9'].map((label, half) => (
+                      <div key={half}>
+                        <p style={{ fontSize: 10, color: C.textFaint, textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 }}>
+                          {label} — {course.holes.slice(half * 9, half * 9 + 9).reduce((s, h) => s + (parseInt(h.yardage) || 0), 0)}y · Par {course.holes.slice(half * 9, half * 9 + 9).reduce((s, h) => s + h.par, 0)}
+                        </p>
+                        <div style={{ display: 'grid', gridTemplateColumns: '28px 48px 66px 50px 1fr', gap: '4px 8px', marginBottom: 4 }}>
+                          {half === 0 && ['#','Par','Yds','HCP','Caddy notes'].map((h, i) =>
+                            <span key={i} style={{ fontSize: 10, color: C.textFaint, letterSpacing: '0.06em', textTransform: 'uppercase' }}>{h}</span>
+                          )}
+                        </div>
+                        {course.holes.slice(half * 9, half * 9 + 9).map((h, i) => {
+                          const idx = half * 9 + i
+                          const upd = (field, val) => setCourse({ ...course, holes: course.holes.map((hh, j) => j === idx ? { ...hh, [field]: val } : hh) })
+                          return (
+                            <div key={idx} style={{ display: 'grid', gridTemplateColumns: '28px 48px 66px 50px 1fr', gap: '3px 8px', marginBottom: 3, alignItems: 'center' }}>
+                              <span style={{ fontSize: 11, color: C.textMuted, textAlign: 'center' }}>{idx + 1}</span>
+                              <select style={{ ...inp, padding: '4px 6px', fontSize: 12 }} value={h.par} onChange={e => upd('par', Number(e.target.value))}>
+                                {[3,4,5].map(p => <option key={p}>{p}</option>)}
+                              </select>
+                              <input type="number" style={{ ...inp, padding: '4px 6px', fontSize: 12 }} value={h.yardage} onChange={e => upd('yardage', e.target.value)} placeholder="yds" />
+                              <input type="number" style={{ ...inp, padding: '4px 6px', fontSize: 12 }} value={h.handicap} onChange={e => upd('handicap', e.target.value)} placeholder="HCP" />
+                              <input style={{ ...inp, padding: '4px 8px', fontSize: 12 }} value={h.notes} onChange={e => upd('notes', e.target.value)}
+                                placeholder="e.g. Green slopes back-to-front, false front, OB left, pin usually front-right..." />
+                            </div>
+                          )
+                        })}
+                        {half === 0 && <div style={{ borderTop: `1px solid ${C.border}`, margin: '10px 0 10px' }} />}
+                      </div>
+                    ))}
+                    <div style={{ display: 'grid', gridTemplateColumns: '28px 48px 66px 50px 1fr', gap: '4px 8px', marginTop: 8, paddingTop: 8, borderTop: `1px solid ${C.border}` }}>
+                      <span style={{ fontSize: 11, color: C.textFaint }}>Tot</span>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: C.text, padding: '4px 6px' }}>{course.holes.reduce((s, h) => s + h.par, 0)}</span>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: C.accent, padding: '4px 6px' }}>{course.holes.reduce((s, h) => s + (parseInt(h.yardage) || 0), 0).toLocaleString()}</span>
                     </div>
-                  ))}
-                  <div style={{ display: 'grid', gridTemplateColumns: '28px 48px 66px 50px 1fr', gap: '4px 8px', marginTop: 8, paddingTop: 8, borderTop: `1px solid ${C.border}` }}>
-                    <span style={{ fontSize: 11, color: C.textFaint }}>Tot</span>
-                    <span style={{ fontSize: 12, fontWeight: 600, color: C.text, padding: '4px 6px' }}>{course.holes.reduce((s, h) => s + h.par, 0)}</span>
-                    <span style={{ fontSize: 12, fontWeight: 600, color: C.accent, padding: '4px 6px' }}>{course.holes.reduce((s, h) => s + (parseInt(h.yardage) || 0), 0).toLocaleString()}</span>
                   </div>
                 </div>
-              </div>
+              )}
             </div>
           </div>
         )}
@@ -2324,6 +2540,27 @@ Use actual yardages throughout. Be direct — no filler.`
                     </>
                 }
                 <button style={{ ...btnP, marginTop: 16 }} onClick={generate}>Generate →</button>
+                {(() => {
+                  try {
+                    const saved = JSON.parse(localStorage.getItem('golf_saved_briefs') || '[]')
+                    if (!saved.length) return null
+                    return (
+                      <div style={{ marginTop: 20, textAlign: 'left' }}>
+                        <p style={{ fontSize: 11, fontWeight: 600, color: C.textFaint, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Recent briefs</p>
+                        {saved.map((b, i) => (
+                          <button key={i} onClick={() => setPlan(b.plan)} style={{
+                            display: 'block', width: '100%', background: C.bgInput, border: `1px solid ${C.border}`,
+                            borderRadius: 8, padding: '10px 14px', marginBottom: 6, cursor: 'pointer',
+                            textAlign: 'left', fontFamily: F,
+                          }}>
+                            <span style={{ fontSize: 13, color: C.text, fontWeight: 500 }}>{b.course}</span>
+                            <span style={{ fontSize: 11, color: C.textFaint, marginLeft: 8 }}>{b.date}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )
+                  } catch { return null }
+                })()}
               </div>
             )}
             {(plan || planLoading) && (<>
@@ -2363,6 +2600,36 @@ Use actual yardages throughout. Be direct — no filler.`
                     ))}
                   </div>
 
+                  {/* Score tracker bar */}
+                  {(() => {
+                    const holesPlayed = parsedHoles.holes.filter(h => holeScores[h.num] != null)
+                    if (!holesPlayed.length && !holeScores[parsedHoles.holes[currentHole]?.num]) return null
+                    const totalStrokes = holesPlayed.reduce((sum, h) => sum + (holeScores[h.num] || 0), 0)
+                    const totalPar = holesPlayed.reduce((sum, h) => {
+                      const m = h.content.match(/Par\s+(\d)/i)
+                      return sum + (m ? parseInt(m[1]) : 4)
+                    }, 0)
+                    const diff = totalStrokes - totalPar
+                    const thru = holesPlayed.length
+                    const target = course.targetScore || (course.par || 72)
+                    const targetThru = holesPlayed.reduce((sum, h) => {
+                      const m = h.content.match(/Par\s+(\d)/i)
+                      return sum + (m ? parseInt(m[1]) : 4)
+                    }, 0)
+                    const vTarget = totalStrokes - targetThru
+                    return (
+                      <div style={{ background: C.bgInput, borderRadius: 8, padding: '8px 14px', marginBottom: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+                        <span style={{ fontSize: 13, fontWeight: 600, color: diff <= 0 ? C.green : diff <= 3 ? C.amber : C.red }}>
+                          {diff === 0 ? 'E' : diff > 0 ? `+${diff}` : diff} thru {thru}
+                        </span>
+                        <span style={{ fontSize: 11, color: C.textMuted }}>
+                          Strokes: {totalStrokes} · Par: {totalPar}
+                          {typeof target === 'number' && ` · vs target: ${vTarget >= 0 ? '+' : ''}${vTarget}`}
+                        </span>
+                      </div>
+                    )
+                  })()}
+
                   {/* Current hole detail */}
                   <div style={card}>
                     {currentHole === 0 && parsedHoles.preamble && (
@@ -2371,6 +2638,42 @@ Use actual yardages throughout. Be direct — no filler.`
                       </div>
                     )}
                     {renderPlan(parsedHoles.holes[currentHole]?.content || '')}
+                    <GreenView green={parsedHoles.holes[currentHole]?.green} holeNum={parsedHoles.holes[currentHole]?.num} />
+
+                    {/* Per-hole score entry */}
+                    {(() => {
+                      const hNum = parsedHoles.holes[currentHole]?.num
+                      if (!hNum) return null
+                      const parMatch = (parsedHoles.holes[currentHole]?.content || '').match(/Par\s+(\d)/i)
+                      const par = parMatch ? parseInt(parMatch[1]) : 4
+                      const score = holeScores[hNum]
+                      return (
+                        <div style={{ borderTop: `1px solid ${C.border}`, marginTop: 12, paddingTop: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <span style={{ fontSize: 12, color: C.textMuted, fontWeight: 500 }}>Score (par {par})</span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <button onClick={() => setScore(hNum, (score || par) - 1)} style={{
+                              width: 32, height: 32, borderRadius: 8, border: `1px solid ${C.border}`,
+                              background: C.bgInput, color: C.text, fontSize: 16, fontFamily: F, cursor: 'pointer',
+                              display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            }}>−</button>
+                            <span style={{
+                              width: 36, textAlign: 'center', fontSize: 18, fontWeight: 700, fontFamily: F,
+                              color: score == null ? C.textFaint : score < par ? C.green : score === par ? C.text : score === par + 1 ? C.amber : C.red,
+                            }}>{score ?? '–'}</span>
+                            <button onClick={() => setScore(hNum, (score || par) + 1)} style={{
+                              width: 32, height: 32, borderRadius: 8, border: `1px solid ${C.border}`,
+                              background: C.bgInput, color: C.text, fontSize: 16, fontFamily: F, cursor: 'pointer',
+                              display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            }}>+</button>
+                            {score != null && (
+                              <span style={{ fontSize: 11, color: score < par ? C.green : score === par ? C.textMuted : C.red, minWidth: 40 }}>
+                                {score < par ? `${score - par}` : score === par ? 'Par' : `+${score - par}`}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    })()}
                   </div>
 
                   {/* Prev / Next navigation */}
@@ -2590,8 +2893,13 @@ Use actual yardages throughout. Be direct — no filler.`
                       <p style={{ fontSize: 13, color: C.red, margin: 0, fontWeight: 600 }}>⚠ This permanently deletes your account and all data</p>
                       <p style={{ fontSize: 12, color: C.red, margin: '4px 0 0' }}>All profiles, scoring history, and settings will be erased. This cannot be undone.</p>
                     </div>
+                    <div style={{ marginBottom: 10 }}>
+                      <label style={{ ...lbl, color: C.red }}>Type DELETE to confirm</label>
+                      <input style={{ ...inp, borderColor: C.red }} placeholder="DELETE" id="delete-confirm"
+                        onChange={e => { e.target.dataset.ready = e.target.value === 'DELETE' ? '1' : '' }} />
+                    </div>
                     <button style={{ background: C.red, color: '#fff', border: 'none', borderRadius: 8, padding: '9px 20px', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: F }}
-                      onClick={() => { if (window.confirm('Are you absolutely sure? Your account and all data will be permanently deleted.')) handleDeleteAccount() }}
+                      onClick={() => { const el = document.getElementById('delete-confirm'); if (el?.dataset.ready === '1') handleDeleteAccount() }}
                       disabled={acctLoading}>
                       {acctLoading ? 'Deleting…' : 'Yes, delete my account'}
                     </button>
@@ -2620,7 +2928,10 @@ Use actual yardages throughout. Be direct — no filler.`
                           }}>{m.tier}</span>
                         </div>
                         <p style={{ fontSize: 12, color: C.textMuted, margin: 0, lineHeight: 1.4 }}>{m.desc}</p>
-                        <p style={{ fontSize: 10, color: C.textFaint, margin: '6px 0 0', fontFamily: 'monospace' }}>{m.id}</p>
+                        <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+                          <span style={{ fontSize: 10, color: C.textFaint }}>Speed: {m.speed}</span>
+                          <span style={{ fontSize: 10, color: C.textFaint }}>Cost: {m.cost}</span>
+                        </div>
                       </button>
                     )
                   })}
