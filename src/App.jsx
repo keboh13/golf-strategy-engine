@@ -1,9 +1,11 @@
-import { useState, useCallback, useEffect, useRef, Component } from 'react'
+import { useState, useCallback, useEffect, useRef, useMemo, Component } from 'react'
 import { supabase, loadUserProfiles, saveUserProfile, deleteUserProfile, loadUserHistory, saveUserHistory, loadUserSettings, saveUserSettings, getCachedCourseDB, setCachedCourseDB, getAllCachedCoursesDB, deleteCachedCourseDB } from './lib/supabase.js'
 import { buildBagSection } from './lib/promptSections.js'
 import AuthScreen from './screens/AuthScreen.jsx'
 import ImportTab from './components/ImportTab.jsx'
 import OnboardingScreen from './screens/OnboardingScreen.jsx'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 // ─── Responsive breakpoint ────────────────────────────────────────────────────
 function useIsMobile() {
@@ -1069,7 +1071,10 @@ function AppInner({ user, session, onSignOut }) {
   // Game plan
   const [plan,        setPlan]        = useState('')
   const [planLoading, setPlanLoading] = useState(false)
+  const [planPhase,   setPlanPhase]   = useState('')
   const [planError,   setPlanError]   = useState('')
+  const [planView,    setPlanView]    = useState('companion')
+  const [currentHole, setCurrentHole] = useState(0)
   const [copied,      setCopied]      = useState(false)
 
   // History course-lookup state: { [roundIndex]: { query, results, loading, error } }
@@ -1351,7 +1356,7 @@ Use actual yardages throughout. Be direct — no filler.`
     // Use server-side proxy when deployed (no user API key needed), fall back to direct browser access for local dev
     const useProxy = window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1'
     if (!useProxy && !apiKey) { setShowKeysPanel(true); setPlanError('Add your Anthropic API key (top-right 🔑) to generate a game plan.'); return }
-    setPlanLoading(true); setPlanError(''); setPlan(''); setTab('plan')
+    setPlanLoading(true); setPlanPhase('Analyzing scoring history'); setPlanError(''); setPlan(''); setTab('plan')
     const payload = {
       model: selectedModel,
       max_tokens: 6000,
@@ -1392,7 +1397,15 @@ Use actual yardages throughout. Be direct — no filler.`
           if (d === '[DONE]') continue
           try {
             const j = JSON.parse(d)
-            if (j.type === 'content_block_delta' && j.delta?.text) setPlan(p => p + j.delta.text)
+            if (j.type === 'content_block_delta' && j.delta?.text) {
+              setPlan(p => {
+                const next = p + j.delta.text
+                if (next.includes('## Scoring roadmap') || next.includes('## scoring roadmap')) setPlanPhase('Drafting round strategy')
+                else if (next.includes('## Hole-by-hole') || next.includes('## hole-by-hole')) setPlanPhase('Writing hole-by-hole strategy')
+                else if (next.includes('## Weather') || next.includes('## Pressure')) setPlanPhase('Finalizing adjustments')
+                return next
+              })
+            }
           } catch {}
         }
       }
@@ -1432,19 +1445,75 @@ Use actual yardages throughout. Be direct — no filler.`
     w?.addEventListener('load', () => { w.print(); URL.revokeObjectURL(url) })
   }
 
-  const renderPlan = (text) => text.split('\n').map((line, i) => {
-    const l = line.trim()
-    if (!l) return <div key={i} style={{ height: 6 }} />
-    if (l.startsWith('## '))  return <h2 key={i} style={{ fontSize: 16, fontWeight: 600, color: C.text, margin: '1.4rem 0 0.4rem', borderBottom: `1px solid ${C.border}`, paddingBottom: 6 }}>{l.slice(3)}</h2>
-    if (l.startsWith('### ')) return <h3 key={i} style={{ fontSize: 13, fontWeight: 600, color: l.match(/Hole/i) ? C.accent : C.amber, margin: '1rem 0 3px' }}>{l.slice(4)}</h3>
-    if (l.startsWith('- ') || l.startsWith('• ')) return (
-      <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 3, paddingLeft: 6 }}>
+  const mdComponents = useMemo(() => ({
+    h2: ({ children }) => <h2 style={{ fontSize: 16, fontWeight: 600, color: C.text, margin: '1.4rem 0 0.4rem', borderBottom: `1px solid ${C.border}`, paddingBottom: 6 }}>{children}</h2>,
+    h3: ({ children }) => {
+      const text = typeof children === 'string' ? children : Array.isArray(children) ? children.join('') : ''
+      return <h3 style={{ fontSize: 13, fontWeight: 600, color: /Hole/i.test(text) ? C.accent : C.amber, margin: '1rem 0 3px' }}>{children}</h3>
+    },
+    p: ({ children }) => <p style={{ fontSize: 13, color: C.textMuted, lineHeight: 1.7, margin: '3px 0' }}>{children}</p>,
+    strong: ({ children }) => <strong style={{ color: C.text }}>{children}</strong>,
+    li: ({ children }) => (
+      <div style={{ display: 'flex', gap: 8, marginBottom: 3, paddingLeft: 6 }}>
         <span style={{ color: C.accentDim, flexShrink: 0, marginTop: 2 }}>▸</span>
-        <span style={{ fontSize: 13, color: C.textMuted, lineHeight: 1.65 }} dangerouslySetInnerHTML={{ __html: l.replace(/^[-•]\s*/, '').replace(/\*\*([^*]+)\*\*/g, (_, m) => `<strong style="color:${C.text}">${m.replace(/[<>]/g, '')}</strong>`) }} />
+        <span style={{ fontSize: 13, color: C.textMuted, lineHeight: 1.65 }}>{children}</span>
       </div>
-    )
-    return <p key={i} style={{ fontSize: 13, color: C.textMuted, lineHeight: 1.7, margin: '3px 0' }} dangerouslySetInnerHTML={{ __html: l.replace(/\*\*([^*]+)\*\*/g, (_, m) => `<strong style="color:${C.text}">${m.replace(/[<>]/g, '')}</strong>`) }} />
-  })
+    ),
+    ul: ({ children }) => <div style={{ margin: '4px 0' }}>{children}</div>,
+    ol: ({ children }) => <div style={{ margin: '4px 0' }}>{children}</div>,
+    hr: () => <hr style={{ border: 'none', borderTop: `1px solid ${C.border}`, margin: '1.5rem 0' }} />,
+    table: ({ children }) => (
+      <div style={{ overflowX: 'auto', margin: '12px 0', WebkitOverflowScrolling: 'touch' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, minWidth: 480 }}>{children}</table>
+      </div>
+    ),
+    thead: ({ children }) => <thead style={{ borderBottom: `2px solid ${C.border}` }}>{children}</thead>,
+    th: ({ children }) => <th style={{ padding: '8px 10px', textAlign: 'left', color: C.text, fontWeight: 600, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>{children}</th>,
+    td: ({ children }) => <td style={{ padding: '7px 10px', borderBottom: `1px solid ${C.border}`, color: C.textMuted, verticalAlign: 'top' }}>{children}</td>,
+    tr: ({ children }) => <tr style={{ }}>{children}</tr>,
+    code: ({ children }) => <code style={{ background: C.bgInput, padding: '1px 5px', borderRadius: 4, fontSize: '0.9em' }}>{children}</code>,
+  }), [])
+
+  const renderPlan = (text) => (
+    <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+      {text}
+    </ReactMarkdown>
+  )
+
+  const parsedHoles = useMemo(() => {
+    if (!plan) return { preamble: '', holes: [], postamble: '' }
+    const lines = plan.split('\n')
+    const holeRegex = /^###?\s*Hole\s+(\d+)/i
+    const sectionRegex = /^##\s/
+    let preambleEnd = -1
+    const holes = []
+    let cur = null
+
+    for (let i = 0; i < lines.length; i++) {
+      const m = lines[i].match(holeRegex)
+      if (m) {
+        if (cur) { cur.end = i; holes.push(cur) }
+        if (preambleEnd < 0) preambleEnd = i
+        cur = { num: parseInt(m[1], 10), start: i, end: lines.length }
+      } else if (cur && sectionRegex.test(lines[i]) && !holeRegex.test(lines[i])) {
+        cur.end = i
+        holes.push(cur)
+        cur = null
+      }
+    }
+    if (cur) holes.push(cur)
+
+    const preamble = preambleEnd > 0 ? lines.slice(0, preambleEnd).join('\n') : plan
+    const postStart = holes.length ? holes[holes.length - 1].end : lines.length
+    const postamble = lines.slice(postStart).join('\n')
+
+    const holeData = holes.map(h => ({
+      num: h.num,
+      content: lines.slice(h.start, h.end).join('\n'),
+    }))
+
+    return { preamble, holes: holeData, postamble }
+  }, [plan])
 
   // ── API key panel helpers ─────────────────────────────────────────────────
   const saveKeysFromPanel = () => {
@@ -1468,12 +1537,12 @@ Use actual yardages throughout. Be direct — no filler.`
   }
 
   const TABS = [
-    { id: 'player',  label: 'Bag & player',    icon: '🏌️' },
-    { id: 'import',  label: 'Import data',     icon: '📥' },
-    { id: 'history', label: 'Scoring history', icon: '📊' },
-    { id: 'course',  label: 'Course setup',    icon: '⛳' },
-    { id: 'plan',    label: 'Game plan',       icon: '⚡' },
-    { id: 'admin',   label: 'Settings',        icon: '⚙️' },
+    { id: 'player',  label: 'Bag & player',    short: 'Player',  icon: '🏌️' },
+    { id: 'import',  label: 'Import data',     short: 'Import',  icon: '📥' },
+    { id: 'history', label: 'Scoring history', short: 'History', icon: '📊' },
+    { id: 'course',  label: 'Course setup',    short: 'Course',  icon: '⛳' },
+    { id: 'plan',    label: 'Game plan',       short: 'Plan',    icon: '⚡' },
+    { id: 'admin',   label: 'Settings',        short: 'Settings',icon: '⚙️' },
   ]
 
   const nextTab = { player: 'history', history: 'course', course: 'plan' }
@@ -1497,7 +1566,7 @@ Use actual yardages throughout. Be direct — no filler.`
           <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 12, flexShrink: 1, overflow: 'hidden' }}>
             <span style={{ fontSize: isMobile ? 13 : 14, fontWeight: 600, color: C.text, letterSpacing: '-0.01em', whiteSpace: 'nowrap' }}>Strategy Engine</span>
             {!isMobile && <span style={{ color: C.border }}>|</span>}
-            {!isMobile && <span style={{ fontSize: 13, color: C.textMuted }}>{playerInfo.name || 'Player'} · {playerInfo.handicap}</span>}
+            {!isMobile && <span style={{ fontSize: 13, color: C.textMuted }}>{playerInfo.name || 'Player'} · HCP {playerInfo.handicap}</span>}
             {!isMobile && currentProfile !== 'Default' && <span style={{ fontSize: 11, color: C.textFaint }}>({currentProfile})</span>}
             {!isMobile && course.name && <span style={{ fontSize: 13, color: C.textFaint, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 200 }}>· {course.name}</span>}
             {weather && <Badge label="Weather live" bg={C.blueMuted} fg={C.blue} />}
@@ -1582,7 +1651,7 @@ Use actual yardages throughout. Be direct — no filler.`
 
             <button style={{ ...btnP, padding: '7px 18px', fontSize: 12, opacity: planLoading ? 0.6 : 1, whiteSpace: 'nowrap' }}
               onClick={generate} disabled={planLoading}>
-              {planLoading ? 'Generating...' : isMobile ? '⚡ Generate' : '⚡ Generate game plan'}
+              {planLoading ? (planPhase || 'Generating') + '...' : isMobile ? '⚡ Generate' : '⚡ Generate game plan'}
             </button>
           </div>
         </div>
@@ -1601,7 +1670,7 @@ Use actual yardages throughout. Be direct — no filler.`
               display: 'flex', alignItems: 'center', gap: isMobile ? 4 : 6,
               flexShrink: 0, whiteSpace: 'nowrap',
             }}>
-              {t.icon} {t.label}
+              {t.icon} {isMobile ? t.short : t.label}
             </button>
           ))}
         </div>
@@ -1766,7 +1835,7 @@ Use actual yardages throughout. Be direct — no filler.`
             <div style={{ ...card, marginBottom: 12, borderColor: C.accentMuted }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
                 <p style={{ fontSize: 13, color: C.textMuted, margin: 0, lineHeight: 1.6, maxWidth: 600 }}>
-                  Enter his most recent competitive and practice rounds. Claude identifies scoring patterns,
+                  Enter your most recent competitive and practice rounds. Claude identifies scoring patterns,
                   course-type tendencies, and condition-based trends — then adjusts today's target and
                   hole-by-hole strategy accordingly. Most recent rounds are weighted most heavily.
                 </p>
@@ -2221,11 +2290,11 @@ Use actual yardages throughout. Be direct — no filler.`
                 </p>
               </div>
             )}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: isMobile ? 'flex-start' : 'center', marginBottom: 14, flexWrap: 'wrap', gap: isMobile ? 10 : 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <h2 style={{ fontSize: 18, fontWeight: 600, color: C.text, margin: 0 }}>Game plan</h2>
                 {!course.name && <Badge label="Profile-only brief" bg={C.blueMuted} fg={C.blue} />}
-                {planLoading && <><Spin /><span style={{ fontSize: 12, color: C.textMuted }}>Generating...</span></>}
+                {planLoading && <><Spin /><span style={{ fontSize: 12, color: C.textMuted }}>{planPhase || 'Generating'}...</span></>}
                 {plan && !planLoading && <Badge label="Ready" />}
               </div>
               {!planLoading && plan && (
@@ -2257,12 +2326,81 @@ Use actual yardages throughout. Be direct — no filler.`
                 <button style={{ ...btnP, marginTop: 16 }} onClick={generate}>Generate →</button>
               </div>
             )}
-            {(plan || planLoading) && (
-              <div style={card}>
-                {renderPlan(plan)}
-                {planLoading && <span style={{ display: 'inline-block', width: 7, height: 15, background: C.accent, animation: 'blink 0.8s step-end infinite', marginLeft: 2, verticalAlign: 'middle' }} />}
-              </div>
-            )}
+            {(plan || planLoading) && (<>
+              {plan && !planLoading && parsedHoles.holes.length > 0 && (
+                <div style={{ display: 'flex', gap: 4, marginBottom: 12, background: C.bgInput, borderRadius: 8, padding: 3 }}>
+                  {[['companion', 'Round companion'], ['briefing', 'Full briefing']].map(([id, label]) => (
+                    <button key={id} onClick={() => setPlanView(id)} style={{
+                      flex: 1, padding: '8px 12px', fontSize: 12, fontWeight: 500, fontFamily: F,
+                      border: 'none', borderRadius: 6, cursor: 'pointer',
+                      background: planView === id ? C.accent : 'transparent',
+                      color: planView === id ? C.bg : C.textMuted,
+                    }}>{label}</button>
+                  ))}
+                </div>
+              )}
+
+              {planView === 'companion' && plan && !planLoading && parsedHoles.holes.length > 0 ? (
+                <div
+                  onTouchStart={e => { e.currentTarget._swipeX = e.touches[0].clientX }}
+                  onTouchEnd={e => {
+                    const dx = e.changedTouches[0].clientX - (e.currentTarget._swipeX || 0)
+                    if (Math.abs(dx) > 60) {
+                      if (dx < 0 && currentHole < parsedHoles.holes.length - 1) setCurrentHole(h => h + 1)
+                      if (dx > 0 && currentHole > 0) setCurrentHole(h => h - 1)
+                    }
+                  }}>
+                  {/* Hole picker chips */}
+                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 12 }}>
+                    {parsedHoles.holes.map((h, i) => (
+                      <button key={h.num} onClick={() => setCurrentHole(i)} style={{
+                        width: 36, height: 36, borderRadius: 8, border: `1px solid ${currentHole === i ? C.accent : C.border}`,
+                        background: currentHole === i ? C.accentMuted : C.bgInput,
+                        color: currentHole === i ? C.accent : C.textMuted,
+                        fontSize: 13, fontWeight: 600, fontFamily: F, cursor: 'pointer',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      }}>{h.num}</button>
+                    ))}
+                  </div>
+
+                  {/* Current hole detail */}
+                  <div style={card}>
+                    {currentHole === 0 && parsedHoles.preamble && (
+                      <div style={{ marginBottom: 16, paddingBottom: 12, borderBottom: `1px solid ${C.border}` }}>
+                        {renderPlan(parsedHoles.preamble)}
+                      </div>
+                    )}
+                    {renderPlan(parsedHoles.holes[currentHole]?.content || '')}
+                  </div>
+
+                  {/* Prev / Next navigation */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 12, gap: 8 }}>
+                    <button style={{ ...btnG, flex: 1, opacity: currentHole === 0 ? 0.4 : 1, textAlign: 'center' }}
+                      disabled={currentHole === 0}
+                      onClick={() => setCurrentHole(h => Math.max(0, h - 1))}>
+                      ← Hole {parsedHoles.holes[currentHole - 1]?.num || ''}
+                    </button>
+                    <button style={{ ...btnG, flex: 1, opacity: currentHole >= parsedHoles.holes.length - 1 ? 0.4 : 1, textAlign: 'center' }}
+                      disabled={currentHole >= parsedHoles.holes.length - 1}
+                      onClick={() => setCurrentHole(h => Math.min(parsedHoles.holes.length - 1, h + 1))}>
+                      Hole {parsedHoles.holes[currentHole + 1]?.num || ''} →
+                    </button>
+                  </div>
+
+                  {/* Post-amble (weather adjustments, pressure management) */}
+                  {parsedHoles.postamble.trim() && (
+                    <div style={{ ...card, marginTop: 12 }}>
+                      {renderPlan(parsedHoles.postamble)}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div style={card}>
+                  {renderPlan(plan)}
+                  {planLoading && <span style={{ display: 'inline-block', width: 7, height: 15, background: C.accent, animation: 'blink 0.8s step-end infinite', marginLeft: 2, verticalAlign: 'middle' }} />}
+                </div>
+              )}
+            </>)}
           </div>
         )}
 
@@ -2408,7 +2546,7 @@ Use actual yardages throughout. Be direct — no filler.`
 
                 {acctSection === 'password' && (
                   <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${C.border}` }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 10, marginBottom: 10 }}>
                       <div>
                         <label style={lbl}>New password</label>
                         <input type="password" style={inp} placeholder="8+ characters" value={acctNewPass}
@@ -2432,13 +2570,13 @@ Use actual yardages throughout. Be direct — no filler.`
                     <p style={{ fontSize: 12, color: C.textMuted, margin: '0 0 10px' }}>
                       A confirmation link will be sent to the new address. Your current email remains active until confirmed.
                     </p>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 10, alignItems: 'flex-end' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr auto', gap: 10, alignItems: 'flex-end' }}>
                       <div>
                         <label style={lbl}>New email address</label>
                         <input type="email" style={inp} placeholder="new@email.com" value={acctNewEmail}
                           onChange={e => setAcctNewEmail(e.target.value)} autoFocus />
                       </div>
-                      <button style={{ ...btnP, padding: '8px 18px', whiteSpace: 'nowrap' }}
+                      <button style={{ ...btnP, padding: '8px 18px', whiteSpace: 'nowrap', ...(isMobile && { width: '100%' }) }}
                         onClick={handleChangeEmail} disabled={acctLoading}>
                         {acctLoading ? 'Sending…' : 'Send confirmation'}
                       </button>
@@ -2573,7 +2711,7 @@ Use actual yardages throughout. Be direct — no filler.`
                       </p>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                         {adminUsers.map(u => (
-                          <div key={u.id} style={{ background: C.bgInput, border: `1px solid ${C.border}`, borderRadius: 8, padding: '10px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+                          <div key={u.id} style={{ background: C.bgInput, border: `1px solid ${C.border}`, borderRadius: 8, padding: '10px 14px', display: 'flex', justifyContent: 'space-between', alignItems: isMobile ? 'flex-start' : 'center', gap: 10, flexWrap: isMobile ? 'wrap' : 'nowrap' }}>
                             <div style={{ flex: 1 }}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                                 <p style={{ fontSize: 13, fontWeight: 600, color: C.text, margin: 0 }}>{u.email}</p>
@@ -2583,7 +2721,12 @@ Use actual yardages throughout. Be direct — no filler.`
                               <p style={{ fontSize: 11, color: C.textMuted, margin: '3px 0 0' }}>
                                 Joined {u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'}
                                 {u.last_sign_in_at ? ` · Last login ${new Date(u.last_sign_in_at).toLocaleDateString()}` : ''}
-                                {' · '}{u.usage_today ?? 0} plans today · {u.usage_total ?? 0} total
+                              </p>
+                              <p style={{ fontSize: 11, color: C.textMuted, margin: '2px 0 0' }}>
+                                Today: {u.usage_today ?? 0} calls
+                                {u.tokens_today > 0 ? ` · ${u.tokens_today.toLocaleString()} tokens` : ''}
+                                {' · '}All-time: {u.usage_total ?? 0} calls
+                                {u.tokens_total > 0 ? ` · ${u.tokens_total.toLocaleString()} tokens` : ''}
                               </p>
                             </div>
                             {u.id !== user?.id && (

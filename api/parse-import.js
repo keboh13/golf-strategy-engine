@@ -108,9 +108,8 @@ async function checkAndRecordUsage(userId) {
   const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
 
   if (!supabaseUrl || !supabaseServiceKey) {
-    // Rate limiting not configured — allow request but warn
     console.warn('[rate-limit] Supabase env vars missing, skipping rate limit check')
-    return { allowed: true, used: 0 }
+    return { allowed: true, used: 0, recordId: null }
   }
 
   const windowStart = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
@@ -130,17 +129,22 @@ async function checkAndRecordUsage(userId) {
   const count = parseInt(countRes.headers.get('Content-Range')?.split('/')[1] || '0', 10)
 
   if (count >= DAILY_LIMIT) {
-    return { allowed: false, used: count }
+    return { allowed: false, used: count, recordId: null }
   }
 
-  // Record this request
-  await fetch(`${base}/api_usage`, {
+  // Record this request — return=representation gives back the inserted row (including id)
+  const insertRes = await fetch(`${base}/api_usage`, {
     method: 'POST',
     headers,
     body: JSON.stringify({ user_id: userId, endpoint: 'parse-import', used_at: new Date().toISOString() }),
   })
+  let recordId = null
+  if (insertRes.ok) {
+    const rows = await insertRes.json()
+    recordId = Array.isArray(rows) ? (rows[0]?.id ?? null) : null
+  }
 
-  return { allowed: true, used: count + 1 }
+  return { allowed: true, used: count + 1, recordId }
 }
 
 function jsonResponse(body, status, extraHeaders = {}) {
@@ -264,7 +268,7 @@ export default async function handler(req) {
   }
 
   // ── 3. Rate limit (separate pool from generate) ───────────────────────────
-  const { allowed, used } = await checkAndRecordUsage(userId)
+  const { allowed, used, recordId } = await checkAndRecordUsage(userId)
   if (!allowed) {
     return jsonResponse({
       error: `Daily limit reached (${DAILY_LIMIT} AI imports/day). Try again tomorrow.`,
@@ -339,6 +343,28 @@ export default async function handler(req) {
         ? ` ${session.warnings.join(' ')}`
         : ''
       return jsonResponse({ error: `No shot data could be extracted from the input.${why}` }, 422)
+    }
+
+    // Persist token counts for the admin usage dashboard
+    if (recordId && message.usage) {
+      const supabaseUrl        = process.env.SUPABASE_URL
+      const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+      if (supabaseUrl && supabaseServiceKey) {
+        fetch(`${supabaseUrl}/rest/v1/api_usage?id=eq.${recordId}`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            'apikey': supabaseServiceKey,
+            'Authorization': `Bearer ${supabaseServiceKey}`,
+          },
+          body: JSON.stringify({
+            input_tokens:          message.usage.input_tokens                    ?? null,
+            output_tokens:         message.usage.output_tokens                   ?? null,
+            cache_read_tokens:     message.usage.cache_read_input_tokens          ?? null,
+            cache_creation_tokens: message.usage.cache_creation_input_tokens      ?? null,
+          }),
+        }).catch(() => { /* non-fatal */ })
+      }
     }
 
     return jsonResponse({ session }, 200, {

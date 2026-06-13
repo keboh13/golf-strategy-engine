@@ -33,9 +33,8 @@ async function checkAndRecordUsage(userId) {
   const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
 
   if (!supabaseUrl || !supabaseServiceKey) {
-    // Rate limiting not configured — allow request but warn
     console.warn('[rate-limit] Supabase env vars missing, skipping rate limit check')
-    return { allowed: true, used: 0 }
+    return { allowed: true, used: 0, recordId: null }
   }
 
   const windowStart = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
@@ -55,17 +54,22 @@ async function checkAndRecordUsage(userId) {
   const count = parseInt(countRes.headers.get('Content-Range')?.split('/')[1] || '0', 10)
 
   if (count >= DAILY_LIMIT) {
-    return { allowed: false, used: count }
+    return { allowed: false, used: count, recordId: null }
   }
 
-  // Record this request
-  await fetch(`${base}/api_usage`, {
+  // Record this request — return=representation gives back the inserted row (including id)
+  const insertRes = await fetch(`${base}/api_usage`, {
     method: 'POST',
     headers,
     body: JSON.stringify({ user_id: userId, endpoint: 'generate', used_at: new Date().toISOString() }),
   })
+  let recordId = null
+  if (insertRes.ok) {
+    const rows = await insertRes.json()
+    recordId = Array.isArray(rows) ? (rows[0]?.id ?? null) : null
+  }
 
-  return { allowed: true, used: count + 1 }
+  return { allowed: true, used: count + 1, recordId }
 }
 
 // ── Handler ───────────────────────────────────────────────────────────────────
@@ -126,7 +130,7 @@ export default async function handler(req) {
   }
 
   // ── 2. Rate limit ─────────────────────────────────────────────────────────
-  const { allowed, used } = await checkAndRecordUsage(userId)
+  const { allowed, used, recordId } = await checkAndRecordUsage(userId)
   if (!allowed) {
     return new Response(JSON.stringify({
       error: `Daily limit reached (${DAILY_LIMIT} AI plans/day). Try again tomorrow.`,
@@ -160,8 +164,72 @@ export default async function handler(req) {
       body: JSON.stringify(body),
     })
 
-    return new Response(upstream.body, {
-      status: upstream.status,
+    if (!upstream.ok) {
+      return new Response(upstream.body, {
+        status: upstream.status,
+        headers: { ...CORS_HEADERS, 'Content-Type': upstream.headers.get('Content-Type') || 'application/json' },
+      })
+    }
+
+    // Stream the response to the client while intercepting SSE events to capture token usage.
+    // We write all chunks through first, then PATCH the usage record before closing the stream.
+    const { readable, writable } = new TransformStream()
+    const writer = writable.getWriter()
+    const decoder = new TextDecoder()
+    const supabaseUrl        = process.env.SUPABASE_URL
+    const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+
+    ;(async () => {
+      let buf = ''
+      let inputTokens = 0, outputTokens = 0, cacheReadTokens = 0, cacheCreationTokens = 0
+      const reader = upstream.body.getReader()
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          await writer.write(value)
+          buf += decoder.decode(value, { stream: true })
+          const lines = buf.split('\n')
+          buf = lines.pop()
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue
+            try {
+              const j = JSON.parse(line.slice(6))
+              if (j.type === 'message_start' && j.message?.usage) {
+                inputTokens        = j.message.usage.input_tokens                   || 0
+                cacheReadTokens    = j.message.usage.cache_read_input_tokens         || 0
+                cacheCreationTokens = j.message.usage.cache_creation_input_tokens    || 0
+              }
+              if (j.type === 'message_delta' && j.usage) {
+                outputTokens = j.usage.output_tokens || 0
+              }
+            } catch { /* non-JSON SSE line */ }
+          }
+        }
+      } finally {
+        // Persist token counts before closing so the admin panel can surface them
+        if (recordId && supabaseUrl && supabaseServiceKey) {
+          await fetch(`${supabaseUrl}/rest/v1/api_usage?id=eq.${recordId}`, {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json',
+              'apikey': supabaseServiceKey,
+              'Authorization': `Bearer ${supabaseServiceKey}`,
+            },
+            body: JSON.stringify({
+              input_tokens: inputTokens,
+              output_tokens: outputTokens,
+              cache_read_tokens: cacheReadTokens,
+              cache_creation_tokens: cacheCreationTokens,
+            }),
+          }).catch(() => { /* non-fatal */ })
+        }
+        writer.close()
+      }
+    })()
+
+    return new Response(readable, {
+      status: 200,
       headers: {
         ...CORS_HEADERS,
         'Content-Type': upstream.headers.get('Content-Type') || 'text/event-stream',
