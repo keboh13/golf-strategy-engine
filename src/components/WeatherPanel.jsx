@@ -68,7 +68,7 @@ export default function WeatherPanel({ authToken, course, coords, setCoords,
     setWeatherLoading(false)
   }
 
-  const codes = { 0:'Clear', 1:'Mostly clear', 2:'Partly cloudy', 3:'Overcast', 45:'Foggy', 61:'Light rain', 63:'Rain', 80:'Showers' }
+  const codes = { 0:'Clear', 1:'Mostly clear', 2:'Partly cloudy', 3:'Overcast', 45:'Foggy', 48:'Rime fog', 51:'Light drizzle', 53:'Drizzle', 55:'Heavy drizzle', 56:'Freezing drizzle', 57:'Heavy freezing drizzle', 61:'Light rain', 63:'Rain', 65:'Heavy rain', 66:'Freezing rain', 67:'Heavy freezing rain', 71:'Light snow', 73:'Snow', 75:'Heavy snow', 77:'Snow grains', 80:'Showers', 81:'Moderate showers', 82:'Heavy showers', 85:'Snow showers', 86:'Heavy snow showers', 95:'Thunderstorm', 96:'Thunderstorm w/ hail', 99:'Severe thunderstorm' }
 
   return (
     <div style={{ ...card, marginBottom: 12 }}>
@@ -87,8 +87,8 @@ export default function WeatherPanel({ authToken, course, coords, setCoords,
           <input type="number" style={inp} value={pace} onChange={e => setPace(Number(e.target.value))} min={8} max={20} />
         </div>
         {!isMobile && <div />}
-        <button style={{ ...btnP, display: 'flex', alignItems: 'center', gap: 7, whiteSpace: 'nowrap', ...(isMobile ? { gridColumn: '1 / -1' } : {}) }}
-          onClick={fetchWeather} disabled={weatherLoading}>
+        <button style={{ ...btnP, display: 'flex', alignItems: 'center', gap: 7, whiteSpace: 'nowrap', minHeight: 44, ...(isMobile ? { gridColumn: '1 / -1' } : {}) }}
+          onClick={fetchWeather} disabled={weatherLoading} aria-label="Fetch live weather forecast">
           {weatherLoading ? <><Spin /> Fetching...</> : '🌤 Fetch live weather'}
         </button>
       </div>
