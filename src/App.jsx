@@ -576,7 +576,7 @@ function normalizeGolfCourseAPICourse(raw, selectedTee) {
     lat:      loc.latitude,
     lng:      loc.longitude,
     selectedTee: chosen.tee_name || '',
-    tees:     allTees.map(t => ({ name: t.tee_name, yardage: t.total_yards || '', rating: t.course_rating || '', slope: t.slope_rating || '', par: t.par_total || '' })),
+    tees:     allTees.map(t => ({ name: t.tee_name, yardage: t.total_yards || '', rating: t.course_rating || '', slope: t.slope_rating || '', par: t.par_total || '', holes: (t.holes || []).map((h, i) => ({ par: h.par || 4, yardage: String(h.yardage || ''), handicap: h.handicap || i + 1 })) })),
     source:   'GolfCourseAPI',
     holes,
   }
@@ -1412,6 +1412,7 @@ function AppInner({ user, session, onSignOut }) {
     try { return JSON.parse(localStorage.getItem('golf_saved_briefs') || '[]') } catch { return [] }
   })
   const [holeScores,  setHoleScores]  = useState({})
+  const [expandedBrief, setExpandedBrief] = useState(null)
 
   const setScore = (holeNum, val) => setHoleScores(s => ({ ...s, [holeNum]: Math.max(1, val) }))
   const clearScores = () => setHoleScores({})
@@ -1510,6 +1511,29 @@ function AppInner({ user, session, onSignOut }) {
   const holeTimes   = computeHoleTimes(teeTime, pace)
   const holeWeather = holeTimes.map(dt => weather ? getWeatherAtHour(weather, dt) : null)
 
+  const resetPrep = useCallback(() => {
+    setCourse({
+      name: '', location: '', yardage: '', rating: '', slope: '', par: 72,
+      conditions: 'Normal', roundType: 'Stroke play tournament',
+      targetScore: '', notes: '', source: '', elevation: '',
+      holes: Array.from({ length: 18 }, (_, i) => ({
+        par:      [4,4,3,5,4,3,4,5,4,4,3,4,5,4,3,4,4,5][i] || 4,
+        yardage:  '',
+        handicap: i + 1,
+        notes:    '',
+        elevation: '',
+      })),
+    })
+    setPlan('')
+    setPlanError('')
+    setPlanPhase('')
+    setWeather(null)
+    setCoords(null)
+    setCurrentHole(0)
+    setHoleScores({})
+    setPrepStep(1)
+  }, [])
+
   const applyScorecard = useCallback((r) => {
     setCourse(prev => ({
       ...prev,
@@ -1522,6 +1546,8 @@ function AppInner({ user, session, onSignOut }) {
       source:   r.source || '',
       osmEnriched: r.osmEnriched || false,
       webDesignSource: r.webDesignSource || '',
+      tees:     r.tees || [],
+      selectedTee: r.selectedTee || '',
       holes: r.holes.map((h, i) => ({
         ...prev.holes[i],
         par:      h.par,
@@ -2515,7 +2541,20 @@ Be direct. No filler. ALL 18 HOLES.`
                         return (
                           <div key={i}
                             onClick={() => {
-                              setCourse(prev => ({ ...prev, selectedTee: t.name, yardage: String(t.yardage || prev.yardage), rating: String(t.rating || prev.rating), slope: String(t.slope || prev.slope) }))
+                              setCourse(prev => ({
+                                ...prev,
+                                selectedTee: t.name,
+                                yardage: String(t.yardage || prev.yardage),
+                                rating: String(t.rating || prev.rating),
+                                slope: String(t.slope || prev.slope),
+                                par: t.par || prev.par,
+                                holes: prev.holes.map((h, hi) => ({
+                                  ...h,
+                                  yardage: String(t.holes?.[hi]?.yardage || h.yardage || ''),
+                                  par: t.holes?.[hi]?.par || h.par,
+                                  handicap: t.holes?.[hi]?.handicap || h.handicap,
+                                })),
+                              }))
                             }}
                             style={{
                               background: isSelected ? C.accentMuted : C.bgInput,
@@ -2671,6 +2710,20 @@ Be direct. No filler. ALL 18 HOLES.`
 
                 {/* Completed plan display */}
                 {plan && !planLoading && (<>
+                  {/* Success confirmation banner */}
+                  <div style={{ ...card, background: C.greenMuted, borderColor: C.green, marginBottom: 14, padding: '16px 20px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+                      <div>
+                        <p style={{ fontSize: 15, fontWeight: 600, color: C.green, margin: '0 0 4px' }}>Report saved to history</p>
+                        <p style={{ fontSize: 12, color: C.textMuted, margin: 0 }}>{course.name || 'Profile brief'} · {new Date().toLocaleDateString()}</p>
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <button style={btnP} onClick={() => { setExpandedBrief(0); setTab('history'); resetPrep() }}>View in History →</button>
+                        <button style={{ ...btnG, background: C.green, color: '#fff', borderColor: C.green }} onClick={() => { resetPrep(); setTab('prep') }}>New Round Prep</button>
+                      </div>
+                    </div>
+                  </div>
+
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                       <Badge label="Report Ready" bg={C.greenMuted} fg={C.green} />
@@ -2802,7 +2855,7 @@ Be direct. No filler. ALL 18 HOLES.`
                   const noteKey = b.id || `local-${i}`
                   const note = briefNotes[noteKey] ?? (b.notes || '')
                   return (
-                    <div key={b.id || i} style={{ ...card, borderColor: C.border }}>
+                    <div key={b.id || i} style={{ ...card, borderColor: expandedBrief === i ? C.accent : C.border }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
                         <div style={{ flex: 1 }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
@@ -2816,8 +2869,8 @@ Be direct. No filler. ALL 18 HOLES.`
                         </div>
                         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                           <button style={{ ...btnP, padding: '6px 14px', fontSize: 12 }}
-                            onClick={() => { setPlan(b.plan); setTab('prep'); setPrepStep(5) }}>
-                            View Report
+                            onClick={() => setExpandedBrief(expandedBrief === i ? null : i)}>
+                            {expandedBrief === i ? 'Collapse' : 'View Report'}
                           </button>
                           {/* Multi-step delete */}
                           {!confirmState ? (
@@ -2857,6 +2910,19 @@ Be direct. No filler. ALL 18 HOLES.`
                           )}
                         </div>
                       </div>
+
+                      {/* Expanded report view */}
+                      {expandedBrief === i && b.plan && (
+                        <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 12, marginBottom: 12 }}>
+                          <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+                            <button style={btnG} onClick={() => { navigator.clipboard.writeText(b.plan); setCopied(true); setTimeout(() => setCopied(false), 2000) }}>{copied ? '✓ Copied' : 'Copy text'}</button>
+                            <button style={btnG} onClick={() => { setPlan(b.plan); setTab('prep'); setPrepStep(5) }}>Open in Prep →</button>
+                          </div>
+                          <div style={{ background: C.bgInput, borderRadius: 10, padding: '16px 20px', maxHeight: 500, overflowY: 'auto' }}>
+                            {renderPlan(b.plan)}
+                          </div>
+                        </div>
+                      )}
 
                       {/* Notes for refining AI */}
                       <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 10 }}>
