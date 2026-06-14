@@ -681,7 +681,7 @@ If you cannot find any hole design info: {"error": "No hole design data found"}`
     res = await fetch('/api/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ ...body, stream: true }),
     })
   } else {
     throw new Error('No API key or auth token available')
@@ -690,17 +690,23 @@ If you cannot find any hole design info: {"error": "No hole design data found"}`
   if (!res.ok) throw new Error(`Design search failed: ${res.status}`)
 
   const contentType = res.headers.get('Content-Type') || ''
-  let data
   if (contentType.includes('text/event-stream')) {
-    const text = await res.text()
-    const lines = text.split('\n')
-    let combined = ''
-    for (const line of lines) {
-      if (!line.startsWith('data: ')) continue
-      try {
-        const j = JSON.parse(line.slice(6))
-        if (j.type === 'content_block_delta' && j.delta?.text) combined += j.delta.text
-      } catch { /* skip */ }
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buf = '', combined = ''
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buf += decoder.decode(value, { stream: true })
+      const lines = buf.split('\n')
+      buf = lines.pop()
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue
+        try {
+          const j = JSON.parse(line.slice(6))
+          if (j.type === 'content_block_delta' && j.delta?.text) combined += j.delta.text
+        } catch { /* skip */ }
+      }
     }
     const clean = combined.replace(/```json|```/g, '').trim()
     const m = clean.match(/\{[\s\S]*\}/)
@@ -710,7 +716,7 @@ If you cannot find any hole design info: {"error": "No hole design data found"}`
     return parsed
   }
 
-  data = await res.json()
+  const data = await res.json()
   let text = ''
   for (const block of (data.content || [])) { if (block.type === 'text') text += block.text }
   const clean = text.replace(/```json|```/g, '').trim()
