@@ -135,10 +135,7 @@ function GreenView({ green, holeNum }) {
     <div style={{ background: C.bgInput, borderRadius: 10, padding: '12px 8px', marginTop: 10 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, padding: '0 8px' }}>
         <span style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Green — Hole {holeNum}</span>
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-          <span style={{ fontSize: 11, color: C.textFaint }}>{green.depth_y || '?'}y deep × {green.width_y || '?'}y wide</span>
-          {tierCount > 0 && <span style={{ fontSize: 10, fontWeight: 600, color: C.amber, background: C.amberMuted, padding: '1px 6px', borderRadius: 4 }}>{tierCount}-tier</span>}
-        </div>
+        {tierCount > 0 && <span style={{ fontSize: 10, fontWeight: 600, color: C.amber, background: C.amberMuted, padding: '1px 6px', borderRadius: 4 }}>{tierCount}-tier</span>}
       </div>
       <svg viewBox={`0 0 ${FIXED_W} ${FIXED_H}`} width="100%" style={{ display: 'block' }}>
         <path d={greenPath} fill="#1a4d2e" stroke={C.green} strokeWidth={1.5} />
@@ -147,15 +144,11 @@ function GreenView({ green, holeNum }) {
         {tierCount >= 2 && <line x1={cx - greenW * 0.35} y1={cy} x2={cx + greenW * 0.35} y2={cy} stroke={C.textFaint} strokeWidth={0.8} strokeDasharray="6 3" opacity={0.6} />}
         {tierCount >= 3 && <line x1={cx - greenW * 0.3} y1={cy - greenH * 0.25} x2={cx + greenW * 0.3} y2={cy - greenH * 0.25} stroke={C.textFaint} strokeWidth={0.8} strokeDasharray="6 3" opacity={0.6} />}
 
-        {/* Dimension labels */}
-        <line x1={cx - greenW / 2 - 30} y1={cy + greenH / 2} x2={cx - greenW / 2 - 8} y2={cy + greenH / 2} stroke={C.textFaint} strokeWidth={0.5} />
-        <text x={cx - greenW / 2 - 34} y={cy + greenH / 2 + 3} textAnchor="end" fill={C.green} fontSize={11} fontWeight="600" fontFamily={F}>F {green.front_y || '?'}</text>
-
-        <line x1={cx - greenW / 2 - 30} y1={cy} x2={cx - greenW / 2 - 8} y2={cy} stroke={C.textFaint} strokeWidth={0.5} />
-        <text x={cx - greenW / 2 - 34} y={cy + 3} textAnchor="end" fill={C.accent} fontSize={11} fontWeight="600" fontFamily={F}>M {green.mid_y || '?'}</text>
-
-        <line x1={cx - greenW / 2 - 30} y1={cy - greenH / 2} x2={cx - greenW / 2 - 8} y2={cy - greenH / 2} stroke={C.textFaint} strokeWidth={0.5} />
-        <text x={cx - greenW / 2 - 34} y={cy - greenH / 2 + 3} textAnchor="end" fill={C.blue} fontSize={11} fontWeight="600" fontFamily={F}>B {green.back_y || '?'}</text>
+        {/* Depth dimension line along left side */}
+        <line x1={cx - greenW / 2 - 16} y1={cy - greenH / 2} x2={cx - greenW / 2 - 16} y2={cy + greenH / 2} stroke={C.textFaint} strokeWidth={0.5} />
+        <line x1={cx - greenW / 2 - 20} y1={cy - greenH / 2} x2={cx - greenW / 2 - 12} y2={cy - greenH / 2} stroke={C.textFaint} strokeWidth={0.5} />
+        <line x1={cx - greenW / 2 - 20} y1={cy + greenH / 2} x2={cx - greenW / 2 - 12} y2={cy + greenH / 2} stroke={C.textFaint} strokeWidth={0.5} />
+        <text x={cx - greenW / 2 - 22} y={cy + 3} textAnchor="end" fill={C.textFaint} fontSize={9} fontFamily={F}>{green.depth_y || '?'}y</text>
 
         {/* Width dimension line across bottom */}
         <line x1={cx - greenW / 2} y1={cy + greenH / 2 + 14} x2={cx + greenW / 2} y2={cy + greenH / 2 + 14} stroke={C.textFaint} strokeWidth={0.5} />
@@ -1778,9 +1771,9 @@ One line per hole: "H[N] Par [X] [Yds]y — 🟢/🟡/🔴 — reason"
 - **Approach**: Club, distance, landing zone
 - **Caddy**: One short sentence. Sound like a human, not a manual.
 \`\`\`green-json
-{"depth_y":28,"width_y":24,"shape":"oval","front_y":0,"mid_y":0,"back_y":0,"pin":"center","slope":"flat","tiers":0,"tier_desc":"","green_notes":"","confidence":"uncertain","hazards":[]}
+{"depth_y":28,"width_y":24,"shape":"oval","pin":"center","slope":"flat","tiers":0,"tier_desc":"","green_notes":"","confidence":"uncertain","hazards":[]}
 \`\`\`
-Green-json rules: "hazards" must be [] unless a hole note explicitly mentions a hazard near the green. "confidence" must be "uncertain" unless you have high-confidence verified knowledge of this specific green. Only populate non-default values (shape, slope, tiers, pin, green_notes) when you have specific data — do NOT guess. "front_y"/"mid_y"/"back_y" are approach distances in yards — fill from yardage data if available, otherwise use 0.
+Green-json rules: "hazards" must be [] unless a hole note explicitly mentions a hazard near the green. "confidence" must be "uncertain" unless you have high-confidence verified knowledge of this specific green. Only populate non-default values (shape, slope, tiers, pin, green_notes) when you have specific data — do NOT guess.
 
 ## Weather
 Club adjustments for key holes only.
