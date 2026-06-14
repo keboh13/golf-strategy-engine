@@ -807,8 +807,7 @@ function CourseSearch({ apiKey, golfCourseApiKey, onApiKeyNeeded, onSelect }) {
 
     // Tier 3: Claude web search
     if (!apiKey) {
-      setError('No results found. Add your Anthropic API key (top-right) to enable web search fallback.')
-      onApiKeyNeeded?.()
+      setError('No results found. Add your Anthropic API key in Settings to enable web search fallback.')
       setLoading(false)
       return
     }
@@ -1324,7 +1323,7 @@ function AppInner({ user, session, onSignOut }) {
   const [apiKey,          setApiKeyRaw]       = useState(() => loadSavedKeys().anthropic  || ENV_ANTHROPIC_KEY)
   const [mapsKey,         setMapsKeyRaw]      = useState(() => loadSavedKeys().maps        || ENV_MAPS_KEY)
   const [golfCourseApiKey,setGolfKeyRaw]      = useState(() => loadSavedKeys().golfCourse  || ENV_GOLF_COURSE_KEY)
-  const [showKeysPanel,   setShowKeysPanel]   = useState(false)
+
   // Inputs for the keys panel
   const [draftAnthropicKey,  setDraftAnthropicKey]  = useState('')
   const [draftMapsKey,       setDraftMapsKey]       = useState('')
@@ -1757,8 +1756,8 @@ Be direct. No filler. ALL 18 HOLES.`
   const generate = async () => {
     // Use server-side proxy when deployed (no user API key needed), fall back to direct browser access for local dev
     const useProxy = window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1'
-    if (!useProxy && !apiKey) { setShowKeysPanel(true); setPlanError('Add your Anthropic API key (top-right 🔑) to generate a game plan.'); return }
-    setPlanLoading(true); setPlanPhase('Analyzing scoring history'); setPlanError(''); setPlan(''); setTab('plan')
+    if (!useProxy && !apiKey) { setPlanError('Add your Anthropic API key in Settings to generate a game plan.'); return }
+    setPlanLoading(true); setPlanPhase('Analyzing scoring history'); setPlanError(''); setPlan(''); setTab('prep'); setPrepStep(5)
     const payload = {
       model: selectedModel,
       max_tokens: 16000,
@@ -1950,7 +1949,6 @@ Be direct. No filler. ALL 18 HOLES.`
     if (draftGolfKey)       setGolfKey(draftGolfKey.trim())
     setDraftAnthropicKey(''); setDraftMapsKey(''); setDraftGolfKey('')
     setKeyErrors({})
-    setShowKeysPanel(false)
   }
   const clearKey = (which) => {
     if (which === 'anthropic') setApiKey('')
@@ -1959,15 +1957,31 @@ Be direct. No filler. ALL 18 HOLES.`
   }
 
   const TABS = [
-    { id: 'player',  label: 'Bag & player',    short: 'Player',  icon: '🏌️' },
-    { id: 'import',  label: 'Import data',     short: 'Import',  icon: '📥' },
-    { id: 'history', label: 'Scoring history', short: 'History', icon: '📊' },
-    { id: 'course',  label: 'Course setup',    short: 'Course',  icon: '⛳' },
-    { id: 'plan',    label: 'Game plan',       short: 'Plan',    icon: '⚡' },
-    { id: 'admin',   label: 'Settings',        short: 'Settings',icon: '⚙️' },
+    { id: 'player',  label: 'My Player',   short: 'Player',  icon: '🏌️' },
+    { id: 'prep',    label: 'Round Prep',   short: 'Prep',    icon: '⛳' },
+    { id: 'history', label: 'History',      short: 'History', icon: '📋' },
+    { id: 'admin',   label: 'Settings',     short: 'Settings',icon: '⚙️' },
   ]
 
-  const nextTab = { player: 'history', history: 'course', course: 'plan' }
+  const [playerSubTab, setPlayerSubTab] = useState('details')
+  const [prepStep, setPrepStep] = useState(1)
+  const [deleteConfirm, setDeleteConfirm] = useState({})
+  const [briefNotes, setBriefNotes] = useState({})
+
+  const PLAYER_SUBS = [
+    { id: 'details', label: 'Player Details', icon: '👤' },
+    { id: 'clubs',   label: 'Club Distances', icon: '🏌️' },
+    { id: 'import',  label: 'Data Import',    icon: '📥' },
+    { id: 'scoring', label: 'Scoring History', icon: '📊' },
+  ]
+
+  const PREP_STEPS = [
+    { num: 1, label: 'Select Course',    icon: '🔍' },
+    { num: 2, label: 'Choose Tees',      icon: '🎯' },
+    { num: 3, label: 'Scorecard Preview', icon: '📋' },
+    { num: 4, label: 'Weather & Time',   icon: '🌤' },
+    { num: 5, label: 'Generate Report',  icon: '⚡' },
+  ]
 
   return (
     <div style={{ background: C.bg, minHeight: '100vh', fontFamily: F }}>
@@ -1986,98 +2000,15 @@ Be direct. No filler. ALL 18 HOLES.`
         @media(max-width:640px){input,select,textarea{font-size:16px!important}}
       `}</style>
 
-      {/* Header */}
+      {/* Header — clean, minimal */}
       <div style={{ borderBottom: `1px solid ${C.border}`, padding: '0 1.5rem' }}>
-        <div style={{ maxWidth: 1020, margin: '0 auto', display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: isMobile ? 'auto' : 52, minHeight: 52, flexWrap: isMobile ? 'wrap' : 'nowrap', padding: isMobile ? '8px 0' : 0, gap: isMobile ? 6 : 0 }}>
+        <div style={{ maxWidth: 1020, margin: '0 auto', display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: 52, minHeight: 52 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 12, flexShrink: 1, overflow: 'hidden' }}>
             <span style={{ fontSize: isMobile ? 13 : 14, fontWeight: 600, color: C.text, letterSpacing: '-0.01em', whiteSpace: 'nowrap' }}>Strategy Engine</span>
             {!isMobile && <span style={{ color: C.border }}>|</span>}
             {!isMobile && <span style={{ fontSize: 13, color: C.textMuted }}>{playerInfo.name || 'Player'} · {playerInfo.handedness === 'Left' ? 'LH' : 'RH'} · HCP {playerInfo.handicap}</span>}
             {!isMobile && course.name && <span style={{ fontSize: 13, color: C.textFaint, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 200 }}>· {course.name}</span>}
             {weather && <Badge label="Weather live" bg={C.blueMuted} fg={C.blue} />}
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, position: 'relative', flexShrink: 0 }}>
-            {/* Keys panel toggle */}
-            <button
-              style={{ ...btnG, fontSize: 11, padding: '5px 12px',
-                borderColor: !apiKey ? C.amber : C.border,
-                color:       !apiKey ? C.amber : C.textMuted }}
-              onClick={() => setShowKeysPanel(p => !p)}
-              title="Manage API keys">
-              🔑 {apiKey ? 'Keys saved' : 'Add API key'}
-            </button>
-
-            {/* Floating keys panel */}
-            {showKeysPanel && (
-              <div style={{
-                position: 'absolute', top: 42, right: 0, zIndex: 100,
-                background: C.bgCard, border: `1px solid ${C.border}`,
-                borderRadius: 12, padding: '16px 18px',
-                width: 'min(380px, calc(100vw - 24px))',
-                boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
-              }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-                  <p style={{ ...lbl, margin: 0 }}>API keys — saved locally</p>
-                  <button style={{ background: 'none', border: 'none', color: C.textFaint, cursor: 'pointer', fontSize: 16 }}
-                    onClick={() => { setShowKeysPanel(false); setKeyErrors({}) }}>✕</button>
-                </div>
-
-                {/* Anthropic */}
-                <div style={{ marginBottom: 12 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                    <label style={lbl}>Anthropic API key <span style={{ color: C.textFaint, fontWeight: 400 }}>(game plans, yardages, weather)</span></label>
-                    {apiKey && <button style={{ background: 'none', border: 'none', color: C.red, fontSize: 10, cursor: 'pointer', padding: 0 }} onClick={() => clearKey('anthropic')}>clear</button>}
-                  </div>
-                  {apiKey
-                    ? <div style={{ ...inp, color: C.green, fontSize: 12 }}>✓ Saved ({apiKey.slice(0, 14)}…)</div>
-                    : <input type="password" style={{ ...inp, fontSize: 12 }} placeholder="sk-ant-..."
-                        value={draftAnthropicKey} onChange={e => { setDraftAnthropicKey(e.target.value); setKeyErrors(k => ({...k, anthropic: ''})) }} />
-                  }
-                  {keyErrors.anthropic && <p style={{ fontSize: 11, color: C.red, margin: '3px 0 0' }}>⚠ {keyErrors.anthropic}</p>}
-                </div>
-
-                {/* GolfCourseAPI */}
-                <div style={{ marginBottom: 12 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                    <label style={lbl}>GolfCourseAPI key <span style={{ color: C.textFaint, fontWeight: 400 }}>(verified yardages)</span></label>
-                    {golfCourseApiKey && <button style={{ background: 'none', border: 'none', color: C.red, fontSize: 10, cursor: 'pointer', padding: 0 }} onClick={() => clearKey('golf')}>clear</button>}
-                  </div>
-                  {golfCourseApiKey
-                    ? <div style={{ ...inp, color: C.green, fontSize: 12 }}>✓ Saved ({golfCourseApiKey.slice(0, 10)}…)</div>
-                    : <input style={{ ...inp, fontSize: 12 }} placeholder="XXXXX..."
-                        value={draftGolfKey} onChange={e => setDraftGolfKey(e.target.value)} />
-                  }
-                </div>
-
-                {/* Google Maps */}
-                <div style={{ marginBottom: 14 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                    <label style={lbl}>Google Maps key <span style={{ color: C.textFaint, fontWeight: 400 }}>(satellite view — optional)</span></label>
-                    {mapsKey && <button style={{ background: 'none', border: 'none', color: C.red, fontSize: 10, cursor: 'pointer', padding: 0 }} onClick={() => clearKey('maps')}>clear</button>}
-                  </div>
-                  {mapsKey
-                    ? <div style={{ ...inp, color: C.green, fontSize: 12 }}>✓ Saved ({mapsKey.slice(0, 10)}…)</div>
-                    : <input style={{ ...inp, fontSize: 12 }} placeholder="AIza..."
-                        value={draftMapsKey} onChange={e => { setDraftMapsKey(e.target.value); setKeyErrors(k => ({...k, maps: ''})) }} />
-                  }
-                  {keyErrors.maps && <p style={{ fontSize: 11, color: C.red, margin: '3px 0 0' }}>⚠ {keyErrors.maps}</p>}
-                </div>
-
-                {(!apiKey || !golfCourseApiKey || !mapsKey) && (
-                  <button style={{ ...btnP, width: '100%', textAlign: 'center' }} onClick={saveKeysFromPanel}>
-                    Save keys
-                  </button>
-                )}
-                <p style={{ fontSize: 10, color: C.textFaint, marginTop: 10, marginBottom: 0 }}>
-                  Stored in browser localStorage — never sent anywhere except their respective APIs.
-                </p>
-              </div>
-            )}
-
-            <button style={{ ...btnP, padding: '7px 18px', fontSize: 12, opacity: planLoading ? 0.6 : 1, whiteSpace: 'nowrap' }}
-              onClick={generate} disabled={planLoading}>
-              {planLoading ? (planPhase || 'Generating') + '...' : isMobile ? '⚡ Generate' : '⚡ Generate game plan'}
-            </button>
           </div>
         </div>
       </div>
@@ -2104,385 +2035,286 @@ Be direct. No filler. ALL 18 HOLES.`
       {/* Content */}
       <div style={{ maxWidth: 1020, margin: '0 auto', padding: isMobile ? '1rem 0.75rem 4rem' : '1.5rem 1.5rem 4rem' }}>
 
-        {/* ── BAG & PLAYER ── */}
+        {/* ══════════════════════════════════════════════════════════════════
+            SECTION 1: MY PLAYER
+            Sub-tabs: Player Details, Club Distances, Data Import, Scoring History
+           ══════════════════════════════════════════════════════════════════ */}
         {tab === 'player' && (
           <div>
             <SectionHead
-              title="Bag & player profile"
-              sub="Your profile and club distances sync automatically with your account."
+              title="My Player"
+              sub="Your profile, bag, and scoring data — synced with your account."
             />
-            <div style={{ ...card, marginBottom: 12 }}>
-              <p style={{ ...lbl, marginBottom: 12 }}>Player details</p>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 10 }}>
-                {[['Name','name','Player name'],['Handicap Index','handicap','e.g. 4.2'],['GHIN number','ghin','Optional — for lookup']].map(([l2,k,ph]) => (
-                  <div key={k}>
-                    <label style={lbl}>{l2}</label>
-                    <input style={inp} value={playerInfo[k]} onChange={e => setPlayerInfo({ ...playerInfo, [k]: e.target.value })} placeholder={ph} />
-                  </div>
-                ))}
-              </div>
-              <p style={{ fontSize: 11, color: C.textFaint, margin: '4px 0 6px' }}>
-                Handicap Index is a USGA/GHIN portable number (e.g. 4.2). Course Handicap = Index × (Slope ÷ 113), auto-calculated when a course is loaded.
-              </p>
-              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : '1fr 1fr 1fr', gap: 10, marginTop: 10 }}>
-                <div>
-                  <label style={lbl}>Handedness</label>
-                  <select style={inp} value={playerInfo.handedness || 'Right'} onChange={e => setPlayerInfo({ ...playerInfo, handedness: e.target.value })}>
-                    {['Right','Left'].map(o => <option key={o}>{o}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label style={lbl}>Typical miss</label>
-                  <select style={inp} value={playerInfo.miss} onChange={e => setPlayerInfo({ ...playerInfo, miss: e.target.value })}>
-                    {['Left','Right','Both (fade misses right under pressure)','Low and left','Thin / right'].map(o => <option key={o}>{o}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label style={lbl}>Ball flight</label>
-                  <select style={inp} value={playerInfo.ballFlight} onChange={e => setPlayerInfo({ ...playerInfo, ballFlight: e.target.value })}>
-                    {['Fade','Draw','Straight','Slight fade','Slight draw'].map(o => <option key={o}>{o}</option>)}
-                  </select>
-                </div>
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 10, marginTop: 10 }}>
-                <div>
-                  <label style={lbl}>Goals — fed directly into AI strategy</label>
-                  <textarea style={{ ...inp, height: 68, resize: 'vertical' }} value={playerInfo.goals || ''}
-                    onChange={e => setPlayerInfo({ ...playerInfo, goals: e.target.value })}
-                    placeholder="e.g. Stop leaking shots on par 3s, hold my game together on back 9 in tournaments..." />
-                </div>
-                <div>
-                  <label style={lbl}>Strengths — fed directly into AI strategy</label>
-                  <textarea style={{ ...inp, height: 68, resize: 'vertical' }} value={playerInfo.strengths || ''}
-                    onChange={e => setPlayerInfo({ ...playerInfo, strengths: e.target.value })}
-                    placeholder="e.g. Reliable iron player, strong lag putter, good SW from 80y..." />
-                </div>
-              </div>
-              <div style={{ marginTop: 10 }}>
-                <label style={lbl}>Swing notes — fed directly into AI strategy</label>
-                <textarea style={{ ...inp, height: 56, resize: 'vertical' }} value={playerInfo.swingNotes}
-                  onChange={e => setPlayerInfo({ ...playerInfo, swingNotes: e.target.value })}
-                  placeholder="e.g. Gets steep under pressure, slight over-the-top move, left miss when tired on driver..." />
-              </div>
-            </div>
 
-            <div style={card}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                <p style={{ ...lbl, margin: 0 }}>Club distances</p>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontSize: 11, color: C.textFaint }}>Saved automatically with your profile</span>
-                  <button style={{ ...btnG, fontSize: 11, padding: '4px 10px' }}
-                    onClick={() => setClubs(c => [...c, { club: 'New club', carry: '', shape: 'Straight' }])}>
-                    + Add club
-                  </button>
-                  <button style={{ ...btnG, fontSize: 11, padding: '4px 10px' }}
-                    onClick={() => { if (window.confirm('Reset bag to defaults?')) { setClubs(DEFAULT_CLUBS); setExpandedClubs({}) } }}>
-                    Reset
-                  </button>
-                </div>
-              </div>
-              {isMobile ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 12 }}>
-                  {clubs.map((c, i) => (
-                    <details key={i} style={{ background: C.bgInput, border: `1px solid ${C.border}`, borderRadius: 8 }}>
-                      <summary style={{ padding: '10px 12px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between', listStyle: 'none', WebkitAppearance: 'none' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                          <span style={{ fontSize: 13, fontWeight: 500, color: C.text }}>{c.club}</span>
-                          <span style={{ fontSize: 12, color: C.accent, fontWeight: 600 }}>{c.carry}y</span>
-                          <span style={{ fontSize: 11, color: C.textFaint }}>{c.shape}</span>
-                        </div>
-                        <button onClick={e => { e.preventDefault(); setClubs(clubs.filter((_, j) => j !== i)) }}
-                          style={{ background: 'none', border: 'none', color: C.textFaint, cursor: 'pointer', fontSize: 15, padding: 0 }}>×</button>
-                      </summary>
-                      <div style={{ padding: '8px 12px 12px', borderTop: `1px solid ${C.border}`, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                        <input style={{ ...inp, padding: '6px 10px', fontSize: 13 }} value={c.club} placeholder="Club name"
-                          onChange={e => setClubs(clubs.map((cl, j) => j === i ? { ...cl, club: e.target.value } : cl))} />
-                        <div style={{ display: 'flex', gap: 6 }}>
-                          <input type="number" style={{ ...inp, padding: '6px 10px', fontSize: 13, flex: 1 }} value={c.carry} placeholder="Carry (yds)"
-                            onChange={e => setClubs(clubs.map((cl, j) => j === i ? { ...cl, carry: e.target.value } : cl))} />
-                          <select style={{ ...inp, padding: '6px 10px', fontSize: 13, flex: 1 }} value={c.shape}
-                            onChange={e => setClubs(clubs.map((cl, j) => j === i ? { ...cl, shape: e.target.value } : cl))}>
-                            {['Fade','Draw','Straight','Slight fade','Slight draw'].map(s => <option key={s}>{s}</option>)}
-                          </select>
-                        </div>
-                      </div>
-                    </details>
-                  ))}
-                </div>
-              ) : (<>
-              <div style={{ display: 'grid', gridTemplateColumns: '24px 2fr 1fr 1.5fr 24px', gap: '5px 10px', marginBottom: 6, marginTop: 12 }}>
-                {['','Club','Carry (yds)','Shot shape',''].map((h, i) => <span key={i} style={{ fontSize: 10, color: C.textFaint, letterSpacing: '0.08em', textTransform: 'uppercase' }}>{h}</span>)}
-              </div>
-              {clubs.map((c, i) => {
-                const isOpen = !!expandedClubs[i]
-                const analyticsInp = { ...inp, padding: '4px 6px', fontSize: 12 }
-                return (
-                  <div key={i} style={{ marginBottom: 4 }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: '24px 2fr 1fr 1.5fr 24px', gap: '4px 10px', alignItems: 'center' }}>
-                      <button
-                        onClick={() => setExpandedClubs(prev => ({ ...prev, [i]: !prev[i] }))}
-                        style={{ background: 'none', border: 'none', color: C.textFaint, cursor: 'pointer', fontSize: 10, padding: 0, textAlign: 'center', transform: isOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }}
-                        title="Expand analytics"
-                      >▼</button>
-                      <input style={{ ...inp, padding: '5px 8px', fontSize: 13 }} value={c.club}
-                        onChange={e => setClubs(clubs.map((cl, j) => j === i ? { ...cl, club: e.target.value } : cl))} />
-                      <input type="number" style={{ ...inp, textAlign: 'center', padding: '5px 8px' }} value={c.carry}
-                        onChange={e => setClubs(clubs.map((cl, j) => j === i ? { ...cl, carry: e.target.value } : cl))} />
-                      <select style={{ ...inp, padding: '5px 8px' }} value={c.shape}
-                        onChange={e => setClubs(clubs.map((cl, j) => j === i ? { ...cl, shape: e.target.value } : cl))}>
-                        {['Fade','Draw','Straight','Slight fade','Slight draw'].map(s => <option key={s}>{s}</option>)}
-                      </select>
-                      <button
-                        onClick={() => { setClubs(clubs.filter((_, j) => j !== i)); setExpandedClubs(prev => { const n = {}; Object.keys(prev).forEach(k => { if (Number(k) < i) n[k] = prev[k]; else if (Number(k) > i) n[Number(k)-1] = prev[k] }); return n }) }}
-                        style={{ background: 'none', border: 'none', color: C.textFaint, cursor: 'pointer', fontSize: 15, padding: 0, textAlign: 'center' }}
-                        title="Remove club"
-                      >×</button>
-                    </div>
-                    {isOpen && (
-                      <div style={{ marginLeft: 34, marginTop: 4, marginBottom: 6, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(100px, 1fr))', gap: '4px 8px' }}>
-                        {[
-                          { key: 'ballSpeed',   label: 'Ball speed (mph)', placeholder: '158' },
-                          { key: 'launchAngle', label: 'Launch angle (°)',  placeholder: '10.5' },
-                          { key: 'spinRate',    label: 'Spin rate (rpm)',   placeholder: '2600' },
-                          { key: 'dispLeft',    label: 'Left disp. (yd)',   placeholder: '12' },
-                          { key: 'dispRight',   label: 'Right disp. (yd)', placeholder: '8' },
-                        ].map(({ key, label, placeholder }) => (
-                          <div key={key}>
-                            <div style={{ fontSize: 9, color: C.textFaint, textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 2 }}>{label}</div>
-                            <input type="number" style={analyticsInp} placeholder={placeholder} value={c[key] || ''}
-                              onChange={e => setClubs(clubs.map((cl, j) => j === i ? { ...cl, [key]: e.target.value } : cl))} />
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
-              </>)}
-            </div>
-          </div>
-        )}
-
-        {/* ── SCORING HISTORY ── */}
-        {tab === 'history' && (
-          <div>
-            <SectionHead title="Scoring history" sub="Recent rounds — AI weights these heavily to calibrate today's target score and risk strategy" />
-            <div style={{ ...card, marginBottom: 12, borderColor: C.accentMuted }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
-                <p style={{ fontSize: 13, color: C.textMuted, margin: 0, lineHeight: 1.6, maxWidth: 600 }}>
-                  Enter your most recent competitive and practice rounds. Claude identifies scoring patterns,
-                  course-type tendencies, and condition-based trends — then adjusts today's target and
-                  hole-by-hole strategy accordingly. Most recent rounds are weighted most heavily.
-                </p>
-                <button style={{ ...btnG, whiteSpace: 'nowrap', marginLeft: 16, flexShrink: 0 }}
-                  onClick={() => setScoringHistory(h => [...h, { course: '', location: '', date: '', score: '', par: 72, toPar: '', roundType: 'Tournament', conditions: '', notes: '' }])}>
-                  + Add round
+            {/* Sub-tab navigation */}
+            <div style={{ display: 'flex', gap: 4, marginBottom: 16, background: C.bgInput, borderRadius: 10, padding: 4, overflowX: 'auto' }}>
+              {PLAYER_SUBS.map(s => (
+                <button key={s.id} onClick={() => setPlayerSubTab(s.id)} style={{
+                  flex: isMobile ? 1 : 'none',
+                  padding: isMobile ? '10px 8px' : '10px 18px',
+                  fontSize: isMobile ? 11 : 13, fontWeight: 500, fontFamily: F,
+                  border: 'none', borderRadius: 8, cursor: 'pointer',
+                  background: playerSubTab === s.id ? C.accent : 'transparent',
+                  color: playerSubTab === s.id ? C.bg : C.textMuted,
+                  whiteSpace: 'nowrap', transition: 'all 0.15s',
+                }}>
+                  {s.icon} {isMobile ? s.label.split(' ')[0] : s.label}
                 </button>
-              </div>
+              ))}
+            </div>
 
-              {scoringHistory.length === 0 ? (
-                <p style={{ fontSize: 12, color: C.textFaint, fontStyle: 'italic', textAlign: 'center', padding: '1rem 0' }}>
-                  No rounds yet — hit "+ Add round" to start tracking scoring history.
-                </p>
-              ) : isMobile ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  {scoringHistory.map((r, i) => {
-                    const hs = historySearch[i] || {}
-                    return (
-                      <div key={i} style={{ background: C.bgInput, border: `1px solid ${C.border}`, borderRadius: 10, padding: '12px 14px' }}>
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
-                          <input style={{ ...inp, flex: 1, padding: '6px 10px', fontSize: 13 }} value={r.course}
-                            onChange={e => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, course: e.target.value } : rr))}
-                            placeholder="Course name" />
-                          <button style={{ background: 'transparent', border: 'none', color: C.textFaint, cursor: 'pointer', fontSize: 18, padding: '2px 6px', flexShrink: 0 }}
-                            onClick={() => setScoringHistory(h => h.filter((_, j) => j !== i))} title="Remove">×</button>
+            {/* ── Player Details sub-tab ── */}
+            {playerSubTab === 'details' && (
+              <div>
+                <div style={{ ...card, marginBottom: 12 }}>
+                  {/* Identity section - collapsible on mobile */}
+                  <details open style={{ marginBottom: 14 }}>
+                    <summary style={{ padding: '8px 0', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, listStyle: 'none', WebkitAppearance: 'none', borderBottom: `1px solid ${C.border}`, paddingBottom: 10, marginBottom: 10 }}>
+                      <span style={{ fontSize: 14, fontWeight: 600, color: C.text }}>Identity & Handicap</span>
+                      <span style={{ fontSize: 11, color: C.textMuted }}>{playerInfo.name || 'Not set'} · HCP {playerInfo.handicap}</span>
+                    </summary>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 10 }}>
+                      {[['Name','name','Player name'],['Handicap Index','handicap','e.g. 4.2'],['GHIN number','ghin','Optional — for lookup']].map(([l2,k,ph]) => (
+                        <div key={k}>
+                          <label style={lbl}>{l2}</label>
+                          <input style={inp} value={playerInfo[k]} onChange={e => setPlayerInfo({ ...playerInfo, [k]: e.target.value })} placeholder={ph} />
                         </div>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px 8px', marginBottom: 8 }}>
-                          <div>
-                            <label style={lbl}>City / State</label>
-                            <input style={{ ...inp, padding: '5px 8px', fontSize: 12 }} value={r.location}
-                              onChange={e => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, location: e.target.value } : rr))}
-                              placeholder="City, ST" />
-                          </div>
-                          <div>
-                            <label style={lbl}>Date</label>
-                            <input type="date" style={{ ...inp, padding: '5px 8px', fontSize: 12 }} value={r.date}
-                              onChange={e => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, date: e.target.value } : rr))} />
-                          </div>
-                          <div>
-                            <label style={lbl}>Score</label>
-                            <input type="number" style={{ ...inp, padding: '5px 8px', fontSize: 12 }} value={r.score}
-                              onChange={e => {
-                                const score = e.target.value
-                                setScoringHistory(h => h.map((rr, j) => j === i ? {
-                                  ...rr, score,
-                                  toPar: !rr.toPar || rr.toPar === toParStr(rr.score, rr.par || 72) ? toParStr(score, rr.par || 72) : rr.toPar,
-                                } : rr))
-                              }}
-                              placeholder="70" />
-                          </div>
-                          <div>
-                            <label style={lbl}>+/− vs par</label>
-                            <input style={{ ...inp, padding: '5px 8px', fontSize: 12 }} value={r.toPar}
-                              onChange={e => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, toPar: e.target.value } : rr))}
-                              placeholder="E" />
-                          </div>
-                          <div>
-                            <label style={lbl}>Round type</label>
-                            <select style={{ ...inp, padding: '5px 6px', fontSize: 12 }} value={r.roundType || ''}
-                              onChange={e => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, roundType: e.target.value } : rr))}>
-                              <option value="">Type</option>
-                              {['Tournament','Qualifier','Stroke play','Match play','Practice round','Casual'].map(o => <option key={o}>{o}</option>)}
-                            </select>
-                          </div>
-                          <div>
-                            <label style={lbl}>Conditions</label>
-                            <select style={{ ...inp, padding: '5px 6px', fontSize: 12 }} value={r.conditions}
-                              onChange={e => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, conditions: e.target.value } : rr))}>
-                              <option value="">Conditions</option>
-                              {['Normal','Firm & fast','Soft','Windy','Hot & dry','Wet'].map(o => <option key={o}>{o}</option>)}
-                            </select>
-                          </div>
-                        </div>
-                        <div style={{ marginBottom: 8 }}>
-                          <label style={lbl}>Notes</label>
-                          <input style={{ ...inp, padding: '5px 8px', fontSize: 12 }} value={r.notes}
-                            onChange={e => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, notes: e.target.value } : rr))}
-                            placeholder="Drove it well, 3-putted twice..." />
-                        </div>
-                        {r.courseData ? (
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                            <span style={{ fontSize: 11, color: C.green }}>⛳ {r.courseData.name} linked</span>
-                            <button style={{ background: 'none', border: 'none', color: C.red, fontSize: 10, cursor: 'pointer', padding: 0 }}
-                              onClick={() => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, courseData: null } : rr))}>remove</button>
-                          </div>
-                        ) : (
-                          <div>
-                            {!hs.open ? (
-                              <button style={{ ...btnG, fontSize: 10, padding: '4px 10px' }} onClick={() => updateHS(i, { open: true, query: r.course || '', results: [], error: '' })}>
-                                + Link scorecard
-                              </button>
-                            ) : (
-                              <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                                <input style={{ ...inp, fontSize: 12, padding: '3px 8px', flex: 1, minWidth: 120 }}
-                                  placeholder="Search course name…"
-                                  value={hs.query || ''}
-                                  onChange={e => updateHS(i, { query: e.target.value })}
-                                  onKeyDown={e => e.key === 'Enter' && historySearchCourse(i, hs.query)} />
-                                <button style={{ ...btnP, fontSize: 11, padding: '4px 12px' }} onClick={() => historySearchCourse(i, hs.query)}>
-                                  {hs.loading ? '…' : 'Search'}
-                                </button>
-                                <button style={{ ...btnG, fontSize: 10, padding: '3px 8px' }} onClick={() => updateHS(i, { open: false })}>Cancel</button>
-                                {hs.error && <span style={{ fontSize: 11, color: C.red }}>{hs.error}</span>}
-                              </div>
-                            )}
-                            {(hs.results || []).length > 0 && (
-                              <div style={{ marginTop: 4, background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: 6, overflow: 'hidden' }}>
-                                {hs.results.slice(0, 5).map((r2, k) => (
-                                  <button key={k} style={{ display: 'block', width: '100%', background: 'none', border: 'none', borderBottom: `1px solid ${C.border}`, color: C.text, textAlign: 'left', padding: '8px 10px', fontSize: 12, cursor: 'pointer', fontFamily: F }}
-                                    onClick={() => attachCourseToRound(i, r2)}>
-                                    {r2.course_name || r2.name} {r2.location ? `— ${r2.location}` : ''}
-                                  </button>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        )}
+                      ))}
+                    </div>
+                    <p style={{ fontSize: 11, color: C.textFaint, margin: '8px 0 0' }}>
+                      Handicap Index is a USGA/GHIN portable number (e.g. 4.2). Course Handicap is auto-calculated when a course is loaded.
+                    </p>
+                  </details>
+
+                  {/* Shot profile section - collapsible */}
+                  <details open style={{ marginBottom: 14 }}>
+                    <summary style={{ padding: '8px 0', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, listStyle: 'none', WebkitAppearance: 'none', borderBottom: `1px solid ${C.border}`, paddingBottom: 10, marginBottom: 10 }}>
+                      <span style={{ fontSize: 14, fontWeight: 600, color: C.text }}>Shot Profile</span>
+                      <span style={{ fontSize: 11, color: C.textMuted }}>{playerInfo.handedness || 'Right'}-handed · {playerInfo.ballFlight}</span>
+                    </summary>
+                    <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr 1fr', gap: 10 }}>
+                      <div>
+                        <label style={lbl}>Handedness</label>
+                        <select style={inp} value={playerInfo.handedness || 'Right'} onChange={e => setPlayerInfo({ ...playerInfo, handedness: e.target.value })}>
+                          {['Right','Left'].map(o => <option key={o}>{o}</option>)}
+                        </select>
                       </div>
-                    )
-                  })}
+                      <div>
+                        <label style={lbl}>Typical miss</label>
+                        <select style={inp} value={playerInfo.miss} onChange={e => setPlayerInfo({ ...playerInfo, miss: e.target.value })}>
+                          {['Left','Right','Both (fade misses right under pressure)','Low and left','Thin / right'].map(o => <option key={o}>{o}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label style={lbl}>Ball flight</label>
+                        <select style={inp} value={playerInfo.ballFlight} onChange={e => setPlayerInfo({ ...playerInfo, ballFlight: e.target.value })}>
+                          {['Fade','Draw','Straight','Slight fade','Slight draw'].map(o => <option key={o}>{o}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                  </details>
+
+                  {/* Goals & strengths section - collapsible */}
+                  <details open={!isMobile}>
+                    <summary style={{ padding: '8px 0', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, listStyle: 'none', WebkitAppearance: 'none', borderBottom: `1px solid ${C.border}`, paddingBottom: 10, marginBottom: 10 }}>
+                      <span style={{ fontSize: 14, fontWeight: 600, color: C.text }}>Goals, Strengths & Notes</span>
+                      <span style={{ fontSize: 11, color: C.textMuted }}>Fed directly into AI strategy</span>
+                    </summary>
+                    <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 10 }}>
+                      <div>
+                        <label style={lbl}>Goals</label>
+                        <textarea style={{ ...inp, height: 68, resize: 'vertical' }} value={playerInfo.goals || ''}
+                          onChange={e => setPlayerInfo({ ...playerInfo, goals: e.target.value })}
+                          placeholder="e.g. Stop leaking shots on par 3s, hold my game together on back 9 in tournaments..." />
+                      </div>
+                      <div>
+                        <label style={lbl}>Strengths</label>
+                        <textarea style={{ ...inp, height: 68, resize: 'vertical' }} value={playerInfo.strengths || ''}
+                          onChange={e => setPlayerInfo({ ...playerInfo, strengths: e.target.value })}
+                          placeholder="e.g. Reliable iron player, strong lag putter, good SW from 80y..." />
+                      </div>
+                    </div>
+                    <div style={{ marginTop: 10 }}>
+                      <label style={lbl}>Swing notes</label>
+                      <textarea style={{ ...inp, height: 56, resize: 'vertical' }} value={playerInfo.swingNotes}
+                        onChange={e => setPlayerInfo({ ...playerInfo, swingNotes: e.target.value })}
+                        placeholder="e.g. Gets steep under pressure, slight over-the-top move, left miss when tired on driver..." />
+                    </div>
+                  </details>
                 </div>
-              ) : (
-                <div style={{ overflowX: 'auto' }}>
-                  <div style={{ minWidth: 740 }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: '140px 90px 105px 46px 40px 40px 105px 105px 1fr 28px', gap: '4px 8px', marginBottom: 6 }}>
-                      {['Course','City / State','Date','Score','Par','+/−','Round type','Conditions','Notes',''].map((h, i) =>
-                        <span key={i} style={{ fontSize: 10, color: C.textFaint, letterSpacing: '0.07em', textTransform: 'uppercase' }}>{h}</span>
+              </div>
+            )}
+
+            {/* ── Club Distances sub-tab ── */}
+            {playerSubTab === 'clubs' && (
+              <div style={card}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4, flexWrap: 'wrap', gap: 8 }}>
+                  <p style={{ ...lbl, margin: 0 }}>Club distances</p>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontSize: 11, color: C.textFaint }}>Saved automatically</span>
+                    <button style={{ ...btnG, fontSize: 11, padding: '4px 10px' }}
+                      onClick={() => setClubs(c => [...c, { club: 'New club', carry: '', shape: 'Straight' }])}>
+                      + Add club
+                    </button>
+                    <button style={{ ...btnG, fontSize: 11, padding: '4px 10px' }}
+                      onClick={() => { if (window.confirm('Reset bag to defaults?')) { setClubs(DEFAULT_CLUBS); setExpandedClubs({}) } }}>
+                      Reset
+                    </button>
+                  </div>
+                </div>
+                {isMobile ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 12 }}>
+                    {clubs.map((c, i) => (
+                      <details key={i} style={{ background: C.bgInput, border: `1px solid ${C.border}`, borderRadius: 8 }}>
+                        <summary style={{ padding: '10px 12px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between', listStyle: 'none', WebkitAppearance: 'none' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <span style={{ fontSize: 13, fontWeight: 500, color: C.text }}>{c.club}</span>
+                            <span style={{ fontSize: 12, color: C.accent, fontWeight: 600 }}>{c.carry}y</span>
+                            <span style={{ fontSize: 11, color: C.textFaint }}>{c.shape}</span>
+                          </div>
+                          <button onClick={e => { e.preventDefault(); setClubs(clubs.filter((_, j) => j !== i)) }}
+                            style={{ background: 'none', border: 'none', color: C.textFaint, cursor: 'pointer', fontSize: 15, padding: 0 }}>×</button>
+                        </summary>
+                        <div style={{ padding: '8px 12px 12px', borderTop: `1px solid ${C.border}`, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                          <input style={{ ...inp, padding: '6px 10px', fontSize: 13 }} value={c.club} placeholder="Club name"
+                            onChange={e => setClubs(clubs.map((cl, j) => j === i ? { ...cl, club: e.target.value } : cl))} />
+                          <div style={{ display: 'flex', gap: 6 }}>
+                            <input type="number" style={{ ...inp, padding: '6px 10px', fontSize: 13, flex: 1 }} value={c.carry} placeholder="Carry (yds)"
+                              onChange={e => setClubs(clubs.map((cl, j) => j === i ? { ...cl, carry: e.target.value } : cl))} />
+                            <select style={{ ...inp, padding: '6px 10px', fontSize: 13, flex: 1 }} value={c.shape}
+                              onChange={e => setClubs(clubs.map((cl, j) => j === i ? { ...cl, shape: e.target.value } : cl))}>
+                              {['Fade','Draw','Straight','Slight fade','Slight draw'].map(s => <option key={s}>{s}</option>)}
+                            </select>
+                          </div>
+                        </div>
+                      </details>
+                    ))}
+                  </div>
+                ) : (<>
+                <div style={{ display: 'grid', gridTemplateColumns: '24px 2fr 1fr 1.5fr 24px', gap: '5px 10px', marginBottom: 6, marginTop: 12 }}>
+                  {['','Club','Carry (yds)','Shot shape',''].map((h, i) => <span key={i} style={{ fontSize: 10, color: C.textFaint, letterSpacing: '0.08em', textTransform: 'uppercase' }}>{h}</span>)}
+                </div>
+                {clubs.map((c, i) => {
+                  const isOpen = !!expandedClubs[i]
+                  const analyticsInp = { ...inp, padding: '4px 6px', fontSize: 12 }
+                  return (
+                    <div key={i} style={{ marginBottom: 4 }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '24px 2fr 1fr 1.5fr 24px', gap: '4px 10px', alignItems: 'center' }}>
+                        <button
+                          onClick={() => setExpandedClubs(prev => ({ ...prev, [i]: !prev[i] }))}
+                          style={{ background: 'none', border: 'none', color: C.textFaint, cursor: 'pointer', fontSize: 10, padding: 0, textAlign: 'center', transform: isOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }}
+                          title="Expand analytics"
+                        >▼</button>
+                        <input style={{ ...inp, padding: '5px 8px', fontSize: 13 }} value={c.club}
+                          onChange={e => setClubs(clubs.map((cl, j) => j === i ? { ...cl, club: e.target.value } : cl))} />
+                        <input type="number" style={{ ...inp, textAlign: 'center', padding: '5px 8px' }} value={c.carry}
+                          onChange={e => setClubs(clubs.map((cl, j) => j === i ? { ...cl, carry: e.target.value } : cl))} />
+                        <select style={{ ...inp, padding: '5px 8px' }} value={c.shape}
+                          onChange={e => setClubs(clubs.map((cl, j) => j === i ? { ...cl, shape: e.target.value } : cl))}>
+                          {['Fade','Draw','Straight','Slight fade','Slight draw'].map(s => <option key={s}>{s}</option>)}
+                        </select>
+                        <button
+                          onClick={() => { setClubs(clubs.filter((_, j) => j !== i)); setExpandedClubs(prev => { const n = {}; Object.keys(prev).forEach(k => { if (Number(k) < i) n[k] = prev[k]; else if (Number(k) > i) n[Number(k)-1] = prev[k] }); return n }) }}
+                          style={{ background: 'none', border: 'none', color: C.textFaint, cursor: 'pointer', fontSize: 15, padding: 0, textAlign: 'center' }}
+                          title="Remove club"
+                        >×</button>
+                      </div>
+                      {isOpen && (
+                        <div style={{ marginLeft: 34, marginTop: 4, marginBottom: 6, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(100px, 1fr))', gap: '4px 8px' }}>
+                          {[
+                            { key: 'ballSpeed',   label: 'Ball speed (mph)', placeholder: '158' },
+                            { key: 'launchAngle', label: 'Launch angle (°)',  placeholder: '10.5' },
+                            { key: 'spinRate',    label: 'Spin rate (rpm)',   placeholder: '2600' },
+                            { key: 'dispLeft',    label: 'Left disp. (yd)',   placeholder: '12' },
+                            { key: 'dispRight',   label: 'Right disp. (yd)', placeholder: '8' },
+                          ].map(({ key, label, placeholder }) => (
+                            <div key={key}>
+                              <div style={{ fontSize: 9, color: C.textFaint, textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 2 }}>{label}</div>
+                              <input type="number" style={analyticsInp} placeholder={placeholder} value={c[key] || ''}
+                                onChange={e => setClubs(clubs.map((cl, j) => j === i ? { ...cl, [key]: e.target.value } : cl))} />
+                            </div>
+                          ))}
+                        </div>
                       )}
                     </div>
-                    {scoringHistory.map((r, i) => (
-                      <div key={i} style={{ marginBottom: 6 }}>
-                      <div style={{ display: 'grid', gridTemplateColumns: '140px 90px 105px 46px 40px 40px 105px 105px 1fr 28px', gap: '3px 8px', alignItems: 'center' }}>
-                        <input style={{ ...inp, padding: '4px 8px', fontSize: 12 }} value={r.course}
-                          onChange={e => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, course: e.target.value } : rr))}
-                          placeholder="Course name" />
-                        <input style={{ ...inp, padding: '4px 8px', fontSize: 12 }} value={r.location}
-                          onChange={e => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, location: e.target.value } : rr))}
-                          placeholder="City, ST" />
-                        <input type="date" style={{ ...inp, padding: '4px 8px', fontSize: 12 }} value={r.date}
-                          onChange={e => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, date: e.target.value } : rr))} />
-                        <input type="number" style={{ ...inp, padding: '4px 6px', fontSize: 12, textAlign: 'center' }} value={r.score}
-                          onChange={e => {
-                            const score = e.target.value
-                            setScoringHistory(h => h.map((rr, j) => j === i ? {
-                              ...rr, score,
-                              toPar: !rr.toPar || rr.toPar === toParStr(rr.score, rr.par || 72) ? toParStr(score, rr.par || 72) : rr.toPar,
-                            } : rr))
-                          }}
-                          placeholder="70" />
-                        <input type="number" style={{ ...inp, padding: '4px 6px', fontSize: 12, textAlign: 'center' }} value={r.par ?? 72}
-                          onChange={e => {
-                            const par = Number(e.target.value) || 72
-                            setScoringHistory(h => h.map((rr, j) => j === i ? {
-                              ...rr, par,
-                              toPar: rr.score ? toParStr(rr.score, par) : rr.toPar,
-                            } : rr))
-                          }}
-                          placeholder="72" />
-                        <input style={{ ...inp, padding: '4px 6px', fontSize: 12, textAlign: 'center' }} value={r.toPar}
-                          onChange={e => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, toPar: e.target.value } : rr))}
-                          placeholder="E" />
-                        <select style={{ ...inp, padding: '4px 6px', fontSize: 12 }} value={r.roundType || ''}
-                          onChange={e => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, roundType: e.target.value } : rr))}>
-                          <option value="">Type</option>
-                          {['Tournament','Qualifier','Stroke play','Match play','Practice round','Casual'].map(o => <option key={o}>{o}</option>)}
-                        </select>
-                        <select style={{ ...inp, padding: '4px 6px', fontSize: 12 }} value={r.conditions}
-                          onChange={e => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, conditions: e.target.value } : rr))}>
-                          <option value="">Conditions</option>
-                          {['Normal','Firm & fast','Soft','Windy','Hot & dry','Wet'].map(o => <option key={o}>{o}</option>)}
-                        </select>
-                        <input style={{ ...inp, padding: '4px 8px', fontSize: 12 }} value={r.notes}
-                          onChange={e => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, notes: e.target.value } : rr))}
-                          placeholder="Drove it well, 3-putted twice..." />
-                        <button style={{ background: 'transparent', border: 'none', color: C.textFaint, cursor: 'pointer', fontSize: 16, padding: '2px 4px' }}
-                          onClick={() => setScoringHistory(h => h.filter((_, j) => j !== i))} title="Remove">×</button>
-                      </div>
-                      {/* Course lookup */}
-                      {(() => {
+                  )
+                })}
+                </>)}
+              </div>
+            )}
+
+            {/* ── Data Import sub-tab ── */}
+            {playerSubTab === 'import' && (
+              <ImportTab clubs={clubs} setClubs={setClubs} C={C} card={card} inp={inp} lbl={lbl} btnP={btnP} btnG={btnG} />
+            )}
+
+            {/* ── Scoring History sub-tab ── */}
+            {playerSubTab === 'scoring' && (
+              <div>
+                <div style={{ ...card, marginBottom: 12, borderColor: C.accentMuted }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14, flexWrap: 'wrap', gap: 8 }}>
+                    <p style={{ fontSize: 13, color: C.textMuted, margin: 0, lineHeight: 1.6, maxWidth: 600 }}>
+                      Enter your most recent competitive and practice rounds. Claude identifies scoring patterns
+                      and adjusts today's target and strategy accordingly.
+                    </p>
+                    <button style={{ ...btnG, whiteSpace: 'nowrap', flexShrink: 0 }}
+                      onClick={() => setScoringHistory(h => [...h, { course: '', location: '', date: '', score: '', par: 72, toPar: '', roundType: 'Tournament', conditions: '', notes: '' }])}>
+                      + Add round
+                    </button>
+                  </div>
+
+                  {scoringHistory.length === 0 ? (
+                    <p style={{ fontSize: 12, color: C.textFaint, fontStyle: 'italic', textAlign: 'center', padding: '1rem 0' }}>
+                      No rounds yet — hit "+ Add round" to start tracking scoring history.
+                    </p>
+                  ) : isMobile ? (
+                    /* Mobile scoring history - same as before */
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      {scoringHistory.map((r, i) => {
                         const hs = historySearch[i] || {}
                         return (
-                          <div style={{ marginTop: 3, marginBottom: 2 }}>
+                          <div key={i} style={{ background: C.bgInput, border: `1px solid ${C.border}`, borderRadius: 10, padding: '12px 14px' }}>
+                            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+                              <input style={{ ...inp, flex: 1, padding: '6px 10px', fontSize: 13 }} value={r.course}
+                                onChange={e => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, course: e.target.value } : rr))}
+                                placeholder="Course name" />
+                              <button style={{ background: 'transparent', border: 'none', color: C.textFaint, cursor: 'pointer', fontSize: 18, padding: '2px 6px', flexShrink: 0 }}
+                                onClick={() => setScoringHistory(h => h.filter((_, j) => j !== i))} title="Remove">×</button>
+                            </div>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px 8px', marginBottom: 8 }}>
+                              <div><label style={lbl}>City / State</label><input style={{ ...inp, padding: '5px 8px', fontSize: 12 }} value={r.location} onChange={e => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, location: e.target.value } : rr))} placeholder="City, ST" /></div>
+                              <div><label style={lbl}>Date</label><input type="date" style={{ ...inp, padding: '5px 8px', fontSize: 12 }} value={r.date} onChange={e => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, date: e.target.value } : rr))} /></div>
+                              <div><label style={lbl}>Score</label><input type="number" style={{ ...inp, padding: '5px 8px', fontSize: 12 }} value={r.score} onChange={e => { const score = e.target.value; setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, score, toPar: !rr.toPar || rr.toPar === toParStr(rr.score, rr.par || 72) ? toParStr(score, rr.par || 72) : rr.toPar } : rr)) }} placeholder="70" /></div>
+                              <div><label style={lbl}>+/- vs par</label><input style={{ ...inp, padding: '5px 8px', fontSize: 12 }} value={r.toPar} onChange={e => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, toPar: e.target.value } : rr))} placeholder="E" /></div>
+                              <div><label style={lbl}>Round type</label><select style={{ ...inp, padding: '5px 6px', fontSize: 12 }} value={r.roundType || ''} onChange={e => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, roundType: e.target.value } : rr))}><option value="">Type</option>{['Tournament','Qualifier','Stroke play','Match play','Practice round','Casual'].map(o => <option key={o}>{o}</option>)}</select></div>
+                              <div><label style={lbl}>Conditions</label><select style={{ ...inp, padding: '5px 6px', fontSize: 12 }} value={r.conditions} onChange={e => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, conditions: e.target.value } : rr))}><option value="">Conditions</option>{['Normal','Firm & fast','Soft','Windy','Hot & dry','Wet'].map(o => <option key={o}>{o}</option>)}</select></div>
+                            </div>
+                            <div style={{ marginBottom: 8 }}>
+                              <label style={lbl}>Notes</label>
+                              <input style={{ ...inp, padding: '5px 8px', fontSize: 12 }} value={r.notes} onChange={e => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, notes: e.target.value } : rr))} placeholder="Drove it well, 3-putted twice..." />
+                            </div>
                             {r.courseData ? (
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 2 }}>
-                                <span style={{ fontSize: 11, color: C.green }}>⛳ Scorecard linked: {r.courseData.name} ({r.courseData.holes?.length || 18} holes)</span>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <span style={{ fontSize: 11, color: C.green }}>⛳ {r.courseData.name} linked</span>
                                 <button style={{ background: 'none', border: 'none', color: C.red, fontSize: 10, cursor: 'pointer', padding: 0 }}
                                   onClick={() => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, courseData: null } : rr))}>remove</button>
                               </div>
                             ) : (
                               <div>
                                 {!hs.open ? (
-                                  <button style={{ ...btnG, fontSize: 10, padding: '2px 10px' }} onClick={() => updateHS(i, { open: true, query: r.course || '', results: [], error: '' })}>
-                                    + Link scorecard
-                                  </button>
+                                  <button style={{ ...btnG, fontSize: 10, padding: '4px 10px' }} onClick={() => updateHS(i, { open: true, query: r.course || '', results: [], error: '' })}>+ Link scorecard</button>
                                 ) : (
                                   <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                                    <input style={{ ...inp, fontSize: 12, padding: '3px 8px', width: 220 }}
-                                      placeholder="Search course name…"
-                                      value={hs.query || ''}
-                                      onChange={e => updateHS(i, { query: e.target.value })}
-                                      onKeyDown={e => e.key === 'Enter' && historySearchCourse(i, hs.query)} />
-                                    <button style={{ ...btnP, fontSize: 11, padding: '4px 12px' }} onClick={() => historySearchCourse(i, hs.query)}>
-                                      {hs.loading ? '…' : 'Search'}
-                                    </button>
+                                    <input style={{ ...inp, fontSize: 12, padding: '3px 8px', flex: 1, minWidth: 120 }} placeholder="Search course name..." value={hs.query || ''} onChange={e => updateHS(i, { query: e.target.value })} onKeyDown={e => e.key === 'Enter' && historySearchCourse(i, hs.query)} />
+                                    <button style={{ ...btnP, fontSize: 11, padding: '4px 12px' }} onClick={() => historySearchCourse(i, hs.query)}>{hs.loading ? '...' : 'Search'}</button>
                                     <button style={{ ...btnG, fontSize: 10, padding: '3px 8px' }} onClick={() => updateHS(i, { open: false })}>Cancel</button>
                                     {hs.error && <span style={{ fontSize: 11, color: C.red }}>{hs.error}</span>}
                                   </div>
                                 )}
                                 {(hs.results || []).length > 0 && (
-                                  <div style={{ marginTop: 4, background: C.bgInput, border: `1px solid ${C.border}`, borderRadius: 6, overflow: 'hidden' }}>
+                                  <div style={{ marginTop: 4, background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: 6, overflow: 'hidden' }}>
                                     {hs.results.slice(0, 5).map((r2, k) => (
-                                      <button key={k} style={{ display: 'block', width: '100%', background: 'none', border: 'none', borderBottom: `1px solid ${C.border}`, color: C.text, textAlign: 'left', padding: '6px 10px', fontSize: 12, cursor: 'pointer', fontFamily: F }}
+                                      <button key={k} style={{ display: 'block', width: '100%', background: 'none', border: 'none', borderBottom: `1px solid ${C.border}`, color: C.text, textAlign: 'left', padding: '8px 10px', fontSize: 12, cursor: 'pointer', fontFamily: F }}
                                         onClick={() => attachCourseToRound(i, r2)}>
                                         {r2.course_name || r2.name} {r2.location ? `— ${r2.location}` : ''}
                                       </button>
@@ -2493,495 +2325,565 @@ Be direct. No filler. ALL 18 HOLES.`
                             )}
                           </div>
                         )
-                      })()}
+                      })}
+                    </div>
+                  ) : (
+                    /* Desktop scoring history - same as before */
+                    <div style={{ overflowX: 'auto' }}>
+                      <div style={{ minWidth: 740 }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: '140px 90px 105px 46px 40px 40px 105px 105px 1fr 28px', gap: '4px 8px', marginBottom: 6 }}>
+                          {['Course','City / State','Date','Score','Par','+/-','Round type','Conditions','Notes',''].map((h, i) =>
+                            <span key={i} style={{ fontSize: 10, color: C.textFaint, letterSpacing: '0.07em', textTransform: 'uppercase' }}>{h}</span>
+                          )}
+                        </div>
+                        {scoringHistory.map((r, i) => (
+                          <div key={i} style={{ marginBottom: 6 }}>
+                          <div style={{ display: 'grid', gridTemplateColumns: '140px 90px 105px 46px 40px 40px 105px 105px 1fr 28px', gap: '3px 8px', alignItems: 'center' }}>
+                            <input style={{ ...inp, padding: '4px 8px', fontSize: 12 }} value={r.course} onChange={e => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, course: e.target.value } : rr))} placeholder="Course name" />
+                            <input style={{ ...inp, padding: '4px 8px', fontSize: 12 }} value={r.location} onChange={e => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, location: e.target.value } : rr))} placeholder="City, ST" />
+                            <input type="date" style={{ ...inp, padding: '4px 8px', fontSize: 12 }} value={r.date} onChange={e => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, date: e.target.value } : rr))} />
+                            <input type="number" style={{ ...inp, padding: '4px 6px', fontSize: 12, textAlign: 'center' }} value={r.score} onChange={e => { const score = e.target.value; setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, score, toPar: !rr.toPar || rr.toPar === toParStr(rr.score, rr.par || 72) ? toParStr(score, rr.par || 72) : rr.toPar } : rr)) }} placeholder="70" />
+                            <input type="number" style={{ ...inp, padding: '4px 6px', fontSize: 12, textAlign: 'center' }} value={r.par ?? 72} onChange={e => { const par = Number(e.target.value) || 72; setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, par, toPar: rr.score ? toParStr(rr.score, par) : rr.toPar } : rr)) }} placeholder="72" />
+                            <input style={{ ...inp, padding: '4px 6px', fontSize: 12, textAlign: 'center' }} value={r.toPar} onChange={e => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, toPar: e.target.value } : rr))} placeholder="E" />
+                            <select style={{ ...inp, padding: '4px 6px', fontSize: 12 }} value={r.roundType || ''} onChange={e => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, roundType: e.target.value } : rr))}><option value="">Type</option>{['Tournament','Qualifier','Stroke play','Match play','Practice round','Casual'].map(o => <option key={o}>{o}</option>)}</select>
+                            <select style={{ ...inp, padding: '4px 6px', fontSize: 12 }} value={r.conditions} onChange={e => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, conditions: e.target.value } : rr))}><option value="">Conditions</option>{['Normal','Firm & fast','Soft','Windy','Hot & dry','Wet'].map(o => <option key={o}>{o}</option>)}</select>
+                            <input style={{ ...inp, padding: '4px 8px', fontSize: 12 }} value={r.notes} onChange={e => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, notes: e.target.value } : rr))} placeholder="Drove it well, 3-putted twice..." />
+                            <button style={{ background: 'transparent', border: 'none', color: C.textFaint, cursor: 'pointer', fontSize: 16, padding: '2px 4px' }} onClick={() => setScoringHistory(h => h.filter((_, j) => j !== i))} title="Remove">×</button>
+                          </div>
+                          {(() => {
+                            const hs = historySearch[i] || {}
+                            return (
+                              <div style={{ marginTop: 3, marginBottom: 2 }}>
+                                {r.courseData ? (
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 2 }}>
+                                    <span style={{ fontSize: 11, color: C.green }}>⛳ Scorecard linked: {r.courseData.name} ({r.courseData.holes?.length || 18} holes)</span>
+                                    <button style={{ background: 'none', border: 'none', color: C.red, fontSize: 10, cursor: 'pointer', padding: 0 }} onClick={() => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, courseData: null } : rr))}>remove</button>
+                                  </div>
+                                ) : (
+                                  <div>
+                                    {!hs.open ? (
+                                      <button style={{ ...btnG, fontSize: 10, padding: '2px 10px' }} onClick={() => updateHS(i, { open: true, query: r.course || '', results: [], error: '' })}>+ Link scorecard</button>
+                                    ) : (
+                                      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                                        <input style={{ ...inp, fontSize: 12, padding: '3px 8px', width: 220 }} placeholder="Search course name..." value={hs.query || ''} onChange={e => updateHS(i, { query: e.target.value })} onKeyDown={e => e.key === 'Enter' && historySearchCourse(i, hs.query)} />
+                                        <button style={{ ...btnP, fontSize: 11, padding: '4px 12px' }} onClick={() => historySearchCourse(i, hs.query)}>{hs.loading ? '...' : 'Search'}</button>
+                                        <button style={{ ...btnG, fontSize: 10, padding: '3px 8px' }} onClick={() => updateHS(i, { open: false })}>Cancel</button>
+                                        {hs.error && <span style={{ fontSize: 11, color: C.red }}>{hs.error}</span>}
+                                      </div>
+                                    )}
+                                    {(hs.results || []).length > 0 && (
+                                      <div style={{ marginTop: 4, background: C.bgInput, border: `1px solid ${C.border}`, borderRadius: 6, overflow: 'hidden' }}>
+                                        {hs.results.slice(0, 5).map((r2, k) => (
+                                          <button key={k} style={{ display: 'block', width: '100%', background: 'none', border: 'none', borderBottom: `1px solid ${C.border}`, color: C.text, textAlign: 'left', padding: '6px 10px', fontSize: 12, cursor: 'pointer', fontFamily: F }}
+                                            onClick={() => attachCourseToRound(i, r2)}>
+                                            {r2.course_name || r2.name} {r2.location ? `— ${r2.location}` : ''}
+                                          </button>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            )
+                          })()}
+                          </div>
+                        ))}
                       </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Stats summary */}
-            {scoringHistory.filter(r => r.score && r.toPar).length >= 2 && (() => {
-              const valid  = scoringHistory.filter(r => r.score && r.toPar)
-              const toNum  = r => r.toPar === 'E' ? 0 : parseFloat(r.toPar)
-              const scores = valid.map(toNum).filter(n => !isNaN(n))
-              if (scores.length < 2) return null
-
-              const avg   = (scores.reduce((a,b)=>a+b,0)/scores.length).toFixed(1)
-              const best  = Math.min(...scores)
-              const worst = Math.max(...scores)
-              const recent3 = scores.slice(-3), older3 = scores.slice(0,3)
-              const trend = recent3.length>=2 && older3.length>=2
-                ? recent3.reduce((a,b)=>a+b,0)/recent3.length < older3.reduce((a,b)=>a+b,0)/older3.length
-                  ? 'Improving ↗' : 'Declining ↘'
-                : '—'
-              const fmt  = n => n===0?'E':n>0?`+${n}`:String(n)
-              const fmtF = n => n==null?'—':parseFloat(n)===0?'E':parseFloat(n)>0?`+${n}`:String(n)
-              const avgOf = arr => arr.length ? arr.reduce((a,b)=>a+b,0)/arr.length : null
-
-              const tourNums = valid.filter(r=>r.roundType==='Tournament'||r.roundType==='Qualifier').map(toNum).filter(n=>!isNaN(n))
-              const casNums  = valid.filter(r=>r.roundType==='Casual'||r.roundType==='Practice round').map(toNum).filter(n=>!isNaN(n))
-
-              const statCard = (label, val, color, sub) => (
-                <div key={label} style={{ background: C.bgInput, border: `1px solid ${C.border}`, borderRadius: 8, padding: '10px 14px' }}>
-                  <p style={{ ...lbl, margin: '0 0 4px' }}>{label}</p>
-                  <p style={{ fontSize: 20, fontWeight: 600, color, margin: 0 }}>{val}</p>
-                  {sub && <p style={{ fontSize: 10, color: C.textFaint, margin: '3px 0 0' }}>{sub}</p>}
-                </div>
-              )
-
-              return (
-                <div style={{ marginBottom: 12 }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: 10, marginBottom: 8 }}>
-                    {statCard('Overall avg', fmtF(avg), C.text, `${scores.length} rounds`)}
-                    {statCard('Best round',  fmt(best),  C.green)}
-                    {statCard('Worst round', fmt(worst), worst>2?C.red:C.textMuted)}
-                    {statCard('Recent trend', trend, trend.includes('↗')?C.green:trend.includes('↘')?C.amber:C.textMuted)}
-                  </div>
-                  {(tourNums.length>=1||casNums.length>=1) && (
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10 }}>
-                      {tourNums.length>=1 && statCard('Tournament avg', fmtF(avgOf(tourNums)?.toFixed(1)), C.amber, `${tourNums.length} competitive rounds`)}
-                      {casNums.length>=1  && statCard('Casual avg',     fmtF(avgOf(casNums)?.toFixed(1)),  C.textMuted, `${casNums.length} casual / practice rounds`)}
                     </div>
                   )}
                 </div>
-              )
-            })()}
-          </div>
-        )}
 
-        {/* ── COURSE SETUP ── */}
-        {tab === 'course' && (
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-              <h2 style={{ fontSize: 18, fontWeight: 600, color: C.text, margin: 0 }}>Course setup</h2>
-              {course.source === 'GolfCourseAPI' && (
-                <Badge label="✓ Verified — GolfCourseAPI" bg={C.greenMuted} fg={C.green} />
-              )}
-              {(course.source === 'OpenGolfAPI' || course.source?.includes('partial')) && (
-                <Badge label="⚠ Partial data — yardages may be incomplete" bg={C.amberMuted} fg={C.amber} />
-              )}
-              {course.source && course.source !== 'GolfCourseAPI' && course.source !== 'OpenGolfAPI' && !course.source.includes('partial') && (
-                <Badge label="⚠ Unverified — web search" bg={C.amberMuted} fg={C.amber} />
-              )}
-              {course.osmEnriched && (
-                <Badge label="🗺 OSM design data" bg={C.blueMuted} fg={C.blue} />
-              )}
-            </div>
-            {course.source && course.source !== 'GolfCourseAPI' && course.source !== 'OpenGolfAPI' && (
-              <div style={{ background: C.amberMuted, border: `1px solid ${C.amber}`, borderRadius: 8, padding: '10px 14px', marginBottom: 12 }}>
-                <p style={{ fontSize: 12, color: C.amber, margin: 0, fontWeight: 500 }}>
-                  ⚠ Unverified course data — yardages sourced from web search, not guaranteed accurate. Verify against your local scorecard before use.
-                </p>
-              </div>
-            )}
-            {course.name && <DataAccuracyTier course={course} style={{ marginBottom: 12 }} />}
-            <p style={{ fontSize: 12, color: C.textMuted, marginTop: 0, marginBottom: 14 }}>Search verified scorecard, set tee time, add caddy notes per hole</p>
-            <CourseSearch
-              apiKey={apiKey}
-              golfCourseApiKey={golfCourseApiKey}
-              onApiKeyNeeded={() => setShowKeysPanel(true)}
-              onSelect={applyScorecard}
-            />
-
-            <div style={{ ...card, marginBottom: 12 }}>
-              <p style={{ ...lbl, marginBottom: 12 }}>Course details</p>
-              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : '2fr 1fr 1fr 1fr', gap: 10 }}>
-                <div>
-                  <label style={lbl}>Course name</label>
-                  <input style={inp} value={course.name} onChange={e => setCourse({ ...course, name: e.target.value })} placeholder="e.g. Rhodes Ranch Golf Club" />
-                </div>
-                <div>
-                  <label style={lbl}>City / State</label>
-                  <input style={inp} value={course.location} onChange={e => setCourse({ ...course, location: e.target.value })} placeholder="Las Vegas, NV" />
-                </div>
-                <div>
-                  <label style={lbl}>Total yardage</label>
-                  <input style={inp} value={course.yardage} onChange={e => setCourse({ ...course, yardage: e.target.value })} placeholder="6582" />
-                </div>
-                <div>
-                  <label style={lbl}>Rating / Slope</label>
-                  <input style={inp}
-                    value={`${course.rating}${course.slope ? '/' + course.slope : ''}`}
-                    onChange={e => { const [r, s] = e.target.value.split('/'); setCourse({ ...course, rating: r?.trim(), slope: s?.trim() || course.slope }) }}
-                    placeholder="70.6 / 128" />
-                </div>
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 10, marginTop: 10 }}>
-                <div>
-                  <label style={lbl}>Conditions</label>
-                  <select style={inp} value={course.conditions} onChange={e => setCourse({ ...course, conditions: e.target.value })}>
-                    {['Normal','Firm & fast','Soft','Wet','Dry & links-like'].map(o => <option key={o}>{o}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label style={lbl}>Round type</label>
-                  <select style={inp} value={course.roundType} onChange={e => setCourse({ ...course, roundType: e.target.value })}>
-                    {['Stroke play tournament','Match play','Qualifier','Q School','Practice round','Casual round'].map(o => <option key={o}>{o}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label style={lbl}>Target score</label>
-                  <input style={inp} value={course.targetScore} onChange={e => setCourse({ ...course, targetScore: e.target.value })} placeholder="-2 (69)" />
-                </div>
-                <div>
-                  <label style={lbl}>Elevation (ft)</label>
-                  <input style={inp} type="number" value={course.elevation} onChange={e => setCourse({ ...course, elevation: e.target.value })} placeholder="e.g. 4500" />
-                </div>
-              </div>
-              <div style={{ marginTop: 10 }}>
-                <label style={lbl}>General course notes</label>
-                <textarea style={{ ...inp, height: 56, resize: 'vertical' }} value={course.notes}
-                  onChange={e => setCourse({ ...course, notes: e.target.value })}
-                  placeholder="Green speed, firmness, key local knowledge, previous experience..." />
-              </div>
-            </div>
-
-            {/* Unified tee time + weather panel */}
-            <WeatherPanel
-              apiKey={apiKey} course={course}
-              coords={coords} setCoords={setCoords}
-              teeTime={teeTime} setTeeTime={setTeeTime}
-              teeDate={teeDate} setTeeDate={setTeeDate}
-              pace={pace} setPace={setPace}
-              timezone={timezone}
-              weather={weather} setWeather={setWeather}
-              weatherLoading={weatherLoading} setWeatherLoading={setWeatherLoading}
-            />
-
-            {/* Hole table */}
-            <div style={card}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 4 }}>
-                <p style={{ ...lbl, margin: 0 }}>Hole-by-hole</p>
-                <p style={{ fontSize: 11, color: C.textFaint, margin: 0 }}>Notes = caddy intel for AI (green slopes, OB, pin tendencies…)</p>
-              </div>
-              {isMobile ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {course.holes.map((h, idx) => {
-                    const upd = (field, val) => setCourse({ ...course, holes: course.holes.map((hh, j) => j === idx ? { ...hh, [field]: val } : hh) })
-                    const noteChips = ['Water left', 'Water right', 'Water front', 'OB left', 'OB right', 'Bunker left', 'Bunker right', 'Bunker short', 'Dogleg left', 'Dogleg right', 'Slopes B→F', 'False front', 'Elevated green', 'No hazards']
-                    return (
-                      <details key={idx} style={{ background: C.bgInput, border: `1px solid ${C.border}`, borderRadius: 8 }}>
-                        <summary style={{ padding: '10px 12px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, listStyle: 'none', WebkitAppearance: 'none' }}>
-                          <span style={{ fontSize: 13, fontWeight: 600, color: C.accent, minWidth: 28 }}>{idx + 1}</span>
-                          <span style={{ fontSize: 12, color: C.textMuted }}>Par {h.par} · {h.yardage || '?'}y</span>
-                          {h.notes && <span style={{ fontSize: 10, color: C.green, marginLeft: 'auto' }}>has notes</span>}
-                        </summary>
-                        <div style={{ padding: '8px 12px 12px', borderTop: `1px solid ${C.border}` }}>
-                          <div style={{ display: 'flex', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
-                            <select style={{ ...inp, padding: '6px 8px', fontSize: 12, flex: '0 0 auto', width: 70 }} value={h.par} onChange={e => upd('par', Number(e.target.value))}>
-                              {[3,4,5].map(p => <option key={p}>Par {p}</option>)}
-                            </select>
-                            <input type="number" style={{ ...inp, padding: '6px 8px', fontSize: 12, flex: 1, minWidth: 70 }} value={h.yardage} onChange={e => upd('yardage', e.target.value)} placeholder="Yards" />
-                            <input type="number" style={{ ...inp, padding: '6px 8px', fontSize: 12, flex: '0 0 auto', width: 60 }} value={h.handicap} onChange={e => upd('handicap', e.target.value)} placeholder="HCP" />
-                            <input type="number" style={{ ...inp, padding: '6px 8px', fontSize: 12, flex: '0 0 auto', width: 70 }} value={h.elevation} onChange={e => upd('elevation', e.target.value)} placeholder="Elev ft" />
-                          </div>
-                          <textarea style={{ ...inp, padding: '8px 10px', fontSize: 13, width: '100%', minHeight: 60, resize: 'vertical' }}
-                            value={h.notes} onChange={e => upd('notes', e.target.value)}
-                            placeholder="Hazards, OB, doglegs, green features — only what you know is accurate..." />
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
-                            {noteChips.map(chip => (
-                              <button key={chip} onClick={() => upd('notes', (h.notes ? h.notes + ', ' : '') + chip.toLowerCase())} style={{
-                                fontSize: 10, padding: '3px 8px', borderRadius: 12, border: `1px solid ${C.border}`,
-                                background: C.bgCard, color: C.textMuted, cursor: 'pointer', fontFamily: F,
-                              }}>{chip}</button>
-                            ))}
-                          </div>
-                        </div>
-                      </details>
-                    )
-                  })}
-                </div>
-              ) : (
-                <div style={{ overflowX: 'auto' }}>
-                  <div style={{ minWidth: 500 }}>
-                    {['Front 9', 'Back 9'].map((label, half) => (
-                      <div key={half}>
-                        <p style={{ fontSize: 10, color: C.textFaint, textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 }}>
-                          {label} — {course.holes.slice(half * 9, half * 9 + 9).reduce((s, h) => s + (parseInt(h.yardage) || 0), 0)}y · Par {course.holes.slice(half * 9, half * 9 + 9).reduce((s, h) => s + h.par, 0)}
-                        </p>
-                        <div style={{ display: 'grid', gridTemplateColumns: '28px 48px 66px 50px 56px 1fr', gap: '4px 8px', marginBottom: 4 }}>
-                          {half === 0 && ['#','Par','Yds','HCP','Elev','Caddy notes'].map((h, i) =>
-                            <span key={i} style={{ fontSize: 10, color: C.textFaint, letterSpacing: '0.06em', textTransform: 'uppercase' }}>{h}</span>
-                          )}
-                        </div>
-                        {course.holes.slice(half * 9, half * 9 + 9).map((h, i) => {
-                          const idx = half * 9 + i
-                          const upd = (field, val) => setCourse({ ...course, holes: course.holes.map((hh, j) => j === idx ? { ...hh, [field]: val } : hh) })
-                          return (
-                            <div key={idx} style={{ display: 'grid', gridTemplateColumns: '28px 48px 66px 50px 56px 1fr', gap: '3px 8px', marginBottom: 3, alignItems: 'center' }}>
-                              <span style={{ fontSize: 11, color: C.textMuted, textAlign: 'center' }}>{idx + 1}</span>
-                              <select style={{ ...inp, padding: '4px 6px', fontSize: 12 }} value={h.par} onChange={e => upd('par', Number(e.target.value))}>
-                                {[3,4,5].map(p => <option key={p}>{p}</option>)}
-                              </select>
-                              <input type="number" style={{ ...inp, padding: '4px 6px', fontSize: 12 }} value={h.yardage} onChange={e => upd('yardage', e.target.value)} placeholder="yds" />
-                              <input type="number" style={{ ...inp, padding: '4px 6px', fontSize: 12 }} value={h.handicap} onChange={e => upd('handicap', e.target.value)} placeholder="HCP" />
-                              <input type="number" style={{ ...inp, padding: '4px 6px', fontSize: 12 }} value={h.elevation} onChange={e => upd('elevation', e.target.value)} placeholder="ft" />
-                              <input style={{ ...inp, padding: '4px 8px', fontSize: 12 }} value={h.notes} onChange={e => upd('notes', e.target.value)}
-                                placeholder="Hazards, OB, doglegs — only verified info..." />
-                            </div>
-                          )
-                        })}
-                        {half === 0 && <div style={{ borderTop: `1px solid ${C.border}`, margin: '10px 0 10px' }} />}
-                      </div>
-                    ))}
-                    <div style={{ display: 'grid', gridTemplateColumns: '28px 48px 66px 50px 56px 1fr', gap: '4px 8px', marginTop: 8, paddingTop: 8, borderTop: `1px solid ${C.border}` }}>
-                      <span style={{ fontSize: 11, color: C.textFaint }}>Tot</span>
-                      <span style={{ fontSize: 12, fontWeight: 600, color: C.text, padding: '4px 6px' }}>{course.holes.reduce((s, h) => s + h.par, 0)}</span>
-                      <span style={{ fontSize: 12, fontWeight: 600, color: C.accent, padding: '4px 6px' }}>{course.holes.reduce((s, h) => s + (parseInt(h.yardage) || 0), 0).toLocaleString()}</span>
+                {/* Stats summary */}
+                {scoringHistory.filter(r => r.score && r.toPar).length >= 2 && (() => {
+                  const valid  = scoringHistory.filter(r => r.score && r.toPar)
+                  const toNum  = r => r.toPar === 'E' ? 0 : parseFloat(r.toPar)
+                  const scores = valid.map(toNum).filter(n => !isNaN(n))
+                  if (scores.length < 2) return null
+                  const avg   = (scores.reduce((a,b)=>a+b,0)/scores.length).toFixed(1)
+                  const best  = Math.min(...scores)
+                  const worst = Math.max(...scores)
+                  const recent3 = scores.slice(-3), older3 = scores.slice(0,3)
+                  const trend = recent3.length>=2 && older3.length>=2
+                    ? recent3.reduce((a,b)=>a+b,0)/recent3.length < older3.reduce((a,b)=>a+b,0)/older3.length ? 'Improving' : 'Declining' : '—'
+                  const fmt  = n => n===0?'E':n>0?`+${n}`:String(n)
+                  const fmtF = n => n==null?'—':parseFloat(n)===0?'E':parseFloat(n)>0?`+${n}`:String(n)
+                  const avgOf = arr => arr.length ? arr.reduce((a,b)=>a+b,0)/arr.length : null
+                  const tourNums = valid.filter(r=>r.roundType==='Tournament'||r.roundType==='Qualifier').map(toNum).filter(n=>!isNaN(n))
+                  const casNums  = valid.filter(r=>r.roundType==='Casual'||r.roundType==='Practice round').map(toNum).filter(n=>!isNaN(n))
+                  const statCard = (label, val, color, sub) => (
+                    <div key={label} style={{ background: C.bgInput, border: `1px solid ${C.border}`, borderRadius: 8, padding: '10px 14px' }}>
+                      <p style={{ ...lbl, margin: '0 0 4px' }}>{label}</p>
+                      <p style={{ fontSize: 20, fontWeight: 600, color, margin: 0 }}>{val}</p>
+                      {sub && <p style={{ fontSize: 10, color: C.textFaint, margin: '3px 0 0' }}>{sub}</p>}
                     </div>
-                  </div>
-                </div>
-              )}
-            </div>
+                  )
+                  return (
+                    <div style={{ marginBottom: 12 }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: 10, marginBottom: 8 }}>
+                        {statCard('Overall avg', fmtF(avg), C.text, `${scores.length} rounds`)}
+                        {statCard('Best round',  fmt(best),  C.green)}
+                        {statCard('Worst round', fmt(worst), worst>2?C.red:C.textMuted)}
+                        {statCard('Recent trend', trend, trend==='Improving'?C.green:trend==='Declining'?C.amber:C.textMuted)}
+                      </div>
+                      {(tourNums.length>=1||casNums.length>=1) && (
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10 }}>
+                          {tourNums.length>=1 && statCard('Tournament avg', fmtF(avgOf(tourNums)?.toFixed(1)), C.amber, `${tourNums.length} competitive rounds`)}
+                          {casNums.length>=1  && statCard('Casual avg',     fmtF(avgOf(casNums)?.toFixed(1)),  C.textMuted, `${casNums.length} casual / practice rounds`)}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })()}
+              </div>
+            )}
           </div>
         )}
 
-        {/* ── COURSE MAP (commented out for MVP) ── */}
-        {/* {tab === 'map' && (
+        {/* ══════════════════════════════════════════════════════════════════
+            SECTION 2: ROUND PREP
+            Sequential steps: Course → Tees → Scorecard → Weather → Generate
+           ══════════════════════════════════════════════════════════════════ */}
+        {tab === 'prep' && (
           <div>
-            <SectionHead title="Course satellite view" sub="Visual orientation — use alongside hole caddy notes" />
-            {course.name
-              ? <CourseMapEmbed courseName={course.name} location={course.location} mapsKey={mapsKey} />
-              : <div style={{ ...card, textAlign: 'center', padding: '3rem 2rem' }}>
-                  <p style={{ fontSize: 16, color: C.textMuted }}>Set up the course first</p>
-                  <button style={{ ...btnG, marginTop: 12 }} onClick={() => setTab('course')}>Go to course setup →</button>
-                </div>
-            }
-            {!mapsKey && (
-              <div style={{ ...card, marginTop: 12 }}>
-                <p style={{ ...lbl, marginBottom: 8 }}>Enable inline satellite view</p>
-                <p style={{ fontSize: 12, color: C.textMuted, margin: '0 0 10px' }}>
-                  Add a Google Maps Embed API key to embed satellite imagery directly. Get one free at{' '}
-                  <a href="https://console.cloud.google.com" target="_blank" rel="noreferrer" style={{ color: C.accent }}>console.cloud.google.com</a> → Maps Embed API.
-                  Add to <code>.env</code> as <code>VITE_GOOGLE_MAPS_KEY=AIza...</code> and restart, or paste below for this session.
-                </p>
-                <input style={inp} placeholder="Paste Maps API key here — applies instantly" onChange={e => setMapsKey(e.target.value)} />
-              </div>
-            )}
-          </div>
-        )} */}
+            <SectionHead title="Round Prep" sub="Set up your round step by step" />
 
-        {/* ── GAME PLAN ── */}
-        {tab === 'plan' && (
-          <div>
-            {course.name && course.source && course.source !== 'GolfCourseAPI' && course.source !== 'OpenGolfAPI' && (
-              <div style={{ background: C.amberMuted, border: `1px solid ${C.amber}`, borderRadius: 8, padding: '10px 14px', marginBottom: 12 }}>
-                <p style={{ fontSize: 12, color: C.amber, margin: 0, fontWeight: 500 }}>
-                  ⚠ Unverified course data — yardages sourced from web search. Claude will caveat where confidence is low. Verify against your local scorecard.
-                </p>
-              </div>
-            )}
-            {course.name && !plan && !planLoading && <DataAccuracyTier course={course} style={{ marginBottom: 12 }} />}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: isMobile ? 'flex-start' : 'center', marginBottom: 14, flexWrap: 'wrap', gap: isMobile ? 10 : 0 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <h2 style={{ fontSize: 18, fontWeight: 600, color: C.text, margin: 0 }}>Game plan</h2>
-                {!course.name && <Badge label="Profile-only brief" bg={C.blueMuted} fg={C.blue} />}
-                {planLoading && <><Spin /><span style={{ fontSize: 12, color: C.textMuted }}>{planPhase || 'Generating'}...</span></>}
-                {plan && !planLoading && <Badge label="Ready" />}
-              </div>
-              {!planLoading && plan && (
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                  <button style={btnG} onClick={copyPlan}>{copied ? '✓ Copied' : 'Copy text'}</button>
-                  <button style={btnG} onClick={printPlan}>Print / PDF</button>
-                  <button style={btnG} onClick={generate}>↺ Regenerate</button>
-                </div>
-              )}
-            </div>
-            {planError && (
-              <div style={{ ...card, borderColor: C.red, marginBottom: 12 }}>
-                <p style={{ color: C.red, fontSize: 13, margin: 0 }}>⚠ {planError}</p>
-              </div>
-            )}
-            {!plan && !planLoading && (
-              <div style={{ ...card, textAlign: 'center', padding: '3rem 2rem' }}>
-                <div style={{ fontSize: 32, marginBottom: 12 }}>⚡</div>
-                {course.name
-                  ? <>
-                      <p style={{ fontSize: 16, color: C.textMuted, margin: 0 }}>Ready to generate pre-round brief</p>
-                      <p style={{ fontSize: 12, color: C.textFaint, marginTop: 6 }}>{course.name} · {course.roundType}</p>
-                    </>
-                  : <>
-                      <p style={{ fontSize: 16, color: C.textMuted, margin: 0 }}>No course loaded — generate profile-only brief</p>
-                      <p style={{ fontSize: 12, color: C.textFaint, marginTop: 6 }}>Claude will analyze your scoring patterns and tendencies without hole-by-hole strategy</p>
-                    </>
-                }
-                <button style={{ ...btnP, marginTop: 16 }} onClick={generate}>Generate →</button>
-                {savedBriefs.length > 0 && (
-                  <div style={{ marginTop: 20, textAlign: 'left' }}>
-                    <p style={{ fontSize: 11, fontWeight: 600, color: C.textFaint, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Recent briefs</p>
-                    {savedBriefs.map((b, i) => (
-                      <div key={b.id || i} style={{
-                        display: 'flex', alignItems: 'center', gap: 8, background: C.bgInput, border: `1px solid ${C.border}`,
-                        borderRadius: 8, padding: '10px 14px', marginBottom: 6,
+            {/* Step indicator */}
+            <div style={{ display: 'flex', gap: 0, marginBottom: 20, overflowX: 'auto' }}>
+              {PREP_STEPS.map((s, i) => {
+                const isActive = prepStep === s.num
+                const isDone = prepStep > s.num || (s.num === 1 && course.name) || (s.num === 2 && course.selectedTee) || (s.num === 3 && course.holes.some(h => h.yardage)) || (s.num === 4 && weather)
+                const isClickable = s.num <= prepStep || isDone
+                return (
+                  <div key={s.num} style={{ display: 'flex', alignItems: 'center', flex: 1 }}>
+                    <button onClick={() => isClickable && setPrepStep(s.num)} style={{
+                      display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
+                      padding: isMobile ? '8px 4px' : '10px 12px', border: 'none', cursor: isClickable ? 'pointer' : 'default',
+                      background: 'transparent', fontFamily: F, flex: 1, minWidth: 0, opacity: isClickable ? 1 : 0.4,
+                    }}>
+                      <div style={{
+                        width: 32, height: 32, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: 14, fontWeight: 600,
+                        background: isActive ? C.accent : isDone ? C.greenMuted : C.bgInput,
+                        color: isActive ? C.bg : isDone ? C.green : C.textMuted,
+                        border: `2px solid ${isActive ? C.accent : isDone ? C.green : C.border}`,
+                        transition: 'all 0.2s',
                       }}>
-                        <button onClick={() => setPlan(b.plan)} style={{
-                          flex: 1, background: 'none', border: 'none', cursor: 'pointer',
-                          textAlign: 'left', fontFamily: F, padding: 0,
-                        }}>
-                          <span style={{ fontSize: 13, color: C.text, fontWeight: 500 }}>{b.course}</span>
-                          {b.tee && <span style={{ fontSize: 10, color: C.accent, marginLeft: 6 }}>{b.tee}</span>}
-                          <span style={{ fontSize: 11, color: C.textFaint, marginLeft: 8 }}>{b.date}</span>
-                        </button>
-                        <button onClick={() => {
-                          setSavedBriefs(prev => prev.filter((_, j) => j !== i))
-                          if (b.id && user) deleteSavedPlan(b.id).catch(() => {})
-                          try { const ls = JSON.parse(localStorage.getItem('golf_saved_briefs') || '[]'); ls.splice(i, 1); localStorage.setItem('golf_saved_briefs', JSON.stringify(ls)) } catch {}
-                        }} style={{ background: 'none', border: 'none', color: C.textFaint, cursor: 'pointer', fontSize: 14, padding: '2px 4px' }} title="Remove">×</button>
+                        {isDone && !isActive ? '✓' : s.num}
                       </div>
-                    ))}
+                      <span style={{ fontSize: isMobile ? 9 : 11, color: isActive ? C.text : C.textMuted, fontWeight: isActive ? 600 : 400, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%' }}>
+                        {isMobile ? s.label.split(' ')[0] : s.label}
+                      </span>
+                    </button>
+                    {i < PREP_STEPS.length - 1 && (
+                      <div style={{ width: isMobile ? 12 : 24, height: 2, background: isDone ? C.green : C.border, flexShrink: 0 }} />
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+
+            {/* Step 1: Select Course */}
+            {prepStep === 1 && (
+              <div>
+                <CourseSearch
+                  apiKey={apiKey}
+                  golfCourseApiKey={golfCourseApiKey}
+                  onApiKeyNeeded={() => {}}
+                  onSelect={(r) => { applyScorecard(r); setPrepStep(r.tees?.length > 0 ? 2 : 3) }}
+                />
+                {course.name && (
+                  <div style={{ ...card, marginTop: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                    <div>
+                      <p style={{ fontSize: 14, fontWeight: 600, color: C.text, margin: 0 }}>{course.name}</p>
+                      <p style={{ fontSize: 12, color: C.textMuted, margin: '2px 0 0' }}>{course.location} · Par {course.par} · {course.yardage ? Number(course.yardage).toLocaleString() + 'y' : ''}</p>
+                    </div>
+                    <button style={btnP} onClick={() => setPrepStep(course.tees?.length > 0 ? 2 : 3)}>Continue →</button>
                   </div>
                 )}
               </div>
             )}
-            {(plan || planLoading) && (<>
-              {plan && !planLoading && parsedHoles.holes.length > 0 && (
-                <div style={{ display: 'flex', gap: 4, marginBottom: 12, background: C.bgInput, borderRadius: 8, padding: 3 }}>
-                  {[['companion', 'Round companion'], ['briefing', 'Full briefing']].map(([id, label]) => (
-                    <button key={id} onClick={() => setPlanView(id)} style={{
-                      flex: 1, padding: '8px 12px', fontSize: 12, fontWeight: 500, fontFamily: F,
-                      border: 'none', borderRadius: 6, cursor: 'pointer',
-                      background: planView === id ? C.accent : 'transparent',
-                      color: planView === id ? C.bg : C.textMuted,
-                    }}>{label}</button>
-                  ))}
-                </div>
-              )}
 
-              {planView === 'companion' && plan && !planLoading && parsedHoles.holes.length > 0 ? (
-                <div
-                  onTouchStart={e => { e.currentTarget._swipeX = e.touches[0].clientX }}
-                  onTouchEnd={e => {
-                    const dx = e.changedTouches[0].clientX - (e.currentTarget._swipeX || 0)
-                    if (Math.abs(dx) > 60) {
-                      if (dx < 0 && currentHole < parsedHoles.holes.length - 1) setCurrentHole(h => h + 1)
-                      if (dx > 0 && currentHole > 0) setCurrentHole(h => h - 1)
-                    }
-                  }}>
-                  {/* Hole picker chips */}
-                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 12 }}>
-                    {parsedHoles.holes.map((h, i) => (
-                      <button key={h.num} onClick={() => setCurrentHole(i)} style={{
-                        width: 36, height: 36, borderRadius: 8, border: `1px solid ${currentHole === i ? C.accent : C.border}`,
-                        background: currentHole === i ? C.accentMuted : C.bgInput,
-                        color: currentHole === i ? C.accent : C.textMuted,
-                        fontSize: 13, fontWeight: 600, fontFamily: F, cursor: 'pointer',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      }}>{h.num}</button>
-                    ))}
-                  </div>
-
-                  {/* Score tracker bar */}
-                  {(() => {
-                    const holesPlayed = parsedHoles.holes.filter(h => holeScores[h.num] != null)
-                    if (!holesPlayed.length && !holeScores[parsedHoles.holes[currentHole]?.num]) return null
-                    const totalStrokes = holesPlayed.reduce((sum, h) => sum + (holeScores[h.num] || 0), 0)
-                    const totalPar = holesPlayed.reduce((sum, h) => {
-                      const m = h.content.match(/Par\s+(\d)/i)
-                      return sum + (m ? parseInt(m[1]) : 4)
-                    }, 0)
-                    const diff = totalStrokes - totalPar
-                    const thru = holesPlayed.length
-                    const target = course.targetScore || (course.par || 72)
-                    const targetThru = holesPlayed.reduce((sum, h) => {
-                      const m = h.content.match(/Par\s+(\d)/i)
-                      return sum + (m ? parseInt(m[1]) : 4)
-                    }, 0)
-                    const vTarget = totalStrokes - targetThru
-                    return (
-                      <div style={{ background: C.bgInput, borderRadius: 8, padding: '8px 14px', marginBottom: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
-                        <span style={{ fontSize: 13, fontWeight: 600, color: diff <= 0 ? C.green : diff <= 3 ? C.amber : C.red }}>
-                          {diff === 0 ? 'E' : diff > 0 ? `+${diff}` : diff} thru {thru}
-                        </span>
-                        <span style={{ fontSize: 11, color: C.textMuted }}>
-                          Strokes: {totalStrokes} · Par: {totalPar}
-                          {typeof target === 'number' && ` · vs target: ${vTarget >= 0 ? '+' : ''}${vTarget}`}
-                        </span>
-                      </div>
-                    )
-                  })()}
-
-                  {/* Current hole detail */}
+            {/* Step 2: Choose Tees */}
+            {prepStep === 2 && (
+              <div>
+                {course.tees?.length > 0 ? (
                   <div style={card}>
-                    {currentHole === 0 && parsedHoles.preamble && (
-                      <div style={{ marginBottom: 16, paddingBottom: 12, borderBottom: `1px solid ${C.border}` }}>
-                        {renderPlan(parsedHoles.preamble)}
+                    <p style={{ ...lbl, marginBottom: 12 }}>Select your tee — {course.name}</p>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {course.tees.map((t, i) => {
+                        const isSelected = course.selectedTee === t.name
+                        return (
+                          <div key={i}
+                            onClick={() => {
+                              setCourse(prev => ({ ...prev, selectedTee: t.name, yardage: String(t.yardage || prev.yardage), rating: String(t.rating || prev.rating), slope: String(t.slope || prev.slope) }))
+                            }}
+                            style={{
+                              background: isSelected ? C.accentMuted : C.bgInput,
+                              border: `1px solid ${isSelected ? C.accent : C.border}`,
+                              borderRadius: 10, padding: '14px 18px', cursor: 'pointer',
+                              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                              transition: 'all 0.15s',
+                            }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                              <div style={{ width: 20, height: 20, borderRadius: '50%', border: `2px solid ${isSelected ? C.accent : C.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                {isSelected && <div style={{ width: 10, height: 10, borderRadius: '50%', background: C.accent }} />}
+                              </div>
+                              <span style={{ fontSize: 15, fontWeight: 600, color: isSelected ? C.accent : C.text }}>{t.name}</span>
+                              <span style={{ fontSize: 13, color: C.accent, fontWeight: 500 }}>{Number(t.yardage).toLocaleString()}y</span>
+                            </div>
+                            <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
+                              <span style={{ fontSize: 12, color: C.textMuted }}>Par {t.par}</span>
+                              {t.rating && <span style={{ fontSize: 12, color: C.textMuted }}>{t.rating}/{t.slope}</span>}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 16 }}>
+                      <button style={btnG} onClick={() => setPrepStep(1)}>← Back</button>
+                      <button style={{ ...btnP, opacity: course.selectedTee ? 1 : 0.5 }} disabled={!course.selectedTee} onClick={() => setPrepStep(3)}>Continue →</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ ...card, textAlign: 'center', padding: '2rem' }}>
+                    <p style={{ fontSize: 14, color: C.textMuted, margin: '0 0 12px' }}>No tee options available for this course. You can proceed to review the scorecard.</p>
+                    <div style={{ display: 'flex', justifyContent: 'center', gap: 10 }}>
+                      <button style={btnG} onClick={() => setPrepStep(1)}>← Back</button>
+                      <button style={btnP} onClick={() => setPrepStep(3)}>Continue →</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Step 3: Scorecard Preview & Course Details */}
+            {prepStep === 3 && (
+              <div>
+                {course.name && <DataAccuracyTier course={course} style={{ marginBottom: 12 }} />}
+                <div style={{ ...card, marginBottom: 12 }}>
+                  <p style={{ ...lbl, marginBottom: 12 }}>Course details</p>
+                  <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : '2fr 1fr 1fr 1fr', gap: 10 }}>
+                    <div><label style={lbl}>Course name</label><input style={inp} value={course.name} onChange={e => setCourse({ ...course, name: e.target.value })} placeholder="e.g. Rhodes Ranch Golf Club" /></div>
+                    <div><label style={lbl}>City / State</label><input style={inp} value={course.location} onChange={e => setCourse({ ...course, location: e.target.value })} placeholder="Las Vegas, NV" /></div>
+                    <div><label style={lbl}>Total yardage</label><input style={inp} value={course.yardage} onChange={e => setCourse({ ...course, yardage: e.target.value })} placeholder="6582" /></div>
+                    <div><label style={lbl}>Rating / Slope</label><input style={inp} value={`${course.rating}${course.slope ? '/' + course.slope : ''}`} onChange={e => { const [r, s] = e.target.value.split('/'); setCourse({ ...course, rating: r?.trim(), slope: s?.trim() || course.slope }) }} placeholder="70.6 / 128" /></div>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 10, marginTop: 10 }}>
+                    <div><label style={lbl}>Conditions</label><select style={inp} value={course.conditions} onChange={e => setCourse({ ...course, conditions: e.target.value })}>{['Normal','Firm & fast','Soft','Wet','Dry & links-like'].map(o => <option key={o}>{o}</option>)}</select></div>
+                    <div><label style={lbl}>Round type</label><select style={inp} value={course.roundType} onChange={e => setCourse({ ...course, roundType: e.target.value })}>{['Stroke play tournament','Match play','Qualifier','Q School','Practice round','Casual round'].map(o => <option key={o}>{o}</option>)}</select></div>
+                    <div><label style={lbl}>Target score</label><input style={inp} value={course.targetScore} onChange={e => setCourse({ ...course, targetScore: e.target.value })} placeholder="-2 (69)" /></div>
+                    <div><label style={lbl}>Elevation (ft)</label><input style={inp} type="number" value={course.elevation} onChange={e => setCourse({ ...course, elevation: e.target.value })} placeholder="e.g. 4500" /></div>
+                  </div>
+                  <div style={{ marginTop: 10 }}>
+                    <label style={lbl}>General course notes</label>
+                    <textarea style={{ ...inp, height: 56, resize: 'vertical' }} value={course.notes} onChange={e => setCourse({ ...course, notes: e.target.value })} placeholder="Green speed, firmness, key local knowledge, previous experience..." />
+                  </div>
+                </div>
+
+                {course.holes && <ScorecardPreview holes={course.holes} />}
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 16 }}>
+                  <button style={btnG} onClick={() => setPrepStep(course.tees?.length > 0 ? 2 : 1)}>← Back</button>
+                  <button style={btnP} onClick={() => setPrepStep(4)}>Continue →</button>
+                </div>
+              </div>
+            )}
+
+            {/* Step 4: Weather & Tee Time */}
+            {prepStep === 4 && (
+              <div>
+                <WeatherPanel
+                  apiKey={apiKey} course={course}
+                  coords={coords} setCoords={setCoords}
+                  teeTime={teeTime} setTeeTime={setTeeTime}
+                  teeDate={teeDate} setTeeDate={setTeeDate}
+                  pace={pace} setPace={setPace}
+                  timezone={timezone}
+                  weather={weather} setWeather={setWeather}
+                  weatherLoading={weatherLoading} setWeatherLoading={setWeatherLoading}
+                />
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 16 }}>
+                  <button style={btnG} onClick={() => setPrepStep(3)}>← Back</button>
+                  <button style={btnP} onClick={() => setPrepStep(5)}>Continue →</button>
+                </div>
+              </div>
+            )}
+
+            {/* Step 5: Generate Report */}
+            {prepStep === 5 && (
+              <div>
+                {/* Summary card before generation */}
+                {!plan && !planLoading && (
+                  <div style={{ ...card, textAlign: 'center', padding: '2rem' }}>
+                    <div style={{ fontSize: 40, marginBottom: 14 }}>⚡</div>
+                    <h3 style={{ fontSize: 18, fontWeight: 600, color: C.text, margin: '0 0 8px' }}>Ready to generate your round prep report</h3>
+                    {course.name ? (
+                      <div style={{ marginBottom: 20 }}>
+                        <p style={{ fontSize: 14, color: C.textMuted, margin: '0 0 4px' }}>{course.name} {course.selectedTee ? `(${course.selectedTee})` : ''}</p>
+                        <p style={{ fontSize: 12, color: C.textFaint, margin: 0 }}>
+                          Par {course.par} · {course.yardage ? Number(course.yardage).toLocaleString() + 'y' : ''} · {course.roundType}
+                          {weather ? ' · Weather loaded' : ''}
+                        </p>
+                      </div>
+                    ) : (
+                      <p style={{ fontSize: 14, color: C.textMuted, margin: '0 0 20px' }}>No course loaded — Claude will analyze your player profile and scoring patterns</p>
+                    )}
+
+                    {/* Model selector inline */}
+                    <div style={{ marginBottom: 20, textAlign: 'left', maxWidth: 500, margin: '0 auto 20px' }}>
+                      <p style={{ ...lbl, marginBottom: 8 }}>AI Model</p>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8 }}>
+                        {AVAILABLE_MODELS.map(m => {
+                          const active = selectedModel === m.id
+                          return (
+                            <button key={m.id} onClick={() => setSelectedModel(m.id)} style={{
+                              background: active ? C.accentMuted : C.bgInput,
+                              border: `1px solid ${active ? C.accent : C.border}`,
+                              borderRadius: 8, padding: '8px 12px', cursor: 'pointer', textAlign: 'left',
+                              fontFamily: F, transition: 'border-color .15s',
+                            }}>
+                              <span style={{ fontSize: 13, fontWeight: 600, color: active ? C.accent : C.text }}>{m.name}</span>
+                              <span style={{ fontSize: 10, color: C.textFaint, marginLeft: 6 }}>{m.speed}</span>
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </div>
+
+                    <button style={{ ...btnP, padding: '12px 32px', fontSize: 15 }} onClick={generate}>Generate Round Prep Report →</button>
+                  </div>
+                )}
+
+                {/* Loading / streaming state */}
+                {planLoading && (
+                  <div style={{ ...card, padding: '2rem', textAlign: 'center' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, marginBottom: 16 }}>
+                      <Spin /><span style={{ fontSize: 14, color: C.textMuted }}>{planPhase || 'Generating'}...</span>
+                    </div>
+                    {plan && (
+                      <div style={{ textAlign: 'left' }}>
+                        {renderPlan(plan)}
+                        <span style={{ display: 'inline-block', width: 7, height: 15, background: C.accent, animation: 'blink 0.8s step-end infinite', marginLeft: 2, verticalAlign: 'middle' }} />
                       </div>
                     )}
-                    {renderPlan(parsedHoles.holes[currentHole]?.content || '')}
-                    <GreenView green={parsedHoles.holes[currentHole]?.green} holeNum={parsedHoles.holes[currentHole]?.num} />
+                  </div>
+                )}
 
-                    {/* Per-hole score entry */}
-                    {(() => {
-                      const hNum = parsedHoles.holes[currentHole]?.num
-                      if (!hNum) return null
-                      const parMatch = (parsedHoles.holes[currentHole]?.content || '').match(/Par\s+(\d)/i)
-                      const par = parMatch ? parseInt(parMatch[1]) : 4
-                      const score = holeScores[hNum]
-                      return (
-                        <div style={{ borderTop: `1px solid ${C.border}`, marginTop: 12, paddingTop: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                          <span style={{ fontSize: 12, color: C.textMuted, fontWeight: 500 }}>Score (par {par})</span>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                            <button onClick={() => setScore(hNum, (score || par) - 1)} style={{
-                              width: 32, height: 32, borderRadius: 8, border: `1px solid ${C.border}`,
-                              background: C.bgInput, color: C.text, fontSize: 16, fontFamily: F, cursor: 'pointer',
-                              display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            }}>−</button>
-                            <span style={{
-                              width: 36, textAlign: 'center', fontSize: 18, fontWeight: 700, fontFamily: F,
-                              color: score == null ? C.textFaint : score < par ? C.green : score === par ? C.text : score === par + 1 ? C.amber : C.red,
-                            }}>{score ?? '–'}</span>
-                            <button onClick={() => setScore(hNum, (score || par) + 1)} style={{
-                              width: 32, height: 32, borderRadius: 8, border: `1px solid ${C.border}`,
-                              background: C.bgInput, color: C.text, fontSize: 16, fontFamily: F, cursor: 'pointer',
-                              display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            }}>+</button>
-                            {score != null && (
-                              <span style={{ fontSize: 11, color: score < par ? C.green : score === par ? C.textMuted : C.red, minWidth: 40 }}>
-                                {score < par ? `${score - par}` : score === par ? 'Par' : `+${score - par}`}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      )
-                    })()}
+                {/* Completed plan display */}
+                {plan && !planLoading && (<>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <Badge label="Report Ready" bg={C.greenMuted} fg={C.green} />
+                      <span style={{ fontSize: 13, color: C.textMuted }}>{course.name || 'Profile brief'}</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button style={btnG} onClick={copyPlan}>{copied ? '✓ Copied' : 'Copy text'}</button>
+                      <button style={btnG} onClick={printPlan}>Print / PDF</button>
+                      <button style={btnG} onClick={generate}>↺ Regenerate</button>
+                    </div>
                   </div>
 
-                  {/* Prev / Next navigation */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 12, gap: 8 }}>
-                    <button style={{ ...btnG, flex: 1, opacity: currentHole === 0 ? 0.4 : 1, textAlign: 'center' }}
-                      disabled={currentHole === 0}
-                      onClick={() => setCurrentHole(h => Math.max(0, h - 1))}>
-                      ← Hole {parsedHoles.holes[currentHole - 1]?.num || ''}
-                    </button>
-                    <button style={{ ...btnG, flex: 1, opacity: currentHole >= parsedHoles.holes.length - 1 ? 0.4 : 1, textAlign: 'center' }}
-                      disabled={currentHole >= parsedHoles.holes.length - 1}
-                      onClick={() => setCurrentHole(h => Math.min(parsedHoles.holes.length - 1, h + 1))}>
-                      Hole {parsedHoles.holes[currentHole + 1]?.num || ''} →
-                    </button>
-                  </div>
-
-                  {/* Post-amble (weather adjustments, pressure management) */}
-                  {parsedHoles.postamble.trim() && (
-                    <div style={{ ...card, marginTop: 12 }}>
-                      {renderPlan(parsedHoles.postamble)}
+                  {parsedHoles.holes.length > 0 && (
+                    <div style={{ display: 'flex', gap: 4, marginBottom: 12, background: C.bgInput, borderRadius: 8, padding: 3 }}>
+                      {[['companion', 'Round companion'], ['briefing', 'Full briefing']].map(([id, label]) => (
+                        <button key={id} onClick={() => setPlanView(id)} style={{
+                          flex: 1, padding: '8px 12px', fontSize: 12, fontWeight: 500, fontFamily: F,
+                          border: 'none', borderRadius: 6, cursor: 'pointer',
+                          background: planView === id ? C.accent : 'transparent',
+                          color: planView === id ? C.bg : C.textMuted,
+                        }}>{label}</button>
+                      ))}
                     </div>
                   )}
+
+                  {planView === 'companion' && parsedHoles.holes.length > 0 ? (
+                    <div
+                      onTouchStart={e => { e.currentTarget._swipeX = e.touches[0].clientX }}
+                      onTouchEnd={e => {
+                        const dx = e.changedTouches[0].clientX - (e.currentTarget._swipeX || 0)
+                        if (Math.abs(dx) > 60) {
+                          if (dx < 0 && currentHole < parsedHoles.holes.length - 1) setCurrentHole(h => h + 1)
+                          if (dx > 0 && currentHole > 0) setCurrentHole(h => h - 1)
+                        }
+                      }}>
+                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 12 }}>
+                        {parsedHoles.holes.map((h, i) => (
+                          <button key={h.num} onClick={() => setCurrentHole(i)} style={{
+                            width: 36, height: 36, borderRadius: 8, border: `1px solid ${currentHole === i ? C.accent : C.border}`,
+                            background: currentHole === i ? C.accentMuted : C.bgInput,
+                            color: currentHole === i ? C.accent : C.textMuted,
+                            fontSize: 13, fontWeight: 600, fontFamily: F, cursor: 'pointer',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          }}>{h.num}</button>
+                        ))}
+                      </div>
+                      {(() => {
+                        const holesPlayed = parsedHoles.holes.filter(h => holeScores[h.num] != null)
+                        if (!holesPlayed.length && !holeScores[parsedHoles.holes[currentHole]?.num]) return null
+                        const totalStrokes = holesPlayed.reduce((sum, h) => sum + (holeScores[h.num] || 0), 0)
+                        const totalPar = holesPlayed.reduce((sum, h) => { const m = h.content.match(/Par\s+(\d)/i); return sum + (m ? parseInt(m[1]) : 4) }, 0)
+                        const diff = totalStrokes - totalPar
+                        return (
+                          <div style={{ background: C.bgInput, borderRadius: 8, padding: '8px 14px', marginBottom: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+                            <span style={{ fontSize: 13, fontWeight: 600, color: diff <= 0 ? C.green : diff <= 3 ? C.amber : C.red }}>
+                              {diff === 0 ? 'E' : diff > 0 ? `+${diff}` : diff} thru {holesPlayed.length}
+                            </span>
+                            <span style={{ fontSize: 11, color: C.textMuted }}>Strokes: {totalStrokes} · Par: {totalPar}</span>
+                          </div>
+                        )
+                      })()}
+                      <div style={card}>
+                        {currentHole === 0 && parsedHoles.preamble && <div style={{ marginBottom: 16, paddingBottom: 12, borderBottom: `1px solid ${C.border}` }}>{renderPlan(parsedHoles.preamble)}</div>}
+                        {renderPlan(parsedHoles.holes[currentHole]?.content || '')}
+                        <GreenView green={parsedHoles.holes[currentHole]?.green} holeNum={parsedHoles.holes[currentHole]?.num} />
+                        {(() => {
+                          const hNum = parsedHoles.holes[currentHole]?.num; if (!hNum) return null
+                          const parMatch = (parsedHoles.holes[currentHole]?.content || '').match(/Par\s+(\d)/i)
+                          const par = parMatch ? parseInt(parMatch[1]) : 4; const score = holeScores[hNum]
+                          return (
+                            <div style={{ borderTop: `1px solid ${C.border}`, marginTop: 12, paddingTop: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                              <span style={{ fontSize: 12, color: C.textMuted, fontWeight: 500 }}>Score (par {par})</span>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <button onClick={() => setScore(hNum, (score || par) - 1)} style={{ width: 32, height: 32, borderRadius: 8, border: `1px solid ${C.border}`, background: C.bgInput, color: C.text, fontSize: 16, fontFamily: F, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>−</button>
+                                <span style={{ width: 36, textAlign: 'center', fontSize: 18, fontWeight: 700, fontFamily: F, color: score == null ? C.textFaint : score < par ? C.green : score === par ? C.text : score === par + 1 ? C.amber : C.red }}>{score ?? '–'}</span>
+                                <button onClick={() => setScore(hNum, (score || par) + 1)} style={{ width: 32, height: 32, borderRadius: 8, border: `1px solid ${C.border}`, background: C.bgInput, color: C.text, fontSize: 16, fontFamily: F, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>+</button>
+                                {score != null && <span style={{ fontSize: 11, color: score < par ? C.green : score === par ? C.textMuted : C.red, minWidth: 40 }}>{score < par ? `${score - par}` : score === par ? 'Par' : `+${score - par}`}</span>}
+                              </div>
+                            </div>
+                          )
+                        })()}
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 12, gap: 8 }}>
+                        <button style={{ ...btnG, flex: 1, opacity: currentHole === 0 ? 0.4 : 1, textAlign: 'center' }} disabled={currentHole === 0} onClick={() => setCurrentHole(h => Math.max(0, h - 1))}>← Hole {parsedHoles.holes[currentHole - 1]?.num || ''}</button>
+                        <button style={{ ...btnG, flex: 1, opacity: currentHole >= parsedHoles.holes.length - 1 ? 0.4 : 1, textAlign: 'center' }} disabled={currentHole >= parsedHoles.holes.length - 1} onClick={() => setCurrentHole(h => Math.min(parsedHoles.holes.length - 1, h + 1))}>Hole {parsedHoles.holes[currentHole + 1]?.num || ''} →</button>
+                      </div>
+                      {parsedHoles.postamble.trim() && <div style={{ ...card, marginTop: 12 }}>{renderPlan(parsedHoles.postamble)}</div>}
+                    </div>
+                  ) : (
+                    <div style={card}>
+                      {renderPlan(plan)}
+                    </div>
+                  )}
+                </>)}
+
+                {planError && (
+                  <div style={{ ...card, borderColor: C.red, marginTop: 12 }}>
+                    <p style={{ color: C.red, fontSize: 13, margin: 0 }}>⚠ {planError}</p>
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', justifyContent: 'flex-start', marginTop: 16 }}>
+                  <button style={btnG} onClick={() => setPrepStep(4)}>← Back</button>
                 </div>
-              ) : (
-                <div style={card}>
-                  {renderPlan(plan)}
-                  {planLoading && <span style={{ display: 'inline-block', width: 7, height: 15, background: C.accent, animation: 'blink 0.8s step-end infinite', marginLeft: 2, verticalAlign: 'middle' }} />}
-                </div>
-              )}
-            </>)}
+              </div>
+            )}
           </div>
         )}
 
-        {/* ── IMPORT DATA ── */}
-        {tab === 'import' && (
-          <ImportTab clubs={clubs} setClubs={setClubs} C={C} card={card} inp={inp} lbl={lbl} btnP={btnP} btnG={btnG} />
+        {/* ══════════════════════════════════════════════════════════════════
+            SECTION 3: HISTORY
+            Saved round prep reports with notes, delete confirmation, dates
+           ══════════════════════════════════════════════════════════════════ */}
+        {tab === 'history' && (
+          <div>
+            <SectionHead title="History" sub="Your saved round prep reports and notes" />
+
+            {savedBriefs.length === 0 ? (
+              <div style={{ ...card, textAlign: 'center', padding: '3rem 2rem' }}>
+                <div style={{ fontSize: 40, marginBottom: 12 }}>📋</div>
+                <p style={{ fontSize: 16, color: C.textMuted, margin: '0 0 8px' }}>No saved reports yet</p>
+                <p style={{ fontSize: 12, color: C.textFaint, margin: '0 0 20px' }}>Round prep reports are saved automatically when generated.</p>
+                <button style={btnP} onClick={() => { setTab('prep'); setPrepStep(1) }}>Start Round Prep →</button>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {savedBriefs.map((b, i) => {
+                  const confirmState = deleteConfirm[i]
+                  const noteKey = b.id || `local-${i}`
+                  const note = briefNotes[noteKey] ?? (b.notes || '')
+                  return (
+                    <div key={b.id || i} style={{ ...card, borderColor: C.border }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                            <span style={{ fontSize: 15, fontWeight: 600, color: C.text }}>{b.course}</span>
+                            {b.tee && <Badge label={b.tee} bg={C.accentMuted} fg={C.accent} />}
+                          </div>
+                          <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: 12, color: C.textMuted }}>Generated: {b.date || 'Unknown date'}</span>
+                            {b.plan && <span style={{ fontSize: 11, color: C.textFaint }}>{(b.plan.match(/###?\s*Hole/gi) || []).length} holes covered</span>}
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                          <button style={{ ...btnP, padding: '6px 14px', fontSize: 12 }}
+                            onClick={() => { setPlan(b.plan); setTab('prep'); setPrepStep(5) }}>
+                            View Report
+                          </button>
+                          {/* Multi-step delete */}
+                          {!confirmState ? (
+                            <button style={{ ...btnG, color: C.red, borderColor: C.red, padding: '6px 14px', fontSize: 12 }}
+                              onClick={() => setDeleteConfirm(prev => ({ ...prev, [i]: 'first' }))}>
+                              Delete
+                            </button>
+                          ) : confirmState === 'first' ? (
+                            <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                              <span style={{ fontSize: 11, color: C.red, fontWeight: 600 }}>Are you sure?</span>
+                              <button style={{ ...btnG, color: C.red, borderColor: C.red, padding: '4px 10px', fontSize: 11 }}
+                                onClick={() => setDeleteConfirm(prev => ({ ...prev, [i]: 'final' }))}>
+                                Yes, delete
+                              </button>
+                              <button style={{ ...btnG, padding: '4px 10px', fontSize: 11 }}
+                                onClick={() => setDeleteConfirm(prev => { const n = { ...prev }; delete n[i]; return n })}>
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                              <span style={{ fontSize: 11, color: C.red, fontWeight: 600 }}>This cannot be undone!</span>
+                              <button style={{ background: C.red, color: '#fff', border: 'none', borderRadius: 6, padding: '4px 12px', fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: F }}
+                                onClick={() => {
+                                  setSavedBriefs(prev => prev.filter((_, j) => j !== i))
+                                  if (b.id && user) deleteSavedPlan(b.id).catch(() => {})
+                                  try { const ls = JSON.parse(localStorage.getItem('golf_saved_briefs') || '[]'); ls.splice(i, 1); localStorage.setItem('golf_saved_briefs', JSON.stringify(ls)) } catch {}
+                                  setDeleteConfirm(prev => { const n = { ...prev }; delete n[i]; return n })
+                                }}>
+                                Permanently delete
+                              </button>
+                              <button style={{ ...btnG, padding: '4px 10px', fontSize: 11 }}
+                                onClick={() => setDeleteConfirm(prev => { const n = { ...prev }; delete n[i]; return n })}>
+                                Cancel
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Notes for refining AI */}
+                      <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 10 }}>
+                        <label style={{ ...lbl, marginBottom: 6 }}>Notes for AI refinement</label>
+                        <textarea
+                          style={{ ...inp, height: 48, resize: 'vertical', fontSize: 12 }}
+                          value={note}
+                          onChange={e => {
+                            const val = e.target.value
+                            setBriefNotes(prev => ({ ...prev, [noteKey]: val }))
+                          }}
+                          onBlur={() => {
+                            setSavedBriefs(prev => prev.map((bb, j) => j === i ? { ...bb, notes: note } : bb))
+                            try { const ls = JSON.parse(localStorage.getItem('golf_saved_briefs') || '[]'); if (ls[i]) { ls[i].notes = note; localStorage.setItem('golf_saved_briefs', JSON.stringify(ls)) } } catch {}
+                          }}
+                          placeholder="e.g. Strategy on hole 7 was wrong — there's water short left. The wind was stronger than forecasted. Club suggestions were one club too long..."
+                        />
+                        <p style={{ fontSize: 10, color: C.textFaint, margin: '4px 0 0' }}>
+                          These notes help refine future recommendations for this course.
+                        </p>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
         )}
 
         {/* ── SETTINGS / ADMIN ── */}
@@ -3213,6 +3115,27 @@ Be direct. No filler. ALL 18 HOLES.`
                 </p>
               </div>
 
+              {/* ── API Keys ── */}
+              <div style={{ ...card, marginBottom: 16 }}>
+                {sectionHead('API Keys', 'Optional — course search uses a free API by default. Add keys for premium data sources.')}
+                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 12 }}>
+                  <div>
+                    <label style={lbl}>GolfCourseAPI key (optional)</label>
+                    <input type="password" style={inp} value={golfCourseApiKey}
+                      onChange={e => setGolfKey(e.target.value)}
+                      placeholder="For verified scorecards — golfcourseapi.com" />
+                    <p style={{ fontSize: 10, color: C.textFaint, margin: '4px 0 0' }}>Provides verified hole-by-hole data with tee options</p>
+                  </div>
+                  <div>
+                    <label style={lbl}>Anthropic API key (optional)</label>
+                    <input type="password" style={inp} value={apiKey}
+                      onChange={e => setApiKey(e.target.value)}
+                      placeholder="sk-ant-... (uses server proxy if empty)" />
+                    <p style={{ fontSize: 10, color: C.textFaint, margin: '4px 0 0' }}>Only needed if you're self-hosting or want direct API access</p>
+                  </div>
+                </div>
+              </div>
+
               {/* ── Course cache ── */}
               <div style={{ ...card, marginBottom: 16 }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
@@ -3250,7 +3173,7 @@ Be direct. No filler. ALL 18 HOLES.`
                           </p>
                         </div>
                         <div style={{ display: 'flex', gap: 8, marginLeft: 12, flexShrink: 0 }}>
-                          <button style={btnG} onClick={() => { applyScorecard(c); setTab('course') }}>Load →</button>
+                          <button style={btnG} onClick={() => { applyScorecard(c); setTab('prep'); setPrepStep(3) }}>Load →</button>
                           <button style={{ ...btnG, color: C.red, borderColor: C.red }}
                             onClick={() => {
                               const updated = loadCourseCache()
@@ -3352,28 +3275,6 @@ Be direct. No filler. ALL 18 HOLES.`
           )
         })()}
 
-        {/* Footer nav */}
-        {tab !== 'plan' && tab !== 'admin' && (
-          <div style={{ marginTop: 16, ...card, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
-            <div>
-              <p style={{ fontSize: 13, fontWeight: 500, color: C.text, margin: 0 }}>
-                {tab === 'player'  ? 'Next: add recent scoring history' :
-                 tab === 'history' ? 'Next: search for your course'    :
-                 course.name       ? `Ready — generate pre-round brief for ${course.name}` :
-                                    'Generate a profile-only brief, or set up a course first'}
-              </p>
-              <p style={{ fontSize: 11, color: C.textMuted, margin: '2px 0 0' }}>
-                {tab === 'player'  ? 'Tournament vs casual splits and par-type trends feed directly into your AI brief' :
-                 tab === 'history' ? 'GolfCourseAPI pulls verified hole-by-hole yardages'                               :
-                 course.name       ? 'Claude generates a full hole-by-hole competitive brief with weather adjustments'  :
-                                    'No course loaded — Claude will analyze your player profile and scoring patterns'}
-              </p>
-            </div>
-            <button style={btnP} onClick={() => nextTab[tab] ? setTab(nextTab[tab]) : generate()}>
-              {tab === 'course' && !course.name ? 'Skip to profile brief →' : 'Continue →'}
-            </button>
-          </div>
-        )}
       </div>
     </div>
   )
