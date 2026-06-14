@@ -201,6 +201,7 @@ export default function OnboardingScreen({ onComplete }) {
   const [name,        setName]        = useState('')
   const [handicap,    setHandicap]    = useState('')
   const [ghin,        setGhin]        = useState('')
+  const [handedness,  setHandedness]  = useState('Right')
   const [miss,        setMiss]        = useState('Right')
   const [ballFlight,  setBallFlight]  = useState('Mid')
   const [goals,       setGoals]       = useState('')
@@ -228,6 +229,7 @@ export default function OnboardingScreen({ onComplete }) {
       name:        name.trim() || 'Player',
       handicap:    handicap || '',
       ghin:        ghin || '',
+      handedness,
       miss,
       ballFlight,
       goals:       goals.trim(),
@@ -277,7 +279,14 @@ export default function OnboardingScreen({ onComplete }) {
               </div>
             </div>
 
-            <div style={S.grid2}>
+            <div style={{ ...S.grid2, gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))' }}>
+              <div>
+                <label style={S.label}>Handedness</label>
+                <select style={S.select} value={handedness} onChange={e => setHandedness(e.target.value)}>
+                  <option value="Right">Right-handed</option>
+                  <option value="Left">Left-handed</option>
+                </select>
+              </div>
               <div>
                 <label style={S.label}>Primary miss</label>
                 <select style={S.select} value={miss} onChange={e => setMiss(e.target.value)}>
