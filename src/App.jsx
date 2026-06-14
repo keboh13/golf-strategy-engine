@@ -582,47 +582,6 @@ function normalizeGolfCourseAPICourse(raw, selectedTee) {
   }
 }
 
-// ─── Design data enrichment (async, non-blocking) ────────────────────────────
-// Tries OSM first, then falls back to Claude web search for holes without data
-async function enrichCourseWithOSM(courseData, loadId, setDetail, setCachedCourse, setStatus, apiKey) {
-  let enriched = courseData
-  let osmWorked = false
-
-  // Step 1: Try OSM
-  try {
-    setStatus('Loading hole design data from OpenStreetMap…')
-    const osmData = await fetchOSMCourseData(courseData.lat, courseData.lng)
-    if (osmData) {
-      const { holes: enrichedHoles, hasDesignData } = enrichHolesWithOSM(courseData.holes, osmData)
-      if (hasDesignData) {
-        enriched = { ...courseData, holes: enrichedHoles, osmEnriched: true }
-        osmWorked = true
-        setDetail(enriched)
-        setCachedCourse(enriched)
-      }
-    }
-  } catch { /* OSM failed, continue to web search */ }
-
-  // Step 2: Check how many holes have design data from OSM
-  const holesWithDesign = enriched.holes.filter(h => h.osmDesign?.hazards?.length > 0 || h.notes).length
-  const needsWebFallback = holesWithDesign < 9 && apiKey
-
-  if (needsWebFallback) {
-    try {
-      setStatus('Searching for hole design details…')
-      const designData = await fetchHoleDesignViaSearch(apiKey, enriched.name, enriched.location)
-      if (designData?.holes?.length) {
-        const mergedHoles = mergeDesignDataIntoHoles(enriched.holes, designData)
-        enriched = { ...enriched, holes: mergedHoles, webDesignSource: designData.source || 'web search', osmEnriched: true }
-        setDetail(enriched)
-        setCachedCourse(enriched)
-      }
-    } catch { /* web search failed, that's ok */ }
-  }
-
-  setStatus('')
-}
-
 
 // ─── Greenskeeper fallback via Claude web search ──────────────────────────────
 async function fetchScorecardViaClaudeSearch(apiKey, courseName, location) {
@@ -769,13 +728,12 @@ function CourseSearch({ apiKey, golfCourseApiKey, onApiKeyNeeded, onSelect }) {
   const [status,   setStatus]   = useState('') // in-progress status message
   const [error,    setError]    = useState('')
   const [source,   setSource]   = useState('')
-  const [teePickerCourse, setTeePickerCourse] = useState(null)
   // Race-condition guard: each load gets an ID; stale completions are ignored
   const loadIdRef = useRef(0)
 
   const search = async () => {
     if (!query.trim()) return
-    setLoading(true); setError(''); setStatus(''); setResults([]); setDetail(null); setSource(''); setTeePickerCourse(null)
+    setLoading(true); setError(''); setStatus(''); setResults([]); setDetail(null); setSource('')
     const q = query + (location ? ' ' + location : '')
 
     // Tier 1: GolfCourseAPI — real yardages, requires API key
@@ -823,7 +781,7 @@ function CourseSearch({ apiKey, golfCourseApiKey, onApiKeyNeeded, onSelect }) {
 
   const loadCourse = async (courseStub, selectedTee) => {
     const myId = ++loadIdRef.current
-    setLoading(true); setError(''); setStatus(''); setDetail(null); setTeePickerCourse(null)
+    setLoading(true); setError(''); setStatus(''); setDetail(null)
     try {
       let normalized
       if (courseStub._source === 'GolfCourseAPI') {
@@ -838,10 +796,6 @@ function CourseSearch({ apiKey, golfCourseApiKey, onApiKeyNeeded, onSelect }) {
           if (myId !== loadIdRef.current) return
           setDetail(cached)
           setSource('cache')
-          // Still try OSM enrichment for cached courses that don't have it yet
-          if (!cached.osmEnriched && cached.lat && cached.lng) {
-            enrichCourseWithOSM(cached, myId, setDetail, setCachedCourse, setStatus, apiKey)
-          }
           setStatus('')
           setLoading(false)
           return
@@ -890,10 +844,6 @@ function CourseSearch({ apiKey, golfCourseApiKey, onApiKeyNeeded, onSelect }) {
         }
       }
 
-      // Enrich with OSM design data (hazards, green info) in background
-      if (normalized?.lat && normalized?.lng && !normalized.osmEnriched) {
-        enrichCourseWithOSM(normalized, myId, setDetail, setCachedCourse, setStatus, apiKey)
-      }
     } catch (e) {
       if (myId !== loadIdRef.current) return
       setError(`Failed to load scorecard: ${e.message}`)
@@ -945,40 +895,7 @@ function CourseSearch({ apiKey, golfCourseApiKey, onApiKeyNeeded, onSelect }) {
         </div>
       )}
 
-      {/* Tee picker for GolfCourseAPI course */}
-      {teePickerCourse && (
-        <div style={{ marginTop: 12, background: C.bgInput, border: `1px solid ${C.accentMuted}`, borderRadius: 10, padding: 14 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-            <div>
-              <p style={{ fontSize: 14, fontWeight: 600, color: C.text, margin: 0 }}>{teePickerCourse.course_name || teePickerCourse.name}</p>
-              <p style={{ fontSize: 11, color: C.textMuted, margin: '2px 0 0' }}>Select your tee</p>
-            </div>
-            <button style={btnG} onClick={() => setTeePickerCourse(null)}>← Back</button>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {[...(teePickerCourse.tees?.male || []), ...(teePickerCourse.tees?.female || [])].map((t, i) => (
-              <div key={i}
-                onClick={() => loadCourse({ ...teePickerCourse, _source: 'GolfCourseAPI' }, t)}
-                style={{ background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: 8, padding: '10px 14px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', transition: 'border-color .15s' }}
-                onMouseEnter={e => e.currentTarget.style.borderColor = C.accent}
-                onMouseLeave={e => e.currentTarget.style.borderColor = C.border}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{t.tee_name}</span>
-                  <span style={{ fontSize: 12, color: C.accent, fontWeight: 500 }}>{t.total_yards?.toLocaleString()}y</span>
-                </div>
-                <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-                  <span style={{ fontSize: 11, color: C.textMuted }}>Par {t.par_total}</span>
-                  <span style={{ fontSize: 11, color: C.textMuted }}>{t.course_rating}/{t.slope_rating}</span>
-                  <span style={{ fontSize: 12, color: C.accent }}>Select →</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {results.length > 0 && !detail && !teePickerCourse && (
+      {results.length > 0 && !detail && (
         <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
           {results.map((r, i) => {
             const isGCA   = source === 'GolfCourseAPI'
@@ -1001,10 +918,7 @@ function CourseSearch({ apiKey, golfCourseApiKey, onApiKeyNeeded, onSelect }) {
                     {hasTees && <span style={{ color: C.textFaint }}> · {maleTees.length} tees</span>}
                   </p>
                 </div>
-                {hasTees
-                  ? <button style={btnP} onClick={() => setTeePickerCourse(r)}>Pick tee →</button>
-                  : <button style={btnP} onClick={() => loadCourse({ ...r, _source: source })}>Load scorecard →</button>
-                }
+                <button style={btnP} onClick={() => loadCourse({ ...r, _source: source })}>Load scorecard →</button>
               </div>
             )
           })}
@@ -1562,6 +1476,58 @@ function AppInner({ user, session, onSignOut }) {
     else setCoords(null)
   }, [])
 
+  // Enrich course with OSM/web design data at the parent level
+  // This ensures enrichment updates propagate to course state even after CourseSearch unmounts
+  const enrichLoadIdRef = useRef(0)
+  useEffect(() => {
+    if (!course.name || !coords?.lat || !coords?.lng || course.osmEnriched) return
+    const myId = ++enrichLoadIdRef.current
+    ;(async () => {
+      let enriched = course
+      let osmWorked = false
+      try {
+        const osmData = await fetchOSMCourseData(coords.lat, coords.lng)
+        if (myId !== enrichLoadIdRef.current) return
+        if (osmData) {
+          const { holes: enrichedHoles, hasDesignData } = enrichHolesWithOSM(course.holes, osmData)
+          if (hasDesignData) {
+            osmWorked = true
+            setCourse(prev => {
+              const merged = prev.holes.map((h, i) => ({
+                ...h,
+                notes: h.notes || enrichedHoles[i]?.notes || '',
+                osmDesign: enrichedHoles[i]?.osmDesign || null,
+              }))
+              enriched = { ...prev, holes: merged, osmEnriched: true }
+              setCachedCourse(enriched)
+              return enriched
+            })
+          }
+        }
+      } catch { /* OSM failed */ }
+
+      const holesWithDesign = enriched.holes.filter(h => h.osmDesign?.hazards?.length > 0 || h.notes).length
+      if (holesWithDesign < 9 && apiKey) {
+        try {
+          const designData = await fetchHoleDesignViaSearch(apiKey, enriched.name, enriched.location)
+          if (myId !== enrichLoadIdRef.current) return
+          if (designData?.holes?.length) {
+            setCourse(prev => {
+              const mergedHoles = mergeDesignDataIntoHoles(prev.holes, designData)
+              const updated = { ...prev, holes: mergedHoles, webDesignSource: designData.source || 'web search', osmEnriched: true }
+              setCachedCourse(updated)
+              return updated
+            })
+          }
+        } catch { /* web search failed */ }
+      }
+
+      if (!osmWorked && myId === enrichLoadIdRef.current) {
+        setCourse(prev => ({ ...prev, osmEnriched: true }))
+      }
+    })()
+  }, [course.name, coords?.lat, coords?.lng, course.osmEnriched, apiKey])
+
   const buildPrompt = useCallback(() => {
     // ── Shared: club list ──
     const clubList = buildBagSection(clubs)
@@ -1783,7 +1749,7 @@ Be direct. No filler. ALL 18 HOLES.`
     // Use server-side proxy when deployed (no user API key needed), fall back to direct browser access for local dev
     const useProxy = window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1'
     if (!useProxy && !apiKey) { setPlanError('Add your Anthropic API key in Settings to generate a game plan.'); return }
-    setPlanLoading(true); setPlanPhase('Analyzing scoring history'); setPlanError(''); setPlan(''); setTab('prep'); setPrepStep(5)
+    setPlanLoading(true); setPlanPhase('Analyzing scoring history'); setPlanError(''); setPlan(''); setTab('prep'); setPrepStep(4)
     const payload = {
       model: selectedModel,
       max_tokens: 16000,
@@ -2003,10 +1969,9 @@ Be direct. No filler. ALL 18 HOLES.`
 
   const PREP_STEPS = [
     { num: 1, label: 'Select Course',    icon: '🔍' },
-    { num: 2, label: 'Choose Tees',      icon: '🎯' },
-    { num: 3, label: 'Scorecard Preview', icon: '📋' },
-    { num: 4, label: 'Weather & Time',   icon: '🌤' },
-    { num: 5, label: 'Generate Report',  icon: '⚡' },
+    { num: 2, label: 'Scorecard & Tees', icon: '📋' },
+    { num: 3, label: 'Weather & Time',   icon: '🌤' },
+    { num: 4, label: 'Generate Report',  icon: '⚡' },
   ]
 
   return (
@@ -2477,7 +2442,7 @@ Be direct. No filler. ALL 18 HOLES.`
             <div style={{ display: 'flex', gap: 0, marginBottom: 20, overflowX: 'auto' }}>
               {PREP_STEPS.map((s, i) => {
                 const isActive = prepStep === s.num
-                const isDone = prepStep > s.num || (s.num === 1 && course.name) || (s.num === 2 && course.selectedTee) || (s.num === 3 && course.holes.some(h => h.yardage)) || (s.num === 4 && weather)
+                const isDone = prepStep > s.num || (s.num === 1 && course.name) || (s.num === 2 && course.holes.some(h => h.yardage)) || (s.num === 3 && weather)
                 const isClickable = s.num <= prepStep || isDone
                 return (
                   <div key={s.num} style={{ display: 'flex', alignItems: 'center', flex: 1 }}>
@@ -2515,7 +2480,7 @@ Be direct. No filler. ALL 18 HOLES.`
                   apiKey={apiKey}
                   golfCourseApiKey={golfCourseApiKey}
                   onApiKeyNeeded={() => {}}
-                  onSelect={(r) => { applyScorecard(r); setPrepStep(r.tees?.length > 0 ? 2 : 3) }}
+                  onSelect={(r) => { applyScorecard(r); setPrepStep(2) }}
                 />
                 {course.name && (
                   <div style={{ ...card, marginTop: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
@@ -2523,80 +2488,14 @@ Be direct. No filler. ALL 18 HOLES.`
                       <p style={{ fontSize: 14, fontWeight: 600, color: C.text, margin: 0 }}>{course.name}</p>
                       <p style={{ fontSize: 12, color: C.textMuted, margin: '2px 0 0' }}>{course.location} · Par {course.par} · {course.yardage ? Number(course.yardage).toLocaleString() + 'y' : ''}</p>
                     </div>
-                    <button style={btnP} onClick={() => setPrepStep(course.tees?.length > 0 ? 2 : 3)}>Continue →</button>
+                    <button style={btnP} onClick={() => setPrepStep(2)}>Continue →</button>
                   </div>
                 )}
               </div>
             )}
 
-            {/* Step 2: Choose Tees */}
+            {/* Step 2: Scorecard Preview, Tees & Course Details */}
             {prepStep === 2 && (
-              <div>
-                {course.tees?.length > 0 ? (
-                  <div style={card}>
-                    <p style={{ ...lbl, marginBottom: 12 }}>Select your tee — {course.name}</p>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                      {course.tees.map((t, i) => {
-                        const isSelected = course.selectedTee === t.name
-                        return (
-                          <div key={i}
-                            onClick={() => {
-                              setCourse(prev => ({
-                                ...prev,
-                                selectedTee: t.name,
-                                yardage: String(t.yardage || prev.yardage),
-                                rating: String(t.rating || prev.rating),
-                                slope: String(t.slope || prev.slope),
-                                par: t.par || prev.par,
-                                holes: prev.holes.map((h, hi) => ({
-                                  ...h,
-                                  yardage: String(t.holes?.[hi]?.yardage || h.yardage || ''),
-                                  par: t.holes?.[hi]?.par || h.par,
-                                  handicap: t.holes?.[hi]?.handicap || h.handicap,
-                                })),
-                              }))
-                            }}
-                            style={{
-                              background: isSelected ? C.accentMuted : C.bgInput,
-                              border: `1px solid ${isSelected ? C.accent : C.border}`,
-                              borderRadius: 10, padding: '14px 18px', cursor: 'pointer',
-                              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                              transition: 'all 0.15s',
-                            }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                              <div style={{ width: 20, height: 20, borderRadius: '50%', border: `2px solid ${isSelected ? C.accent : C.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                {isSelected && <div style={{ width: 10, height: 10, borderRadius: '50%', background: C.accent }} />}
-                              </div>
-                              <span style={{ fontSize: 15, fontWeight: 600, color: isSelected ? C.accent : C.text }}>{t.name}</span>
-                              <span style={{ fontSize: 13, color: C.accent, fontWeight: 500 }}>{Number(t.yardage).toLocaleString()}y</span>
-                            </div>
-                            <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
-                              <span style={{ fontSize: 12, color: C.textMuted }}>Par {t.par}</span>
-                              {t.rating && <span style={{ fontSize: 12, color: C.textMuted }}>{t.rating}/{t.slope}</span>}
-                            </div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 16 }}>
-                      <button style={btnG} onClick={() => setPrepStep(1)}>← Back</button>
-                      <button style={{ ...btnP, opacity: course.selectedTee ? 1 : 0.5 }} disabled={!course.selectedTee} onClick={() => setPrepStep(3)}>Continue →</button>
-                    </div>
-                  </div>
-                ) : (
-                  <div style={{ ...card, textAlign: 'center', padding: '2rem' }}>
-                    <p style={{ fontSize: 14, color: C.textMuted, margin: '0 0 12px' }}>No tee options available for this course. You can proceed to review the scorecard.</p>
-                    <div style={{ display: 'flex', justifyContent: 'center', gap: 10 }}>
-                      <button style={btnG} onClick={() => setPrepStep(1)}>← Back</button>
-                      <button style={btnP} onClick={() => setPrepStep(3)}>Continue →</button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Step 3: Scorecard Preview & Course Details */}
-            {prepStep === 3 && (
               <div>
                 {course.name && <DataAccuracyTier course={course} style={{ marginBottom: 12 }} />}
                 {/* Tee selector — switch tees without going back */}
@@ -2660,14 +2559,14 @@ Be direct. No filler. ALL 18 HOLES.`
                 {course.holes && <ScorecardPreview holes={course.holes} />}
 
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 16 }}>
-                  <button style={btnG} onClick={() => setPrepStep(course.tees?.length > 0 ? 2 : 1)}>← Back</button>
-                  <button style={btnP} onClick={() => setPrepStep(4)}>Continue →</button>
+                  <button style={btnG} onClick={() => setPrepStep(1)}>← Back</button>
+                  <button style={btnP} onClick={() => setPrepStep(3)}>Continue →</button>
                 </div>
               </div>
             )}
 
-            {/* Step 4: Weather & Tee Time */}
-            {prepStep === 4 && (
+            {/* Step 3: Weather & Tee Time */}
+            {prepStep === 3 && (
               <div>
                 <WeatherPanel
                   apiKey={apiKey} course={course}
@@ -2680,14 +2579,14 @@ Be direct. No filler. ALL 18 HOLES.`
                   weatherLoading={weatherLoading} setWeatherLoading={setWeatherLoading}
                 />
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 16 }}>
-                  <button style={btnG} onClick={() => setPrepStep(3)}>← Back</button>
-                  <button style={btnP} onClick={() => setPrepStep(5)}>Continue →</button>
+                  <button style={btnG} onClick={() => setPrepStep(2)}>← Back</button>
+                  <button style={btnP} onClick={() => setPrepStep(4)}>Continue →</button>
                 </div>
               </div>
             )}
 
-            {/* Step 5: Generate Report */}
-            {prepStep === 5 && (
+            {/* Step 4: Generate Report */}
+            {prepStep === 4 && (
               <div>
                 {/* Summary card before generation */}
                 {!plan && !planLoading && (
@@ -2864,7 +2763,7 @@ Be direct. No filler. ALL 18 HOLES.`
                 )}
 
                 <div style={{ display: 'flex', justifyContent: 'flex-start', marginTop: 16 }}>
-                  <button style={btnG} onClick={() => setPrepStep(4)}>← Back</button>
+                  <button style={btnG} onClick={() => setPrepStep(3)}>← Back</button>
                 </div>
               </div>
             )}
@@ -2954,7 +2853,7 @@ Be direct. No filler. ALL 18 HOLES.`
                         <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 12, marginBottom: 12 }}>
                           <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
                             <button style={btnG} onClick={() => { navigator.clipboard.writeText(b.plan); setCopied(true); setTimeout(() => setCopied(false), 2000) }}>{copied ? '✓ Copied' : 'Copy text'}</button>
-                            <button style={btnG} onClick={() => { setPlan(b.plan); setTab('prep'); setPrepStep(5) }}>Open in Prep →</button>
+                            <button style={btnG} onClick={() => { setPlan(b.plan); setTab('prep'); setPrepStep(4) }}>Open in Prep →</button>
                           </div>
                           <div style={{ background: C.bgInput, borderRadius: 10, padding: '16px 20px', maxHeight: 500, overflowY: 'auto' }}>
                             {renderPlan(b.plan)}
@@ -3277,7 +3176,7 @@ Be direct. No filler. ALL 18 HOLES.`
                           </p>
                         </div>
                         <div style={{ display: 'flex', gap: 8, marginLeft: 12, flexShrink: 0 }}>
-                          <button style={btnG} onClick={() => { applyScorecard(c); setTab('prep'); setPrepStep(3) }}>Load →</button>
+                          <button style={btnG} onClick={() => { applyScorecard(c); setTab('prep'); setPrepStep(2) }}>Load →</button>
                           <button style={{ ...btnG, color: C.red, borderColor: C.red }}
                             onClick={() => {
                               const updated = loadCourseCache()
