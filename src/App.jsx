@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef, useMemo, Component } from 'react'
 import { supabase, loadUserProfiles, saveUserProfile, deleteUserProfile, loadUserHistory, saveUserHistory, loadUserSettings, saveUserSettings, getCachedCourseDB, setCachedCourseDB, getAllCachedCoursesDB, deleteCachedCourseDB, loadSavedPlans, savePlan, deleteSavedPlan } from './lib/supabase.js'
 import { buildBagSection } from './lib/promptSections.js'
+import { fetchOSMCourseData, enrichHolesWithOSM } from './lib/osmCourseData.js'
 import AuthScreen from './screens/AuthScreen.jsx'
 import ImportTab from './components/ImportTab.jsx'
 import OnboardingScreen from './screens/OnboardingScreen.jsx'
@@ -193,7 +194,12 @@ function GreenView({ green, holeNum }) {
         <text x={cx} y={FIXED_H - 2} textAnchor="middle" fill={C.textFaint} fontSize={8} fontFamily={F}>approach</text>
       </svg>
       <div style={{ padding: '4px 8px 0', display: 'flex', flexDirection: 'column', gap: 2 }}>
-        {green.slope && <p style={{ fontSize: 10, color: C.textFaint, margin: 0 }}>Slope: {green.slope.replace(/-/g, ' → ').replace(/to →/, '→')}</p>}
+        {green.confidence && green.confidence !== 'verified' && (
+          <p style={{ fontSize: 9, color: C.amber, margin: 0, fontStyle: 'italic' }}>
+            Green data is estimated — verify with course knowledge
+          </p>
+        )}
+        {green.slope && green.slope !== 'flat' && <p style={{ fontSize: 10, color: C.textFaint, margin: 0 }}>Slope: {green.slope.replace(/-/g, ' → ').replace(/to →/, '→')}</p>}
         {green.tier_desc && <p style={{ fontSize: 10, color: C.amber, margin: 0 }}>Tiers: {green.tier_desc}</p>}
         {green.green_notes && <p style={{ fontSize: 10, color: C.green, margin: 0, fontStyle: 'italic' }}>{green.green_notes}</p>}
       </div>
@@ -323,6 +329,61 @@ function SectionHead({ title, sub }) {
     <div style={{ marginBottom: 16 }}>
       <h2 style={{ fontSize: 18, fontWeight: 600, color: C.text, margin: 0 }}>{title}</h2>
       {sub && <p style={{ fontSize: 12, color: C.textMuted, marginTop: 3 }}>{sub}</p>}
+    </div>
+  )
+}
+
+// ─── Data accuracy tier computation + indicator ──────────────────────────────
+function computeDataTier(course) {
+  if (!course?.name) return null
+
+  const holes = course.holes || []
+  const hasYardages = holes.filter(h => h.yardage && parseInt(h.yardage) > 0).length
+  const hasOSM = holes.filter(h => h.osmDesign?.hazards?.length > 0).length
+  const hasWebDesign = holes.filter(h => h.webDesign).length
+  const hasUserNotes = holes.filter(h => h.notes && !h.osmDesign && !h.webDesign).length
+  const hasDesignData = hasOSM + hasWebDesign + hasUserNotes
+
+  // Tier 1: Gold — verified yardages + design data for 12+ holes
+  if (course.source === 'GolfCourseAPI' && hasYardages >= 16 && hasDesignData >= 12) {
+    return { tier: 'gold', label: 'Gold', color: C.amber, bg: C.amberMuted, icon: '★',
+      detail: `Verified yardages + design data on ${hasDesignData}/18 holes`,
+      sub: 'High-confidence recommendations — hazards, doglegs, and strategy are data-backed' }
+  }
+
+  // Tier 2: Silver — has yardages + some design data (6+)
+  if (hasYardages >= 16 && hasDesignData >= 6) {
+    return { tier: 'silver', label: 'Silver', color: C.blue, bg: C.blueMuted, icon: '◆',
+      detail: `Yardages verified, design data on ${hasDesignData}/18 holes`,
+      sub: 'Good recommendations — some holes have verified hazard/layout data, others use conservative defaults' }
+  }
+
+  // Tier 3: Bronze — has yardages but little/no design data
+  if (hasYardages >= 12) {
+    return { tier: 'bronze', label: 'Bronze', color: C.accent, bg: C.accentMuted, icon: '●',
+      detail: `Yardages available, design data on ${hasDesignData}/18 holes`,
+      sub: 'Club selection is accurate — hazard/layout info is limited, add hole notes to improve' }
+  }
+
+  // Tier 4: Basic — minimal data
+  return { tier: 'basic', label: 'Basic', color: C.textMuted, bg: C.bgInput, icon: '○',
+    detail: `Limited data — yardages on ${hasYardages}/18 holes, design on ${hasDesignData}/18`,
+    sub: 'Recommendations are general — enter yardages and hole notes for better strategy' }
+}
+
+function DataAccuracyTier({ course, style }) {
+  const tier = computeDataTier(course)
+  if (!tier) return null
+  return (
+    <div style={{ background: tier.bg, border: `1px solid ${tier.color}33`, borderRadius: 10, padding: '10px 14px', ...style }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+        <span style={{ fontSize: 16 }}>{tier.icon}</span>
+        <span style={{ fontSize: 12, fontWeight: 700, color: tier.color, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+          {tier.label} data quality
+        </span>
+        <span style={{ fontSize: 11, color: C.textMuted, marginLeft: 'auto' }}>{tier.detail}</span>
+      </div>
+      <p style={{ fontSize: 11, color: C.textMuted, margin: 0 }}>{tier.sub}</p>
     </div>
   )
 }
@@ -521,6 +582,48 @@ function normalizeGolfCourseAPICourse(raw, selectedTee) {
   }
 }
 
+// ─── Design data enrichment (async, non-blocking) ────────────────────────────
+// Tries OSM first, then falls back to Claude web search for holes without data
+async function enrichCourseWithOSM(courseData, loadId, setDetail, setCachedCourse, setStatus, apiKey) {
+  let enriched = courseData
+  let osmWorked = false
+
+  // Step 1: Try OSM
+  try {
+    setStatus('Loading hole design data from OpenStreetMap…')
+    const osmData = await fetchOSMCourseData(courseData.lat, courseData.lng)
+    if (osmData) {
+      const { holes: enrichedHoles, hasDesignData } = enrichHolesWithOSM(courseData.holes, osmData)
+      if (hasDesignData) {
+        enriched = { ...courseData, holes: enrichedHoles, osmEnriched: true }
+        osmWorked = true
+        setDetail(enriched)
+        setCachedCourse(enriched)
+      }
+    }
+  } catch { /* OSM failed, continue to web search */ }
+
+  // Step 2: Check how many holes have design data from OSM
+  const holesWithDesign = enriched.holes.filter(h => h.osmDesign?.hazards?.length > 0 || h.notes).length
+  const needsWebFallback = holesWithDesign < 9 && apiKey
+
+  if (needsWebFallback) {
+    try {
+      setStatus('Searching for hole design details…')
+      const designData = await fetchHoleDesignViaSearch(apiKey, enriched.name, enriched.location)
+      if (designData?.holes?.length) {
+        const mergedHoles = mergeDesignDataIntoHoles(enriched.holes, designData)
+        enriched = { ...enriched, holes: mergedHoles, webDesignSource: designData.source || 'web search', osmEnriched: true }
+        setDetail(enriched)
+        setCachedCourse(enriched)
+      }
+    } catch { /* web search failed, that's ok */ }
+  }
+
+  setStatus('')
+}
+
+
 // ─── Greenskeeper fallback via Claude web search ──────────────────────────────
 async function fetchScorecardViaClaudeSearch(apiKey, courseName, location) {
   const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -566,6 +669,93 @@ If not found: {"error": "No verified scorecard found"}`,
   const parsed = JSON.parse(m[0])
   if (parsed.error) throw new Error(parsed.error)
   return { ...parsed, source: parsed.source || 'web search' }
+}
+
+// ─── Hole design data via Claude web search (fallback when OSM is sparse) ────
+async function fetchHoleDesignViaSearch(apiKey, courseName, location) {
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify({
+      model: MODEL,
+      max_tokens: 4000,
+      tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+      messages: [{
+        role: 'user',
+        content: `Search for hole-by-hole design details for "${courseName}"${location ? ` in ${location}` : ''}.
+
+Look for course guides, flyover descriptions, or hole-by-hole breakdowns on the course website, greenskeeper.org, or golf review sites.
+
+For EACH hole (1-18), find ONLY information you can verify from search results:
+- Dogleg direction (left, right, or straight)
+- Water hazards and their position relative to the fairway/green (left, right, front, etc.)
+- Key bunker positions near the green (greenside left, greenside right, front, etc.)
+- Whether there is OB and which side
+- Any notable green features mentioned (severely sloped, multi-tier, island green, etc.)
+
+CRITICAL: Only include information you found in search results. If you cannot find design details for a hole, set its entry to null. Do NOT guess or fabricate — accuracy is more important than completeness.
+
+Return ONLY this JSON (no markdown):
+{
+  "course": "Full course name",
+  "source": "URL where you found the most detail",
+  "holes": [
+    {"hole":1,"dogleg":"left|right|straight|null","water":"description or null","bunkers":"description or null","ob":"left|right|both|null","green_notes":"description or null"},
+    ...all 18 holes, use null for any hole you cannot find info about
+  ]
+}
+
+If you cannot find any hole design info: {"error": "No hole design data found"}`,
+      }],
+    }),
+  })
+  const data = await res.json()
+  let text = ''
+  for (const block of (data.content || [])) { if (block.type === 'text') text += block.text }
+  const clean = text.replace(/```json|```/g, '').trim()
+  const m = clean.match(/\{[\s\S]*\}/)
+  if (!m) throw new Error('No JSON in response')
+  const parsed = JSON.parse(m[0])
+  if (parsed.error) throw new Error(parsed.error)
+  return parsed
+}
+
+// Merge web-searched design data into course holes
+function mergeDesignDataIntoHoles(courseHoles, designData) {
+  if (!designData?.holes?.length) return courseHoles
+  return courseHoles.map((hole, i) => {
+    const design = designData.holes.find(d => d.hole === i + 1)
+    if (!design) return hole
+
+    // Build a notes string from verified web data (only non-null fields)
+    const parts = []
+    if (design.dogleg && design.dogleg !== 'straight') parts.push(`dogleg ${design.dogleg}`)
+    if (design.water) parts.push(`water: ${design.water}`)
+    if (design.bunkers) parts.push(`bunkers: ${design.bunkers}`)
+    if (design.ob) parts.push(`OB ${design.ob}`)
+    if (design.green_notes) parts.push(`green: ${design.green_notes}`)
+
+    if (!parts.length) return hole
+
+    const webNotes = parts.join(', ')
+    // User notes take precedence; append web data if no user notes
+    const existingNotes = hole.notes || ''
+    const mergedNotes = existingNotes || webNotes
+
+    return {
+      ...hole,
+      notes: mergedNotes,
+      webDesign: {
+        ...design,
+        source: designData.source || 'web search',
+      },
+    }
+  })
 }
 
 // ─── Course Search component ──────────────────────────────────────────────────
@@ -636,6 +826,7 @@ function CourseSearch({ apiKey, golfCourseApiKey, onApiKeyNeeded, onSelect }) {
     const myId = ++loadIdRef.current
     setLoading(true); setError(''); setStatus(''); setDetail(null); setTeePickerCourse(null)
     try {
+      let normalized
       if (courseStub._source === 'GolfCourseAPI') {
         const stubName = courseStub.course_name || courseStub.name || ''
         const rawLoc   = courseStub.location
@@ -648,11 +839,15 @@ function CourseSearch({ apiKey, golfCourseApiKey, onApiKeyNeeded, onSelect }) {
           if (myId !== loadIdRef.current) return
           setDetail(cached)
           setSource('cache')
+          // Still try OSM enrichment for cached courses that don't have it yet
+          if (!cached.osmEnriched && cached.lat && cached.lng) {
+            enrichCourseWithOSM(cached, myId, setDetail, setCachedCourse, setStatus, apiKey)
+          }
           setStatus('')
           setLoading(false)
           return
         }
-        const normalized = normalizeGolfCourseAPICourse(courseStub, selectedTee)
+        normalized = normalizeGolfCourseAPICourse(courseStub, selectedTee)
         if (myId !== loadIdRef.current) return
         setCachedCourse(normalized)
         setDetail(normalized)
@@ -661,14 +856,14 @@ function CourseSearch({ apiKey, golfCourseApiKey, onApiKeyNeeded, onSelect }) {
         // OpenGolfAPI: fetch full detail, then supplement yardages via Claude if missing
         const raw = await fetchOpenGolfAPICourse(courseStub.id || courseStub._id)
         if (myId !== loadIdRef.current) return
-        const normalized = normalizeOpenGolfCourse(raw)
+        normalized = normalizeOpenGolfCourse(raw)
         const missingYardages = normalized.holes.every(h => !h.yardage)
         if (missingYardages && apiKey) {
           setStatus('Fetching yardages via web search…')
           try {
             const webData = await fetchScorecardViaClaudeSearch(apiKey, normalized.name, normalized.location)
             if (myId !== loadIdRef.current) return
-            const merged = {
+            normalized = {
               ...normalized,
               yardage: webData.yardage || normalized.yardage,
               rating:  webData.rating  || normalized.rating,
@@ -681,8 +876,8 @@ function CourseSearch({ apiKey, golfCourseApiKey, onApiKeyNeeded, onSelect }) {
                 handicap: webData.holes?.[i]?.handicap || h.handicap,
               })),
             }
-            setCachedCourse(merged)
-            setDetail(merged)
+            setCachedCourse(normalized)
+            setDetail(normalized)
             setSource(webData.source || 'web search')
           } catch {
             if (myId !== loadIdRef.current) return
@@ -694,6 +889,11 @@ function CourseSearch({ apiKey, golfCourseApiKey, onApiKeyNeeded, onSelect }) {
           setDetail(normalized)
           setSource(normalized.source || 'OpenGolfAPI')
         }
+      }
+
+      // Enrich with OSM design data (hazards, green info) in background
+      if (normalized?.lat && normalized?.lng && !normalized.osmEnriched) {
+        enrichCourseWithOSM(normalized, myId, setDetail, setCachedCourse, setStatus, apiKey)
       }
     } catch (e) {
       if (myId !== loadIdRef.current) return
@@ -824,9 +1024,15 @@ function CourseSearch({ apiKey, golfCourseApiKey, onApiKeyNeeded, onSelect }) {
               <p style={{ fontSize: 11, color: source === 'cache' ? C.amber : C.green, margin: '4px 0 0' }}>
                 {source === 'cache' ? '⚡ Loaded from local cache — no API call' : `✓ Verified from ${source}`}
               </p>
+              {detail.osmEnriched && (
+                <p style={{ fontSize: 11, color: C.blue, margin: '2px 0 0' }}>
+                  🗺 Hole design data loaded from OpenStreetMap (hazards, greens)
+                </p>
+              )}
             </div>
             <button style={btnP} onClick={() => onSelect(detail)}>Use this scorecard →</button>
           </div>
+          <DataAccuracyTier course={detail} style={{ marginBottom: 10 }} />
           <ScorecardPreview holes={detail.holes} />
         </div>
       )}
@@ -1315,12 +1521,16 @@ function AppInner({ user, session, onSignOut }) {
       slope:    String(r.slope   || ''),
       par:      r.par || 72,
       source:   r.source || '',
+      osmEnriched: r.osmEnriched || false,
+      webDesignSource: r.webDesignSource || '',
       holes: r.holes.map((h, i) => ({
         ...prev.holes[i],
         par:      h.par,
         yardage:  String(h.yardage || ''),
         handicap: h.handicap || i + 1,
-        notes:    prev.holes[i]?.notes || '',
+        notes:    prev.holes[i]?.notes || h.notes || '',
+        osmDesign:  h.osmDesign || null,
+        webDesign:  h.webDesign || null,
       })),
     }))
     if (r.lat && r.lng) setCoords({ lat: r.lat, lng: r.lng })
@@ -1444,18 +1654,44 @@ Be direct. Short sentences. No filler.`
     // ── Course-loaded mode: full pre-round brief ──
     const isPractice = course.roundType === 'Practice round'
     const isMatchPlay = course.roundType === 'Match play'
-    const sourceNote = course.source === 'GolfCourseAPI' ? 'Verified — GolfCourseAPI'
-      : course.source === 'OpenGolfAPI'    ? 'Partial — OpenGolfAPI (par/HCP only, yardages from web)'
-      : course.source                      ? `Unverified — via web search (${course.source}).`
+    const hasOSMData = course.osmEnriched && course.holes.some(h => h.osmDesign)
+    const hasWebDesign = course.holes.some(h => h.webDesign)
+    const designNote = hasOSMData && hasWebDesign ? ' + OSM + web-search design data'
+      : hasOSMData ? ' + OSM hole design data (hazards, greens)'
+      : hasWebDesign ? ' + web-search design data (hazards, layout)'
+      : ''
+    const sourceNote = course.source === 'GolfCourseAPI' ? `Verified — GolfCourseAPI${designNote}`
+      : course.source === 'OpenGolfAPI'    ? `Partial — OpenGolfAPI (par/HCP only, yardages from web)${designNote}`
+      : course.source                      ? `Unverified — via web search (${course.source}).${designNote}`
       : 'Manual entry'
-
     const holesData = course.holes.map((h, i) => {
       const w    = holeWeather[i]
       const time = holeTimes[i]?.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       const wStr = w ? ` | ~${time}: ${Math.round(w.temp)}°F, ${windDir(w.windDir)} ${Math.round(w.windSpeed)}mph, ${w.precip}% rain` : ''
-      const nStr = h.notes ? ` | Note: ${h.notes}` : ''
       const eStr = h.elevation ? ` | Elev: ${h.elevation}` : ''
-      return `H${i+1}: Par ${h.par}, ${h.yardage || '?'}y, HCP ${h.handicap}${eStr}${nStr}${wStr}`
+
+      // Build design data string from OSM, web search, or user notes
+      let designStr = ''
+      if (h.osmDesign) {
+        const parts = []
+        if (h.osmDesign.dogleg) parts.push(`dogleg ${h.osmDesign.dogleg}`)
+        if (h.osmDesign.bearingDeg != null) parts.push(`bearing ${h.osmDesign.bearingDeg}°`)
+        if (h.osmDesign.hazards?.length) {
+          parts.push('hazards: ' + h.osmDesign.hazards.map(hz => `${hz.type} ${hz.loc}`).join(', '))
+        }
+        if (h.osmDesign.greenWidth) parts.push(`green ~${h.osmDesign.greenWidth}y wide × ${h.osmDesign.greenDepth}y deep`)
+        if (parts.length) designStr = ` | Design (OSM verified): ${parts.join('; ')}`
+      } else if (h.webDesign) {
+        const parts = []
+        if (h.webDesign.dogleg && h.webDesign.dogleg !== 'straight') parts.push(`dogleg ${h.webDesign.dogleg}`)
+        if (h.webDesign.water) parts.push(`water: ${h.webDesign.water}`)
+        if (h.webDesign.bunkers) parts.push(`bunkers: ${h.webDesign.bunkers}`)
+        if (h.webDesign.ob) parts.push(`OB ${h.webDesign.ob}`)
+        if (h.webDesign.green_notes) parts.push(`green: ${h.webDesign.green_notes}`)
+        if (parts.length) designStr = ` | Design (web search — use with moderate confidence): ${parts.join('; ')}`
+      }
+      const nStr = h.notes ? ` | Note: ${h.notes}` : (!designStr ? ' | Note: no design data — do not assume hazards' : '')
+      return `H${i+1}: Par ${h.par}, ${h.yardage || '?'}y, HCP ${h.handicap}${eStr}${designStr}${nStr}${wStr}`
     }).join('\n')
 
     return `You are an elite Tour caddy. Generate a concise game plan. IMPORTANT: You MUST cover ALL 18 holes — do not stop early.
@@ -1481,6 +1717,18 @@ IMPORTANT RULES:
 4. Keep caddy notes SHORT (1 sentence max, like a real caddy would say it, not AI-sounding).
 5. Be concise throughout — every word should earn its place.
 
+DATA ACCURACY — CRITICAL:
+${hasOSMData || hasWebDesign
+  ? `Some holes have design data from ${hasOSMData ? 'OpenStreetMap (marked "Design (OSM verified)")' : ''}${hasOSMData && hasWebDesign ? ' and/or ' : ''}${hasWebDesign ? 'web search (marked "Design (web search)")' : ''}. OSM data is from geographic surveys — treat as verified. Web search data is moderately reliable — use it but don't over-rely on specific details. For holes WITHOUT any design data, follow the strict rules below.`
+  : `You only have scorecard data (par, yardage, handicap) for each hole. You do NOT have verified hole design data (hazard locations, water, OB, doglegs, fairway shape, green surrounds).`}
+Follow these rules strictly:
+- Do NOT invent or guess specific hazard placements (bunkers, water, OB) unless explicitly provided in a hole's data (via "Design (OSM verified)", "Design (web search)", or a user "Note:"). If none exist — do NOT fabricate hazards.
+- Do NOT recommend shot shapes to "avoid" hazards you are not certain exist. Base tee shot shape recommendations on: the player's ball flight and miss tendency, the par/yardage, and wind — NOT on assumed hole layouts.
+- For green-json: set "hazards" to an EMPTY array [] unless a hole's design data or note explicitly describes a specific hazard near the green. Do NOT guess bunker or water locations.
+- For green-json: when a hole has "Design (OSM verified)" data, use those hazards with "confidence":"verified". When a hole has "Design (web search)" data, use with "confidence":"uncertain". When a hole has NO design data, set "hazards":[] and use generic values.
+- For tee shot strategy: when a hole has design data including dogleg direction, use that to inform shot shape. When a hole has bearing data, factor in wind direction vs hole bearing. Otherwise, recommend shape based on the player's natural ball flight and miss tendency — do NOT fabricate doglegs or fairway shapes.
+- When in doubt, say "standard approach" rather than inventing hazards to avoid.
+
 ## Round strategy
 2-3 sentences. Approach for today.
 
@@ -1493,9 +1741,9 @@ One line per hole: "H[N] Par [X] [Yds]y — 🟢/🟡/🔴 — reason"
 - **Approach**: Club, distance, landing zone
 - **Caddy**: One short sentence. Sound like a human, not a manual.
 \`\`\`green-json
-{"depth_y":28,"width_y":24,"shape":"kidney|oval|round|oblong","front_y":165,"mid_y":172,"back_y":180,"pin":"front-right|front-left|center|back-right|back-left|center-right|center-left","slope":"back-to-front|front-to-back|left-to-right|right-to-left|flat","tiers":0,"tier_desc":"","green_notes":"","hazards":[{"type":"bunker|water|false_front|mound","loc":"left|right|front|back|front-left|front-right|back-left|back-right","carry_y":145}]}
+{"depth_y":28,"width_y":24,"shape":"oval","front_y":0,"mid_y":0,"back_y":0,"pin":"center","slope":"flat","tiers":0,"tier_desc":"","green_notes":"","confidence":"uncertain","hazards":[]}
 \`\`\`
-"tiers" = number of tiers (0 for flat, 1 for subtle, 2+ for multi-tier). "tier_desc" = brief description of elevation changes on the green. "green_notes" = one-line green characteristic (e.g. "fast, firm, rejects right"). Use your best estimate for dimensions.
+Green-json rules: "hazards" must be [] unless a hole note explicitly mentions a hazard near the green. "confidence" must be "uncertain" unless you have high-confidence verified knowledge of this specific green. Only populate non-default values (shape, slope, tiers, pin, green_notes) when you have specific data — do NOT guess. "front_y"/"mid_y"/"back_y" are approach distances in yards — fill from yardage data if available, otherwise use 0.
 
 ## Weather
 Club adjustments for key holes only.
@@ -2317,6 +2565,9 @@ Be direct. No filler. ALL 18 HOLES.`
               {course.source && course.source !== 'GolfCourseAPI' && course.source !== 'OpenGolfAPI' && !course.source.includes('partial') && (
                 <Badge label="⚠ Unverified — web search" bg={C.amberMuted} fg={C.amber} />
               )}
+              {course.osmEnriched && (
+                <Badge label="🗺 OSM design data" bg={C.blueMuted} fg={C.blue} />
+              )}
             </div>
             {course.source && course.source !== 'GolfCourseAPI' && course.source !== 'OpenGolfAPI' && (
               <div style={{ background: C.amberMuted, border: `1px solid ${C.amber}`, borderRadius: 8, padding: '10px 14px', marginBottom: 12 }}>
@@ -2325,6 +2576,7 @@ Be direct. No filler. ALL 18 HOLES.`
                 </p>
               </div>
             )}
+            {course.name && <DataAccuracyTier course={course} style={{ marginBottom: 12 }} />}
             <p style={{ fontSize: 12, color: C.textMuted, marginTop: 0, marginBottom: 14 }}>Search verified scorecard, set tee time, add caddy notes per hole</p>
             <CourseSearch
               apiKey={apiKey}
@@ -2408,7 +2660,7 @@ Be direct. No filler. ALL 18 HOLES.`
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                   {course.holes.map((h, idx) => {
                     const upd = (field, val) => setCourse({ ...course, holes: course.holes.map((hh, j) => j === idx ? { ...hh, [field]: val } : hh) })
-                    const noteChips = ['Slopes B→F', 'False front', 'OB left', 'OB right', 'Bunker short', 'Pin front', 'Pin back', 'Elevated green']
+                    const noteChips = ['Water left', 'Water right', 'Water front', 'OB left', 'OB right', 'Bunker left', 'Bunker right', 'Bunker short', 'Dogleg left', 'Dogleg right', 'Slopes B→F', 'False front', 'Elevated green', 'No hazards']
                     return (
                       <details key={idx} style={{ background: C.bgInput, border: `1px solid ${C.border}`, borderRadius: 8 }}>
                         <summary style={{ padding: '10px 12px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, listStyle: 'none', WebkitAppearance: 'none' }}>
@@ -2427,7 +2679,7 @@ Be direct. No filler. ALL 18 HOLES.`
                           </div>
                           <textarea style={{ ...inp, padding: '8px 10px', fontSize: 13, width: '100%', minHeight: 60, resize: 'vertical' }}
                             value={h.notes} onChange={e => upd('notes', e.target.value)}
-                            placeholder="Green slopes, hazards, pin tendency..." />
+                            placeholder="Hazards, OB, doglegs, green features — only what you know is accurate..." />
                           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
                             {noteChips.map(chip => (
                               <button key={chip} onClick={() => upd('notes', (h.notes ? h.notes + ', ' : '') + chip.toLowerCase())} style={{
@@ -2467,7 +2719,7 @@ Be direct. No filler. ALL 18 HOLES.`
                               <input type="number" style={{ ...inp, padding: '4px 6px', fontSize: 12 }} value={h.handicap} onChange={e => upd('handicap', e.target.value)} placeholder="HCP" />
                               <input type="number" style={{ ...inp, padding: '4px 6px', fontSize: 12 }} value={h.elevation} onChange={e => upd('elevation', e.target.value)} placeholder="ft" />
                               <input style={{ ...inp, padding: '4px 8px', fontSize: 12 }} value={h.notes} onChange={e => upd('notes', e.target.value)}
-                                placeholder="e.g. Green slopes back-to-front, false front, OB left, pin usually front-right..." />
+                                placeholder="Hazards, OB, doglegs — only verified info..." />
                             </div>
                           )
                         })}
@@ -2521,6 +2773,7 @@ Be direct. No filler. ALL 18 HOLES.`
                 </p>
               </div>
             )}
+            {course.name && !plan && !planLoading && <DataAccuracyTier course={course} style={{ marginBottom: 12 }} />}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: isMobile ? 'flex-start' : 'center', marginBottom: 14, flexWrap: 'wrap', gap: isMobile ? 10 : 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <h2 style={{ fontSize: 18, fontWeight: 600, color: C.text, margin: 0 }}>Game plan</h2>
