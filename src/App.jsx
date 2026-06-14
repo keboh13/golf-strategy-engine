@@ -201,9 +201,7 @@ function GreenView({ green, holeNum }) {
 }
 
 // ─── Env keys (set in .env) ───────────────────────────────────────────────────
-const ENV_ANTHROPIC_KEY    = import.meta.env.VITE_ANTHROPIC_API_KEY    || ''
-const ENV_MAPS_KEY         = import.meta.env.VITE_GOOGLE_MAPS_KEY      || ''
-const ENV_GOLF_COURSE_KEY  = import.meta.env.VITE_GOLF_COURSE_API_KEY  || ''
+const ENV_MAPS_KEY = import.meta.env.VITE_GOOGLE_MAPS_KEY || ''
 
 // ─── Model ────────────────────────────────────────────────────────────────────
 const MODEL = 'claude-sonnet-4-6'
@@ -428,31 +426,20 @@ async function fetchOpenMeteo(lat, lng, timezone) {
   return data.hourly
 }
 
-async function geocodeViaClaudeSearch(apiKey, courseName, location) {
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
+async function geocodeViaClaudeSearch(authToken, courseName, location) {
+  const res = await fetch('/api/course-ai', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
     },
-    body: JSON.stringify({
-      model: MODEL,
-      max_tokens: 200,
-      tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-      messages: [{
-        role: 'user',
-        content: `What are the GPS coordinates of ${courseName} golf course${location ? ' in ' + location : ''}? Return ONLY JSON: {"lat": 36.043, "lng": -115.289}`,
-      }],
-    }),
+    body: JSON.stringify({ action: 'geocode', courseName, location: location || '' }),
   })
   const data = await res.json()
-  let text = ''
-  for (const block of (data.content || [])) { if (block.type === 'text') text += block.text }
-  const m = text.match(/\{[^}]*"lat"\s*:\s*([-\d.]+)[^}]*"lng"\s*:\s*([-\d.]+)[^}]*\}/)
-  if (m) return { lat: parseFloat(m[1]), lng: parseFloat(m[2]) }
-  throw new Error('Could not parse coordinates from Claude response')
+  if (!res.ok || data.error) throw new Error(data.error || 'Geocode failed')
+  const r = data.result
+  if (r.lat && r.lng) return { lat: parseFloat(r.lat), lng: parseFloat(r.lng) }
+  throw new Error('Could not parse coordinates from response')
 }
 
 // ─── OpenGolfAPI scorecard fetch ──────────────────────────────────────────────
@@ -527,12 +514,19 @@ function normalizeOpenGolfCourse(raw) {
  * Requires API key. Returns full tee sets with hole-by-hole yardage, par, handicap.
  * Auth: Authorization: Key YOUR_KEY
  */
-async function searchGolfCourseAPI(query, apiKey) {
-  const res = await fetch(
-    `https://api.golfcourseapi.com/v1/search?search_query=${encodeURIComponent(query)}`,
-    { headers: { Authorization: `Key ${apiKey}` } }
-  )
-  if (!res.ok) throw new Error(`GolfCourseAPI search error: ${res.status}`)
+async function searchGolfCourseAPI(query, authToken) {
+  const res = await fetch('/api/course-search', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+    },
+    body: JSON.stringify({ query }),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(data.error || `GolfCourseAPI search error: ${res.status}`)
+  }
   const data = await res.json()
   return data.courses || []
 }
@@ -577,147 +571,33 @@ function normalizeGolfCourseAPICourse(raw, selectedTee) {
 
 
 // ─── Greenskeeper fallback via Claude web search ──────────────────────────────
-async function fetchScorecardViaClaudeSearch(apiKey, courseName, location) {
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
+async function fetchScorecardViaClaudeSearch(authToken, courseName, location) {
+  const res = await fetch('/api/course-ai', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
     },
-    body: JSON.stringify({
-      model: MODEL,
-      max_tokens: 2500,
-      tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-      messages: [{
-        role: 'user',
-        content: `Search greenskeeper.org and the course website for the verified scorecard of "${courseName}"${location ? ` in ${location}` : ''}.
-
-Find REAL hole-by-hole yardages, pars, and handicap indexes. Do NOT guess.
-
-Return ONLY this JSON (no markdown):
-{
-  "name": "Full course name",
-  "location": "City, State",
-  "yardage": <integer>,
-  "rating": <float>,
-  "slope": <integer>,
-  "par": <integer>,
-  "source": "greenskeeper.org or course website URL",
-  "holes": [{"par":4,"yardage":379,"handicap":7}, ...all 18]
-}
-
-If not found: {"error": "No verified scorecard found"}`,
-      }],
-    }),
+    body: JSON.stringify({ action: 'scorecard-search', courseName, location: location || '' }),
   })
   const data = await res.json()
-  let text = ''
-  for (const block of (data.content || [])) { if (block.type === 'text') text += block.text }
-  const clean = text.replace(/```json|```/g, '').trim()
-  const m = clean.match(/\{[\s\S]*\}/)
-  if (!m) throw new Error('No JSON in response')
-  const parsed = JSON.parse(m[0])
-  if (parsed.error) throw new Error(parsed.error)
-  return { ...parsed, source: parsed.source || 'web search' }
+  if (!res.ok || data.error) throw new Error(data.error || 'Scorecard search failed')
+  return { ...data.result, source: data.result.source || 'web search' }
 }
 
 // ─── Hole design data via Claude web search (fallback when OSM is sparse) ────
-async function fetchHoleDesignViaSearch(apiKeyOrNull, courseName, location, authToken) {
-  const body = {
-    model: MODEL,
-    max_tokens: 4000,
-    tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-    messages: [{
-      role: 'user',
-      content: `Search for hole-by-hole design details for "${courseName}"${location ? ` in ${location}` : ''}.
-
-Look for course guides, flyover descriptions, or hole-by-hole breakdowns on the course website, greenskeeper.org, or golf review sites.
-
-For EACH hole (1-18), find ONLY information you can verify from search results:
-- Dogleg direction (left, right, or straight)
-- Water hazards and their position relative to the fairway/green (left, right, front, etc.)
-- Key bunker positions near the green (greenside left, greenside right, front, etc.)
-- Whether there is OB and which side
-- Any notable green features mentioned (severely sloped, multi-tier, island green, etc.)
-
-CRITICAL: Only include information you found in search results. If you cannot find design details for a hole, set its entry to null. Do NOT guess or fabricate — accuracy is more important than completeness.
-
-Return ONLY this JSON (no markdown):
-{
-  "course": "Full course name",
-  "source": "URL where you found the most detail",
-  "holes": [
-    {"hole":1,"dogleg":"left|right|straight|null","water":"description or null","bunkers":"description or null","ob":"left|right|both|null","green_notes":"description or null"},
-    ...all 18 holes, use null for any hole you cannot find info about
-  ]
-}
-
-If you cannot find any hole design info: {"error": "No hole design data found"}`,
-    }],
-  }
-
-  let res
-  if (apiKeyOrNull) {
-    res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKeyOrNull,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true',
-      },
-      body: JSON.stringify(body),
-    })
-  } else if (authToken) {
-    res = await fetch('/api/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
-      body: JSON.stringify({ ...body, stream: true }),
-    })
-  } else {
-    throw new Error('No API key or auth token available')
-  }
-
-  if (!res.ok) throw new Error(`Design search failed: ${res.status}`)
-
-  const contentType = res.headers.get('Content-Type') || ''
-  if (contentType.includes('text/event-stream')) {
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder()
-    let buf = '', combined = ''
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buf += decoder.decode(value, { stream: true })
-      const lines = buf.split('\n')
-      buf = lines.pop()
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue
-        try {
-          const j = JSON.parse(line.slice(6))
-          if (j.type === 'content_block_delta' && j.delta?.text) combined += j.delta.text
-        } catch { /* skip */ }
-      }
-    }
-    const clean = combined.replace(/```json|```/g, '').trim()
-    const m = clean.match(/\{[\s\S]*\}/)
-    if (!m) throw new Error('No JSON in SSE response')
-    const parsed = JSON.parse(m[0])
-    if (parsed.error) throw new Error(parsed.error)
-    return parsed
-  }
-
+async function fetchHoleDesignViaSearch(authToken, courseName, location) {
+  const res = await fetch('/api/course-ai', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+    },
+    body: JSON.stringify({ action: 'hole-design-search', courseName, location: location || '' }),
+  })
   const data = await res.json()
-  let text = ''
-  for (const block of (data.content || [])) { if (block.type === 'text') text += block.text }
-  const clean = text.replace(/```json|```/g, '').trim()
-  const m = clean.match(/\{[\s\S]*\}/)
-  if (!m) throw new Error('No JSON in response')
-  const parsed = JSON.parse(m[0])
-  if (parsed.error) throw new Error(parsed.error)
-  return parsed
+  if (!res.ok || data.error) throw new Error(data.error || 'Hole design search failed')
+  return data.result
 }
 
 // Merge web-searched design data into course holes
@@ -754,7 +634,7 @@ function mergeDesignDataIntoHoles(courseHoles, designData) {
 }
 
 // ─── Course Search component ──────────────────────────────────────────────────
-function CourseSearch({ apiKey, golfCourseApiKey, onApiKeyNeeded, onSelect }) {
+function CourseSearch({ authToken, onSelect }) {
   const isMobile = useIsMobile()
   const [query,    setQuery]    = useState('')
   const [location, setLocation] = useState('')
@@ -772,19 +652,17 @@ function CourseSearch({ apiKey, golfCourseApiKey, onApiKeyNeeded, onSelect }) {
     setLoading(true); setError(''); setStatus(''); setResults([]); setDetail(null); setSource('')
     const q = query + (location ? ' ' + location : '')
 
-    // Tier 1: GolfCourseAPI — real yardages, requires API key
-    if (golfCourseApiKey) {
-      try {
-        const courses = await searchGolfCourseAPI(q, golfCourseApiKey)
-        if (courses.length > 0) {
-          setResults(courses)
-          setSource('GolfCourseAPI')
-          setLoading(false)
-          return
-        }
-      } catch (e1) {
-        // fall through to next tier
+    // Tier 1: GolfCourseAPI via server proxy — real yardages
+    try {
+      const courses = await searchGolfCourseAPI(q, authToken)
+      if (courses.length > 0) {
+        setResults(courses)
+        setSource('GolfCourseAPI')
+        setLoading(false)
+        return
       }
+    } catch {
+      // fall through to next tier
     }
 
     // Tier 2: OpenGolfAPI — free, no key, but no yardages
@@ -799,14 +677,14 @@ function CourseSearch({ apiKey, golfCourseApiKey, onApiKeyNeeded, onSelect }) {
       }
     } catch {}
 
-    // Tier 3: Claude web search
-    if (!apiKey) {
-      setError('No results found. Add your Anthropic API key in Settings to enable web search fallback.')
+    // Tier 3: Claude web search via server proxy
+    if (!authToken) {
+      setError('No results found. Sign in to enable web search fallback.')
       setLoading(false)
       return
     }
     try {
-      const d = await fetchScorecardViaClaudeSearch(apiKey, query, location)
+      const d = await fetchScorecardViaClaudeSearch(authToken, query, location)
       setDetail(d)
       setSource(d.source || 'web search')
     } catch (e) {
@@ -847,10 +725,10 @@ function CourseSearch({ apiKey, golfCourseApiKey, onApiKeyNeeded, onSelect }) {
         if (myId !== loadIdRef.current) return
         normalized = normalizeOpenGolfCourse(raw)
         const missingYardages = normalized.holes.every(h => !h.yardage)
-        if (missingYardages && apiKey) {
+        if (missingYardages && authToken) {
           setStatus('Fetching yardages via web search…')
           try {
-            const webData = await fetchScorecardViaClaudeSearch(apiKey, normalized.name, normalized.location)
+            const webData = await fetchScorecardViaClaudeSearch(authToken, normalized.name, normalized.location)
             if (myId !== loadIdRef.current) return
             normalized = {
               ...normalized,
@@ -892,15 +770,11 @@ function CourseSearch({ apiKey, golfCourseApiKey, onApiKeyNeeded, onSelect }) {
     <div style={{ ...card, marginBottom: 14, borderColor: C.accentMuted }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
         <p style={{ ...lbl, margin: 0 }}>Search verified scorecard</p>
-        {golfCourseApiKey
-          ? <Badge label="GolfCourseAPI" bg={C.greenMuted} fg={C.green} />
-          : <Badge label="OpenGolfAPI" bg={C.bgInput} fg={C.textMuted} />}
+        <Badge label="GolfCourseAPI" bg={C.greenMuted} fg={C.green} />
         {source === 'GolfCourseAPI' && <Badge label="Full yardages" bg={C.accentMuted} fg={C.accent} />}
       </div>
       <p style={{ fontSize: 12, color: C.textMuted, marginBottom: 10, marginTop: 0 }}>
-        {golfCourseApiKey
-          ? 'Primary: GolfCourseAPI (verified yardages). Falls back to OpenGolfAPI then Claude web search.'
-          : 'Primary: OpenGolfAPI (free). Add VITE_GOLF_COURSE_API_KEY to .env for verified yardages.'}
+        Searches GolfCourseAPI (verified yardages), then OpenGolfAPI, then Claude web search.
       </p>
       <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 160px auto', gap: 8 }}>
         <div>
@@ -1028,7 +902,7 @@ function ScorecardPreview({ holes }) {
 }
 
 // ─── Weather + Tee Time panel ─────────────────────────────────────────────────
-function WeatherPanel({ apiKey, course, coords, setCoords,
+function WeatherPanel({ authToken, course, coords, setCoords,
                         teeTime, setTeeTime, teeDate, setTeeDate, pace, setPace,
                         timezone, weather, setWeather, weatherLoading, setWeatherLoading }) {
   const isMobile = useIsMobile()
@@ -1064,10 +938,10 @@ function WeatherPanel({ apiKey, course, coords, setCoords,
       if (ok) { setWeatherLoading(false); return }
     }
 
-    if (apiKey) {
+    if (authToken) {
       setStatus('Geocoding via Claude web search...')
       try {
-        const c = await geocodeViaClaudeSearch(apiKey, course.name, course.location)
+        const c = await geocodeViaClaudeSearch(authToken, course.name, course.location)
         const ok = await doFetch(c.lat, c.lng, 'Claude geocode')
         if (ok) { setWeatherLoading(false); return }
       } catch {}
@@ -1076,7 +950,7 @@ function WeatherPanel({ apiKey, course, coords, setCoords,
     setError(
       `Automatic geocoding failed. This can happen when:\n` +
       `• The course name is ambiguous or misspelled\n` +
-      `• API key is missing (set VITE_ANTHROPIC_API_KEY in .env)\n` +
+      `• You may need to sign in again\n` +
       `• Open-Meteo is temporarily unreachable\n\n` +
       `Enter coordinates manually below (find them on Google Maps).`
     )
@@ -1269,9 +1143,9 @@ function CourseMapEmbed({ courseName, location, mapsKey }) {
 function AppInner({ user, session, onSignOut }) {
   const isMobile = useIsMobile()
   // ── API keys — loaded from localStorage, falling back to .env ────────────
-  const [apiKey,          setApiKeyRaw]       = useState(() => loadSavedKeys().anthropic  || ENV_ANTHROPIC_KEY)
+  const [apiKey,          setApiKeyRaw]       = useState(() => loadSavedKeys().anthropic  || '')
   const [mapsKey,         setMapsKeyRaw]      = useState(() => loadSavedKeys().maps        || ENV_MAPS_KEY)
-  const [golfCourseApiKey,setGolfKeyRaw]      = useState(() => loadSavedKeys().golfCourse  || ENV_GOLF_COURSE_KEY)
+  const [golfCourseApiKey,setGolfKeyRaw]      = useState(() => loadSavedKeys().golfCourse  || '')
 
   // Inputs for the keys panel
   const [draftAnthropicKey,  setDraftAnthropicKey]  = useState('')
@@ -1375,10 +1249,9 @@ function AppInner({ user, session, onSignOut }) {
     if (!query.trim()) return
     updateHS(i, { loading: true, error: '', results: [] })
     try {
-      if (golfCourseApiKey) {
-        const courses = await searchGolfCourseAPI(query, golfCourseApiKey)
-        if (courses.length > 0) { updateHS(i, { results: courses, loading: false }); return }
-      }
+      const authToken = session?.access_token || ''
+      const courses = await searchGolfCourseAPI(query, authToken)
+      if (courses.length > 0) { updateHS(i, { results: courses, loading: false }); return }
     } catch {}
     updateHS(i, { loading: false, error: 'No results. Try a more specific name.' })
   }
@@ -1543,12 +1416,11 @@ function AppInner({ user, session, onSignOut }) {
         }
       } catch { /* OSM failed */ }
 
-      const holesForCheck = osmHoles || course.holes
-      const holesWithDesign = holesForCheck.filter(h => h.osmDesign?.hazards?.length > 0 || h.notes).length
       const authToken = session?.access_token || ''
-      if (holesWithDesign < 9 && (apiKey || authToken)) {
+      const holesWithDesign = enriched.holes.filter(h => h.osmDesign?.hazards?.length > 0 || h.notes).length
+      if (holesWithDesign < 9 && authToken) {
         try {
-          const designData = await fetchHoleDesignViaSearch(apiKey || null, course.name, course.location, authToken)
+          const designData = await fetchHoleDesignViaSearch(authToken, enriched.name, enriched.location)
           if (myId !== enrichLoadIdRef.current) return
           if (designData?.holes?.length) {
             setCourse(prev => {
@@ -1565,7 +1437,7 @@ function AppInner({ user, session, onSignOut }) {
         setCourse(prev => ({ ...prev, osmEnriched: true }))
       }
     })()
-  }, [course.name, coords?.lat, coords?.lng, course.osmEnriched, apiKey, session])
+  }, [course.name, coords?.lat, coords?.lng, course.osmEnriched, session])
 
   const buildPrompt = useCallback(() => {
     // ── Shared: club list ──
@@ -1785,9 +1657,8 @@ Be direct. No filler. ALL 18 HOLES.`
   }, [clubs, course, playerInfo, holeWeather, holeTimes, teeTime, teeDate, pace, scoringHistory])
 
   const generate = async () => {
-    // Use server-side proxy when deployed (no user API key needed), fall back to direct browser access for local dev
-    const useProxy = !['localhost', '127.0.0.1'].includes(window.location.hostname)
-    if (!useProxy && !apiKey) { setPlanError('Add your Anthropic API key in Settings to generate a game plan.'); return }
+    const authToken = session?.access_token || ''
+    if (!authToken) { setPlanError('Please sign in to generate a game plan.'); return }
     setPlanLoading(true); setPlanPhase('Analyzing scoring history'); setPlanError(''); setPlan(''); setTab('prep'); setPrepStep(4)
     const payload = {
       model: selectedModel,
@@ -1799,19 +1670,12 @@ Be direct. No filler. ALL 18 HOLES.`
       }],
     }
     try {
-      // Get the current session token for the proxy (rate limiting + auth verification)
-      const authToken = session?.access_token || ''
-      const res = await fetch(useProxy ? '/api/generate' : 'https://api.anthropic.com/v1/messages', {
+      const res = await fetch('/api/generate', {
         method: 'POST',
-        headers: useProxy
-          ? { 'Content-Type': 'application/json', ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {}) }
-          : {
-              'Content-Type': 'application/json',
-              'x-api-key': apiKey,
-              'anthropic-version': '2023-06-01',
-              'anthropic-beta': 'prompt-caching-2024-07-31',
-              'anthropic-dangerous-direct-browser-access': 'true',
-            },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`,
+        },
         body: JSON.stringify(payload),
       })
       if (!res.ok) {
@@ -1873,7 +1737,7 @@ Be direct. No filler. ALL 18 HOLES.`
   }
 
   const printPlan = () => {
-    const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
     const cleanPlan = plan.replace(/```green-json\s*\n[\s\S]*?\n```/g, '')
     const html = esc(cleanPlan)
       .replace(/^## (.+)$/gm, '</p><h2>$1</h2><p>')
@@ -1917,8 +1781,8 @@ Be direct. No filler. ALL 18 HOLES.`
       <div class="header">
         <h1>${esc(course.name || 'Game Plan')}</h1>
         <div class="meta">
-          ${esc(playerInfo.name || 'Player')} · HCP ${playerInfo.handicap}<br>
-          ${teeDate} · ${teeTime} · Par ${course.par} · ${Number(course.yardage || 0).toLocaleString()}y<br>
+          ${esc(playerInfo.name || 'Player')} · HCP ${esc(playerInfo.handicap)}<br>
+          ${esc(teeDate)} · ${esc(teeTime)} · Par ${esc(course.par)} · ${Number(course.yardage || 0).toLocaleString()}y<br>
           ${course.selectedTee ? esc(course.selectedTee) + ' tees · ' : ''}${course.conditions ? esc(course.conditions) : ''}
         </div>
       </div>
@@ -2554,9 +2418,7 @@ Be direct. No filler. ALL 18 HOLES.`
             {prepStep === 1 && (
               <div>
                 <CourseSearch
-                  apiKey={apiKey}
-                  golfCourseApiKey={golfCourseApiKey}
-                  onApiKeyNeeded={() => {}}
+                  authToken={session?.access_token || ''}
                   onSelect={(r) => { applyScorecard(r); setPrepStep(2) }}
                 />
                 {course.name && (
@@ -2651,7 +2513,7 @@ Be direct. No filler. ALL 18 HOLES.`
             {prepStep === 3 && (
               <div>
                 <WeatherPanel
-                  apiKey={apiKey} course={course}
+                  authToken={session?.access_token || ''} course={course}
                   coords={coords} setCoords={setCoords}
                   teeTime={teeTime} setTeeTime={setTeeTime}
                   teeDate={teeDate} setTeeDate={setTeeDate}
@@ -3215,19 +3077,9 @@ Be direct. No filler. ALL 18 HOLES.`
               <div style={{ ...card, marginBottom: 16 }}>
                 {sectionHead('API Keys', 'Optional — course search uses a free API by default. Add keys for premium data sources.')}
                 <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 12 }}>
-                  <div>
-                    <label style={lbl}>GolfCourseAPI key (optional)</label>
-                    <input type="password" style={inp} value={golfCourseApiKey}
-                      onChange={e => setGolfKey(e.target.value)}
-                      placeholder="For verified scorecards — golfcourseapi.com" />
-                    <p style={{ fontSize: 10, color: C.textFaint, margin: '4px 0 0' }}>Provides verified hole-by-hole data with tee options</p>
-                  </div>
-                  <div>
-                    <label style={lbl}>Anthropic API key (optional)</label>
-                    <input type="password" style={inp} value={apiKey}
-                      onChange={e => setApiKey(e.target.value)}
-                      placeholder="sk-ant-... (uses server proxy if empty)" />
-                    <p style={{ fontSize: 10, color: C.textFaint, margin: '4px 0 0' }}>Only needed if you're self-hosting or want direct API access</p>
+                  <div style={{ padding: '10px 14px', background: C.greenMuted, border: `1px solid ${C.green}`, borderRadius: 8 }}>
+                    <p style={{ fontSize: 12, color: C.green, margin: 0 }}>All API keys are managed server-side. No client-side keys needed.</p>
+                    <p style={{ fontSize: 11, color: C.textMuted, margin: '4px 0 0' }}>GolfCourseAPI and Anthropic keys are configured in Vercel environment variables.</p>
                   </div>
                 </div>
               </div>

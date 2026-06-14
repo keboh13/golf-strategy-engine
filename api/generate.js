@@ -153,6 +153,30 @@ export default async function handler(req) {
 
   try {
     const body = await req.json()
+
+    const ALLOWED_MODELS = ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250514', 'claude-haiku-4-5-20251001']
+    const sanitized = {
+      model: ALLOWED_MODELS.includes(body.model) ? body.model : ALLOWED_MODELS[0],
+      max_tokens: Math.min(Math.max(parseInt(body.max_tokens) || 8000, 100), 32000),
+      stream: body.stream === true,
+      messages: Array.isArray(body.messages) ? body.messages.map(m => ({
+        role: m.role === 'assistant' ? 'assistant' : 'user',
+        content: typeof m.content === 'string' ? m.content
+          : Array.isArray(m.content) ? m.content.filter(b => b.type === 'text').map(b => ({
+              type: 'text',
+              text: typeof b.text === 'string' ? b.text : '',
+              ...(b.cache_control ? { cache_control: { type: 'ephemeral' } } : {}),
+            }))
+          : '',
+      })) : [],
+    }
+    if (body.tools && Array.isArray(body.tools)) {
+      sanitized.tools = body.tools.filter(t =>
+        t.type === 'web_search_20250305' && t.name === 'web_search'
+      )
+      if (!sanitized.tools.length) delete sanitized.tools
+    }
+
     const upstream = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -161,7 +185,7 @@ export default async function handler(req) {
         'anthropic-version': '2023-06-01',
         'anthropic-beta': 'prompt-caching-2024-07-31',
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify(sanitized),
     })
 
     if (!upstream.ok) {
