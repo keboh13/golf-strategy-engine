@@ -1747,7 +1747,7 @@ Be direct. No filler. ALL 18 HOLES.`
 
   const generate = async () => {
     // Use server-side proxy when deployed (no user API key needed), fall back to direct browser access for local dev
-    const useProxy = window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1'
+    const useProxy = !['localhost', '127.0.0.1'].includes(window.location.hostname)
     if (!useProxy && !apiKey) { setPlanError('Add your Anthropic API key in Settings to generate a game plan.'); return }
     setPlanLoading(true); setPlanPhase('Analyzing scoring history'); setPlanError(''); setPlan(''); setTab('prep'); setPrepStep(4)
     const payload = {
@@ -1775,7 +1775,12 @@ Be direct. No filler. ALL 18 HOLES.`
             },
         body: JSON.stringify(payload),
       })
-      if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
+      if (!res.ok) {
+        const errText = await res.text()
+        let errMsg = `API ${res.status}: ${errText}`
+        try { const j = JSON.parse(errText); if (j.error) errMsg = j.error } catch {}
+        throw new Error(errMsg)
+      }
       const reader = res.body.getReader()
       const dec    = new TextDecoder()
       let buf = ''
@@ -2497,7 +2502,12 @@ Be direct. No filler. ALL 18 HOLES.`
             {/* Step 2: Scorecard Preview, Tees & Course Details */}
             {prepStep === 2 && (
               <div>
-                {course.name && <DataAccuracyTier course={course} style={{ marginBottom: 12 }} />}
+                {course.name && course.osmEnriched && <DataAccuracyTier course={course} style={{ marginBottom: 12 }} />}
+                {course.name && !course.osmEnriched && coords?.lat && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, padding: '10px 14px', background: C.bgInput, borderRadius: 10 }}>
+                    <Spin /><span style={{ fontSize: 12, color: C.textMuted }}>Loading hole design data...</span>
+                  </div>
+                )}
                 {/* Tee selector — switch tees without going back */}
                 {course.tees?.length > 1 && (
                   <div style={{ ...card, marginBottom: 12 }}>
