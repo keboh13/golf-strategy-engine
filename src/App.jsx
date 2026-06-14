@@ -631,22 +631,14 @@ If not found: {"error": "No verified scorecard found"}`,
 }
 
 // ─── Hole design data via Claude web search (fallback when OSM is sparse) ────
-async function fetchHoleDesignViaSearch(apiKey, courseName, location) {
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
-    },
-    body: JSON.stringify({
-      model: MODEL,
-      max_tokens: 4000,
-      tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-      messages: [{
-        role: 'user',
-        content: `Search for hole-by-hole design details for "${courseName}"${location ? ` in ${location}` : ''}.
+async function fetchHoleDesignViaSearch(apiKeyOrNull, courseName, location, authToken) {
+  const body = {
+    model: MODEL,
+    max_tokens: 4000,
+    tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+    messages: [{
+      role: 'user',
+      content: `Search for hole-by-hole design details for "${courseName}"${location ? ` in ${location}` : ''}.
 
 Look for course guides, flyover descriptions, or hole-by-hole breakdowns on the course website, greenskeeper.org, or golf review sites.
 
@@ -670,10 +662,55 @@ Return ONLY this JSON (no markdown):
 }
 
 If you cannot find any hole design info: {"error": "No hole design data found"}`,
-      }],
-    }),
-  })
-  const data = await res.json()
+    }],
+  }
+
+  let res
+  if (apiKeyOrNull) {
+    res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKeyOrNull,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      },
+      body: JSON.stringify(body),
+    })
+  } else if (authToken) {
+    res = await fetch('/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+      body: JSON.stringify(body),
+    })
+  } else {
+    throw new Error('No API key or auth token available')
+  }
+
+  if (!res.ok) throw new Error(`Design search failed: ${res.status}`)
+
+  const contentType = res.headers.get('Content-Type') || ''
+  let data
+  if (contentType.includes('text/event-stream')) {
+    const text = await res.text()
+    const lines = text.split('\n')
+    let combined = ''
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue
+      try {
+        const j = JSON.parse(line.slice(6))
+        if (j.type === 'content_block_delta' && j.delta?.text) combined += j.delta.text
+      } catch { /* skip */ }
+    }
+    const clean = combined.replace(/```json|```/g, '').trim()
+    const m = clean.match(/\{[\s\S]*\}/)
+    if (!m) throw new Error('No JSON in SSE response')
+    const parsed = JSON.parse(m[0])
+    if (parsed.error) throw new Error(parsed.error)
+    return parsed
+  }
+
+  data = await res.json()
   let text = ''
   for (const block of (data.content || [])) { if (block.type === 'text') text += block.text }
   const clean = text.replace(/```json|```/g, '').trim()
@@ -1509,9 +1546,10 @@ function AppInner({ user, session, onSignOut }) {
 
       const holesForCheck = osmHoles || course.holes
       const holesWithDesign = holesForCheck.filter(h => h.osmDesign?.hazards?.length > 0 || h.notes).length
-      if (holesWithDesign < 9 && apiKey) {
+      const authToken = session?.access_token || ''
+      if (holesWithDesign < 9 && (apiKey || authToken)) {
         try {
-          const designData = await fetchHoleDesignViaSearch(apiKey, course.name, course.location)
+          const designData = await fetchHoleDesignViaSearch(apiKey || null, course.name, course.location, authToken)
           if (myId !== enrichLoadIdRef.current) return
           if (designData?.holes?.length) {
             setCourse(prev => {
@@ -1528,7 +1566,7 @@ function AppInner({ user, session, onSignOut }) {
         setCourse(prev => ({ ...prev, osmEnriched: true }))
       }
     })()
-  }, [course.name, coords?.lat, coords?.lng, course.osmEnriched, apiKey])
+  }, [course.name, coords?.lat, coords?.lng, course.osmEnriched, apiKey, session])
 
   const buildPrompt = useCallback(() => {
     // ── Shared: club list ──
