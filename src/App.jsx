@@ -1314,11 +1314,13 @@ function AppInner({ user, session, onSignOut }) {
   }, [playerInfo, clubs, dbLoaded])
   useEffect(() => {
     localStorage.setItem(LS_HISTORY, JSON.stringify(scoringHistory))
-    // Sync to Supabase
-    if (user) {
-      saveUserHistory(user.id, scoringHistory).catch(e => console.warn('[supabase] history save:', e.message))
+    if (user && dbLoaded) {
+      const timer = setTimeout(() => {
+        saveUserHistory(user.id, scoringHistory).catch(e => console.warn('[supabase] history save:', e.message))
+      }, 1500)
+      return () => clearTimeout(timer)
     }
-  }, [scoringHistory])
+  }, [scoringHistory, dbLoaded])
 
   // Check admin status once when the Settings tab is opened
   useEffect(() => {
