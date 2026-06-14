@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef, useMemo, Component } from 'react'
-import { supabase, loadUserProfiles, saveUserProfile, deleteUserProfile, loadUserHistory, saveUserHistory, loadUserSettings, saveUserSettings, getCachedCourseDB, setCachedCourseDB, getAllCachedCoursesDB, deleteCachedCourseDB } from './lib/supabase.js'
+import { supabase, loadUserProfiles, saveUserProfile, deleteUserProfile, loadUserHistory, saveUserHistory, loadUserSettings, saveUserSettings, getCachedCourseDB, setCachedCourseDB, getAllCachedCoursesDB, deleteCachedCourseDB, loadSavedPlans, savePlan, deleteSavedPlan } from './lib/supabase.js'
 import { buildBagSection } from './lib/promptSections.js'
 import AuthScreen from './screens/AuthScreen.jsx'
 import ImportTab from './components/ImportTab.jsx'
@@ -66,11 +66,11 @@ const F = "'Inter', 'Helvetica Neue', sans-serif"
 // ─── Green View SVG Component ─────────────────────────────────────────────────
 function GreenView({ green, holeNum }) {
   if (!green) return null
-  const W = 320, H = 260
-  const cx = W / 2, cy = 130
+  const FIXED_W = 320, FIXED_H = 290
+  const cx = FIXED_W / 2, cy = 135
 
-  const greenW = Math.min((green.width_y || 24) * 3.5, 160)
-  const greenH = Math.min((green.depth_y || 28) * 3, 120)
+  const greenW = 140
+  const greenH = 100
 
   const shapes = {
     kidney: (cx, cy, w, h) => {
@@ -84,6 +84,10 @@ function GreenView({ green, holeNum }) {
     round: (cx, cy, w, h) => {
       const r = Math.min(w, h) / 2
       return `M${cx},${cy - r} A${r},${r} 0 1,1 ${cx},${cy + r} A${r},${r} 0 1,1 ${cx},${cy - r} Z`
+    },
+    oblong: (cx, cy, w, h) => {
+      const hw = w / 2, hh = h / 2, r = Math.min(hw, hh * 0.5)
+      return `M${cx - hw + r},${cy - hh} L${cx + hw - r},${cy - hh} A${r},${r} 0 0,1 ${cx + hw},${cy - hh + r} L${cx + hw},${cy + hh - r} A${r},${r} 0 0,1 ${cx + hw - r},${cy + hh} L${cx - hw + r},${cy + hh} A${r},${r} 0 0,1 ${cx - hw},${cy + hh - r} L${cx - hw},${cy - hh + r} A${r},${r} 0 0,1 ${cx - hw + r},${cy - hh} Z`
     },
   }
   const shapeFn = shapes[green.shape] || shapes.oval
@@ -112,12 +116,10 @@ function GreenView({ green, holeNum }) {
       'back-right':  { x: cx + greenW / 2 + 12, y: cy - greenH / 2 - 8 },
     }
     const pos = locs[hz.loc] || locs.right
-    const isBunker = hz.type === 'bunker'
-    const isWater = hz.type === 'water'
     return (
       <g key={i}>
-        {isBunker && <ellipse cx={pos.x} cy={pos.y} rx={16} ry={10} fill="#d4a94433" stroke="#d4a944" strokeWidth={1.5} />}
-        {isWater && <ellipse cx={pos.x} cy={pos.y} rx={18} ry={10} fill="#38bdf822" stroke="#38bdf8" strokeWidth={1.5} />}
+        {hz.type === 'bunker' && <ellipse cx={pos.x} cy={pos.y} rx={16} ry={10} fill="#d4a94433" stroke="#d4a944" strokeWidth={1.5} />}
+        {hz.type === 'water' && <ellipse cx={pos.x} cy={pos.y} rx={18} ry={10} fill="#38bdf822" stroke="#38bdf8" strokeWidth={1.5} />}
         {hz.type === 'false_front' && <line x1={pos.x - 18} y1={pos.y} x2={pos.x + 18} y2={pos.y} stroke="#f59e0b" strokeWidth={2} strokeDasharray="4 3" />}
         {hz.type === 'mound' && <ellipse cx={pos.x} cy={pos.y} rx={12} ry={8} fill="none" stroke="#8b8fa8" strokeWidth={1.5} strokeDasharray="3 2" />}
         {hz.carry_y && <text x={pos.x} y={pos.y + 18} textAnchor="middle" fill={C.textMuted} fontSize={9} fontFamily={F}>{hz.carry_y}y</text>}
@@ -126,17 +128,25 @@ function GreenView({ green, holeNum }) {
     )
   })
 
+  const tierCount = green.tiers || 0
+
   return (
     <div style={{ background: C.bgInput, borderRadius: 10, padding: '12px 8px', marginTop: 10 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, padding: '0 8px' }}>
-        <span style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Green view — Hole {holeNum}</span>
-        <span style={{ fontSize: 14, fontWeight: 700, color: C.green }}>Depth: {green.depth_y || '?'}y</span>
+        <span style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Green — Hole {holeNum}</span>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+          <span style={{ fontSize: 11, color: C.textFaint }}>{green.depth_y || '?'}y deep × {green.width_y || '?'}y wide</span>
+          {tierCount > 0 && <span style={{ fontSize: 10, fontWeight: 600, color: C.amber, background: C.amberMuted, padding: '1px 6px', borderRadius: 4 }}>{tierCount}-tier</span>}
+        </div>
       </div>
-      <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ display: 'block' }}>
-        {/* Green surface */}
+      <svg viewBox={`0 0 ${FIXED_W} ${FIXED_H}`} width="100%" style={{ display: 'block' }}>
         <path d={greenPath} fill="#1a4d2e" stroke={C.green} strokeWidth={1.5} />
 
-        {/* Front / Mid / Back distance labels */}
+        {/* Tier lines */}
+        {tierCount >= 2 && <line x1={cx - greenW * 0.35} y1={cy} x2={cx + greenW * 0.35} y2={cy} stroke={C.textFaint} strokeWidth={0.8} strokeDasharray="6 3" opacity={0.6} />}
+        {tierCount >= 3 && <line x1={cx - greenW * 0.3} y1={cy - greenH * 0.25} x2={cx + greenW * 0.3} y2={cy - greenH * 0.25} stroke={C.textFaint} strokeWidth={0.8} strokeDasharray="6 3" opacity={0.6} />}
+
+        {/* Dimension labels */}
         <line x1={cx - greenW / 2 - 30} y1={cy + greenH / 2} x2={cx - greenW / 2 - 8} y2={cy + greenH / 2} stroke={C.textFaint} strokeWidth={0.5} />
         <text x={cx - greenW / 2 - 34} y={cy + greenH / 2 + 3} textAnchor="end" fill={C.green} fontSize={11} fontWeight="600" fontFamily={F}>F {green.front_y || '?'}</text>
 
@@ -146,13 +156,20 @@ function GreenView({ green, holeNum }) {
         <line x1={cx - greenW / 2 - 30} y1={cy - greenH / 2} x2={cx - greenW / 2 - 8} y2={cy - greenH / 2} stroke={C.textFaint} strokeWidth={0.5} />
         <text x={cx - greenW / 2 - 34} y={cy - greenH / 2 + 3} textAnchor="end" fill={C.blue} fontSize={11} fontWeight="600" fontFamily={F}>B {green.back_y || '?'}</text>
 
-        {/* Pin position */}
+        {/* Width dimension line across bottom */}
+        <line x1={cx - greenW / 2} y1={cy + greenH / 2 + 14} x2={cx + greenW / 2} y2={cy + greenH / 2 + 14} stroke={C.textFaint} strokeWidth={0.5} />
+        <line x1={cx - greenW / 2} y1={cy + greenH / 2 + 10} x2={cx - greenW / 2} y2={cy + greenH / 2 + 18} stroke={C.textFaint} strokeWidth={0.5} />
+        <line x1={cx + greenW / 2} y1={cy + greenH / 2 + 10} x2={cx + greenW / 2} y2={cy + greenH / 2 + 18} stroke={C.textFaint} strokeWidth={0.5} />
+        <text x={cx} y={cy + greenH / 2 + 26} textAnchor="middle" fill={C.textFaint} fontSize={9} fontFamily={F}>{green.width_y || '?'}y wide</text>
+
+        {/* Pin */}
         <line x1={pin.x} y1={pin.y} x2={pin.x} y2={pin.y - 18} stroke="#fff" strokeWidth={1.5} />
         <circle cx={pin.x} cy={pin.y - 18} r={3} fill={C.red} />
         <circle cx={pin.x} cy={pin.y} r={2} fill="#fff" />
 
         {/* Slope arrow */}
         {green.slope && green.slope !== 'flat' && (() => {
+          const arrowId = `arrow-${holeNum}`
           const dirs = {
             'back-to-front':  { x1: cx + greenW * 0.3, y1: cy - greenH * 0.2, x2: cx + greenW * 0.3, y2: cy + greenH * 0.2 },
             'front-to-back':  { x1: cx + greenW * 0.3, y1: cy + greenH * 0.2, x2: cx + greenW * 0.3, y2: cy - greenH * 0.2 },
@@ -163,21 +180,23 @@ function GreenView({ green, holeNum }) {
           if (!d) return null
           return (
             <g>
-              <defs><marker id="arrowhead" markerWidth="6" markerHeight="4" refX="5" refY="2" orient="auto"><polygon points="0 0, 6 2, 0 4" fill={C.textFaint} /></marker></defs>
-              <line {...d} stroke={C.textFaint} strokeWidth={1} markerEnd="url(#arrowhead)" />
+              <defs><marker id={arrowId} markerWidth="6" markerHeight="4" refX="5" refY="2" orient="auto"><polygon points="0 0, 6 2, 0 4" fill={C.textFaint} /></marker></defs>
+              <line {...d} stroke={C.textFaint} strokeWidth={1} markerEnd={`url(#${arrowId})`} />
               <text x={(d.x1 + d.x2) / 2 + 10} y={(d.y1 + d.y2) / 2 + 3} fill={C.textFaint} fontSize={8} fontFamily={F}>slope</text>
             </g>
           )
         })()}
 
-        {/* Hazards */}
         {hazardElems}
 
-        {/* Approach direction arrow at bottom */}
-        <polygon points={`${cx - 4},${H - 8} ${cx + 4},${H - 8} ${cx},${H - 16}`} fill={C.textFaint} />
-        <text x={cx} y={H - 2} textAnchor="middle" fill={C.textFaint} fontSize={8} fontFamily={F}>approach</text>
+        <polygon points={`${cx - 4},${FIXED_H - 8} ${cx + 4},${FIXED_H - 8} ${cx},${FIXED_H - 16}`} fill={C.textFaint} />
+        <text x={cx} y={FIXED_H - 2} textAnchor="middle" fill={C.textFaint} fontSize={8} fontFamily={F}>approach</text>
       </svg>
-      {green.slope && <p style={{ fontSize: 10, color: C.textFaint, textAlign: 'center', margin: '4px 0 0' }}>Slope: {green.slope.replace(/-/g, ' → ').replace(/to →/, '→')}</p>}
+      <div style={{ padding: '4px 8px 0', display: 'flex', flexDirection: 'column', gap: 2 }}>
+        {green.slope && <p style={{ fontSize: 10, color: C.textFaint, margin: 0 }}>Slope: {green.slope.replace(/-/g, ' → ').replace(/to →/, '→')}</p>}
+        {green.tier_desc && <p style={{ fontSize: 10, color: C.amber, margin: 0 }}>Tiers: {green.tier_desc}</p>}
+        {green.green_notes && <p style={{ fontSize: 10, color: C.green, margin: 0, fontStyle: 'italic' }}>{green.green_notes}</p>}
+      </div>
     </div>
   )
 }
@@ -279,7 +298,8 @@ function stripClubs(data) {
 }
 
 const DEFAULT_PLAYER = {
-  name: '', handicap: '+0.7', ghin: '',
+  name: '', handicap: '4.2', ghin: '',
+  handedness: 'Right',
   miss: 'Both (fade misses right under pressure)',
   ballFlight: 'Fade', swingNotes: '',
   goals: '', strengths: '',
@@ -463,14 +483,13 @@ async function searchGolfCourseAPI(query, apiKey) {
   return data.courses || []
 }
 
-function normalizeGolfCourseAPICourse(raw) {
-  // Prefer the longest male tee (championship/back); fall back to female tees
+function normalizeGolfCourseAPICourse(raw, selectedTee) {
   const maleTees   = raw.tees?.male   || []
   const femaleTees = raw.tees?.female || []
   const allTees    = maleTees.length ? maleTees : femaleTees
 
-  // Pick by name priority, then longest yardage
-  const chosen = allTees.find(t => /black|championship|tournament/i.test(t.tee_name))
+  const chosen = selectedTee
+    || allTees.find(t => /black|championship|tournament/i.test(t.tee_name))
     || allTees.find(t => /blue/i.test(t.tee_name))
     || allTees.reduce((best, t) => (!best || t.total_yards > best.total_yards) ? t : best, null)
 
@@ -495,7 +514,8 @@ function normalizeGolfCourseAPICourse(raw) {
     par:      chosen.par_total || holes.reduce((s, h) => s + h.par, 0),
     lat:      loc.latitude,
     lng:      loc.longitude,
-    tees:     allTees.map(t => ({ name: t.tee_name, yardage: t.total_yards || '' })),
+    selectedTee: chosen.tee_name || '',
+    tees:     allTees.map(t => ({ name: t.tee_name, yardage: t.total_yards || '', rating: t.course_rating || '', slope: t.slope_rating || '', par: t.par_total || '' })),
     source:   'GolfCourseAPI',
     holes,
   }
@@ -559,12 +579,13 @@ function CourseSearch({ apiKey, golfCourseApiKey, onApiKeyNeeded, onSelect }) {
   const [status,   setStatus]   = useState('') // in-progress status message
   const [error,    setError]    = useState('')
   const [source,   setSource]   = useState('')
+  const [teePickerCourse, setTeePickerCourse] = useState(null)
   // Race-condition guard: each load gets an ID; stale completions are ignored
   const loadIdRef = useRef(0)
 
   const search = async () => {
     if (!query.trim()) return
-    setLoading(true); setError(''); setStatus(''); setResults([]); setDetail(null); setSource('')
+    setLoading(true); setError(''); setStatus(''); setResults([]); setDetail(null); setSource(''); setTeePickerCourse(null)
     const q = query + (location ? ' ' + location : '')
 
     // Tier 1: GolfCourseAPI — real yardages, requires API key
@@ -611,19 +632,18 @@ function CourseSearch({ apiKey, golfCourseApiKey, onApiKeyNeeded, onSelect }) {
     setLoading(false)
   }
 
-  const loadCourse = async (courseStub) => {
+  const loadCourse = async (courseStub, selectedTee) => {
     const myId = ++loadIdRef.current
-    setLoading(true); setError(''); setStatus(''); setDetail(null)
+    setLoading(true); setError(''); setStatus(''); setDetail(null); setTeePickerCourse(null)
     try {
       if (courseStub._source === 'GolfCourseAPI') {
-        // Check cache before hitting API
         const stubName = courseStub.course_name || courseStub.name || ''
-        // GolfCourseAPI returns location as a nested object before normalization
         const rawLoc   = courseStub.location
         const stubLoc  = typeof rawLoc === 'object' && rawLoc !== null
           ? [rawLoc.city, rawLoc.state].filter(Boolean).join(', ')
           : (rawLoc || '')
-        const cached = getCachedCourse(stubName, stubLoc)
+        const teeSuffix = selectedTee ? `|${selectedTee.tee_name}` : ''
+        const cached = getCachedCourse(stubName + teeSuffix, stubLoc)
         if (cached) {
           if (myId !== loadIdRef.current) return
           setDetail(cached)
@@ -632,7 +652,7 @@ function CourseSearch({ apiKey, golfCourseApiKey, onApiKeyNeeded, onSelect }) {
           setLoading(false)
           return
         }
-        const normalized = normalizeGolfCourseAPICourse(courseStub)
+        const normalized = normalizeGolfCourseAPICourse(courseStub, selectedTee)
         if (myId !== loadIdRef.current) return
         setCachedCourse(normalized)
         setDetail(normalized)
@@ -726,7 +746,40 @@ function CourseSearch({ apiKey, golfCourseApiKey, onApiKeyNeeded, onSelect }) {
         </div>
       )}
 
-      {results.length > 0 && !detail && (
+      {/* Tee picker for GolfCourseAPI course */}
+      {teePickerCourse && (
+        <div style={{ marginTop: 12, background: C.bgInput, border: `1px solid ${C.accentMuted}`, borderRadius: 10, padding: 14 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <div>
+              <p style={{ fontSize: 14, fontWeight: 600, color: C.text, margin: 0 }}>{teePickerCourse.course_name || teePickerCourse.name}</p>
+              <p style={{ fontSize: 11, color: C.textMuted, margin: '2px 0 0' }}>Select your tee</p>
+            </div>
+            <button style={btnG} onClick={() => setTeePickerCourse(null)}>← Back</button>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {[...(teePickerCourse.tees?.male || []), ...(teePickerCourse.tees?.female || [])].map((t, i) => (
+              <div key={i}
+                onClick={() => loadCourse({ ...teePickerCourse, _source: 'GolfCourseAPI' }, t)}
+                style={{ background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: 8, padding: '10px 14px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', transition: 'border-color .15s' }}
+                onMouseEnter={e => e.currentTarget.style.borderColor = C.accent}
+                onMouseLeave={e => e.currentTarget.style.borderColor = C.border}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{t.tee_name}</span>
+                  <span style={{ fontSize: 12, color: C.accent, fontWeight: 500 }}>{t.total_yards?.toLocaleString()}y</span>
+                </div>
+                <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                  <span style={{ fontSize: 11, color: C.textMuted }}>Par {t.par_total}</span>
+                  <span style={{ fontSize: 11, color: C.textMuted }}>{t.course_rating}/{t.slope_rating}</span>
+                  <span style={{ fontSize: 12, color: C.accent }}>Select →</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {results.length > 0 && !detail && !teePickerCourse && (
         <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
           {results.map((r, i) => {
             const isGCA   = source === 'GolfCourseAPI'
@@ -735,6 +788,7 @@ function CourseSearch({ apiKey, golfCourseApiKey, onApiKeyNeeded, onSelect }) {
             const city    = loc?.city || ''
             const state   = loc?.state || ''
             const maleTees = r.tees?.male || []
+            const hasTees  = isGCA && maleTees.length > 0
             const backTee  = maleTees.find(t => /black|championship|tournament/i.test(t.tee_name))
               || maleTees.find(t => /blue/i.test(t.tee_name))
               || maleTees.reduce((best, t) => (!best || t.total_yards > best.total_yards) ? t : best, null)
@@ -745,9 +799,13 @@ function CourseSearch({ apiKey, golfCourseApiKey, onApiKeyNeeded, onSelect }) {
                   <p style={{ fontSize: 11, color: C.textMuted, margin: '2px 0 0' }}>
                     {[city, state].filter(Boolean).join(', ')}
                     {backTee && <span style={{ color: C.accent }}> · {backTee.tee_name} {backTee.total_yards?.toLocaleString()}y · Par {backTee.par_total} · {backTee.course_rating}/{backTee.slope_rating}</span>}
+                    {hasTees && <span style={{ color: C.textFaint }}> · {maleTees.length} tees</span>}
                   </p>
                 </div>
-                <button style={btnP} onClick={() => loadCourse({ ...r, _source: source })}>Load scorecard →</button>
+                {hasTees
+                  ? <button style={btnP} onClick={() => setTeePickerCourse(r)}>Pick tee →</button>
+                  : <button style={btnP} onClick={() => loadCourse({ ...r, _source: source })}>Load scorecard →</button>
+                }
               </div>
             )
           })}
@@ -1100,59 +1158,8 @@ function AppInner({ user, session, onSignOut }) {
     try { return stripClubs(JSON.parse(localStorage.getItem(LS_PLAYER))) || DEFAULT_PLAYER } catch { return DEFAULT_PLAYER }
   })
 
-  // Profile switcher
-  const [currentProfile, setCurrentProfile] = useState(() =>
-    localStorage.getItem(LS_CURRENT_PROFILE) || 'Default'
-  )
-  const [newProfileName, setNewProfileName] = useState('')
-  const [showNewProfile, setShowNewProfile] = useState(false)
-
-  const switchProfile = (name) => {
-    const profiles = loadProfiles()
-    const currentData = { ...playerInfo, clubs }
-    if (JSON.stringify(profiles[currentProfile]) !== JSON.stringify(currentData)) {
-      profiles[currentProfile] = currentData
-      saveProfiles(profiles)
-    }
-    const next = profiles[name] || DEFAULT_PLAYER
-    setPlayerInfo(stripClubs(next))
-    setClubs(clubsFromProfile(next))
-    setExpandedClubs({})
-    setCurrentProfile(name)
-    localStorage.setItem(LS_CURRENT_PROFILE, name)
-  }
-  const createProfile = () => {
-    const name = newProfileName.trim()
-    if (!name) return
-    const profiles = loadProfiles()
-    profiles[currentProfile] = { ...playerInfo, clubs }
-    profiles[name] = { ...DEFAULT_PLAYER, clubs: DEFAULT_CLUBS }
-    saveProfiles(profiles)
-    setPlayerInfo(DEFAULT_PLAYER)
-    setClubs(DEFAULT_CLUBS)
-    setExpandedClubs({})
-    setCurrentProfile(name)
-    localStorage.setItem(LS_CURRENT_PROFILE, name)
-    setNewProfileName('')
-    setShowNewProfile(false)
-  }
-  const deleteProfile = () => {
-    const profiles = loadProfiles()
-    delete profiles[currentProfile]
-    if (user) {
-      deleteUserProfile(user.id, currentProfile).catch(e => console.warn('[supabase] profile delete:', e.message))
-    }
-    saveProfiles(profiles)
-    const remaining = Object.keys(profiles)
-    const next = remaining[0] || 'Default'
-    if (!profiles[next]) profiles[next] = DEFAULT_PLAYER
-    saveProfiles(profiles)
-    setPlayerInfo(stripClubs(profiles[next]))
-    setClubs(clubsFromProfile(profiles[next]))
-    setExpandedClubs({})
-    setCurrentProfile(next)
-    localStorage.setItem(LS_CURRENT_PROFILE, next)
-  }
+  // Single profile per authenticated user (profile name = 'Default')
+  const currentProfile = 'Default'
 
   // Club distances — persisted with the player profile (localStorage + Supabase)
   const [clubs, setClubs] = useState(() => {
@@ -1169,12 +1176,13 @@ function AppInner({ user, session, onSignOut }) {
   const [course, setCourse] = useState({
     name: '', location: '', yardage: '', rating: '', slope: '', par: 72,
     conditions: 'Normal', roundType: 'Stroke play tournament',
-    targetScore: '', notes: '', source: '',
+    targetScore: '', notes: '', source: '', elevation: '',
     holes: Array.from({ length: 18 }, (_, i) => ({
       par:      [4,4,3,5,4,3,4,5,4,4,3,4,5,4,3,4,4,5][i] || 4,
       yardage:  '',
       handicap: i + 1,
       notes:    '',
+      elevation: '',
     })),
   })
 
@@ -1195,6 +1203,9 @@ function AppInner({ user, session, onSignOut }) {
   const [planView,    setPlanView]    = useState('companion')
   const [currentHole, setCurrentHole] = useState(0)
   const [copied,      setCopied]      = useState(false)
+  const [savedBriefs, setSavedBriefs] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('golf_saved_briefs') || '[]') } catch { return [] }
+  })
   const [holeScores,  setHoleScores]  = useState({})
 
   const setScore = (holeNum, val) => setHoleScores(s => ({ ...s, [holeNum]: Math.max(1, val) }))
@@ -1233,31 +1244,31 @@ function AppInner({ user, session, onSignOut }) {
   }
 
   // ── Persistence ──────────────────────────────────────────────────────────
+  // Guard: suppress save-back while Supabase load is in progress
+  const [dbLoaded, setDbLoaded] = useState(false)
+
   // Load user data from Supabase on mount (when authenticated)
   useEffect(() => {
     if (!user) return
+    setDbLoaded(false)
     ;(async () => {
       try {
-        // Load profiles
         const dbProfiles = await loadUserProfiles(user.id)
-        if (Object.keys(dbProfiles).length > 0) {
-          saveProfiles(dbProfiles)
-          const settings = await loadUserSettings(user.id)
-          const profileName = settings.current_profile || Object.keys(dbProfiles)[0]
-          setCurrentProfile(profileName)
-          if (dbProfiles[profileName]) {
-            setPlayerInfo(stripClubs(dbProfiles[profileName]))
-            setClubs(clubsFromProfile(dbProfiles[profileName]))
-          }
+        const profileData = dbProfiles['Default'] || dbProfiles[Object.keys(dbProfiles)[0]]
+        if (profileData) {
+          setPlayerInfo(stripClubs(profileData))
+          setClubs(clubsFromProfile(profileData))
         }
-        // Load history
         const dbHistory = await loadUserHistory(user.id)
         if (dbHistory.length > 0) setScoringHistory(dbHistory)
-        // Load settings (API keys)
         const settings = await loadUserSettings(user.id)
         if (settings.golf_course_api_key) setGolfKeyRaw(settings.golf_course_api_key)
+        const plans = await loadSavedPlans(user.id)
+        if (plans.length > 0) setSavedBriefs(plans)
       } catch (e) {
         console.warn('[supabase] load error:', e.message)
+      } finally {
+        setDbLoaded(true)
       }
     })()
   }, [user?.id])
@@ -1265,15 +1276,13 @@ function AppInner({ user, session, onSignOut }) {
   useEffect(() => {
     const profileData = { ...playerInfo, clubs }
     localStorage.setItem(LS_PLAYER, JSON.stringify(profileData))
-    const profiles = loadProfiles()
-    profiles[currentProfile] = profileData
-    saveProfiles(profiles)
-    // Sync to Supabase
-    if (user) {
-      saveUserProfile(user.id, currentProfile, profileData).catch(e => console.warn('[supabase] profile save:', e.message))
-      saveUserSettings(user.id, { current_profile: currentProfile }).catch(e => console.warn('[supabase] settings save:', e.message))
+    if (user && dbLoaded) {
+      const timer = setTimeout(() => {
+        saveUserProfile(user.id, currentProfile, profileData).catch(e => console.warn('[supabase] profile save:', e.message))
+      }, 1200)
+      return () => clearTimeout(timer)
     }
-  }, [playerInfo, clubs, currentProfile])
+  }, [playerInfo, clubs, dbLoaded])
   useEffect(() => {
     localStorage.setItem(LS_HISTORY, JSON.stringify(scoringHistory))
     // Sync to Supabase
@@ -1381,41 +1390,55 @@ function AppInner({ user, session, onSignOut }) {
       historyBlock += '\n\nKey instruction: use tournament vs casual split to assess pressure performance. Use par-type averages to identify leaking patterns. Where scorecard data is available for a past round, reference specific hole characteristics to identify patterns (e.g. struggles on long par 4s, leaks on dog-legs). Weight most recent rounds highest.'
     }
 
+    // ── Course Handicap calculation ──
+    const handicapIndex = parseFloat(playerInfo.handicap) || 0
+    const slopeVal = parseFloat(course.slope) || 113
+    const ratingVal = parseFloat(course.rating) || 72
+    const coursePar = course.par || 72
+    const courseHandicap = Math.round(handicapIndex * (slopeVal / 113) + (ratingVal - coursePar))
+    const isLefty = (playerInfo.handedness || 'Right') === 'Left'
+    const handLabel = isLefty ? 'LEFT-HANDED' : 'RIGHT-HANDED'
+
     // ── Player profile block (cache-friendly prefix) ──
-    const playerBlock = `PLAYER: ${playerInfo.name || 'Player'}, HCP ${playerInfo.handicap}
+    const playerBlock = `PLAYER: ${playerInfo.name || 'Player'}, ${handLabel} golfer
+Handicap Index: ${playerInfo.handicap} (USGA/GHIN — portable number, NOT strokes given)${course.name ? `\nCourse Handicap: ${courseHandicap} (Index × Slope÷113 + Rating−Par)` : ''}
 Miss tendency: ${playerInfo.miss} | Ball flight: ${playerInfo.ballFlight}
 ${playerInfo.swingNotes ? `Swing notes: ${playerInfo.swingNotes}` : ''}
 ${playerInfo.goals ? `Goals: ${playerInfo.goals}` : ''}
 ${playerInfo.strengths ? `Strengths: ${playerInfo.strengths}` : ''}
+
+CRITICAL — HANDEDNESS: This player is ${handLabel}. All shot shape references MUST account for this:
+${isLefty
+  ? `• A FADE for a lefty curves LEFT (away from target on right-to-left holes)\n• A DRAW for a lefty curves RIGHT (toward the target on right-to-left holes)\n• "Working the ball left" = the natural fade shape for this lefty\n• "Working the ball right" = a draw for this lefty`
+  : `• A FADE for a righty curves RIGHT\n• A DRAW for a righty curves LEFT\n• Standard right-handed shot shape references apply`}
+When recommending shot shapes, ALWAYS specify what the ball will do in the air relative to the fairway/target (e.g. "draw — ball will move right to left for you" for a righty, or "draw — ball will move left to right for you" for a lefty). DO NOT default to only recommending fades/cuts — use draws, fades, and straight shots based on the hole shape and player's bag.
 
 BAG (carry distances):
 ${clubList}`
 
     // ── Profile-only mode (no course loaded) ──
     if (!course.name) {
-      return `You are an elite Tour caddy and performance analyst. The player has not set up a course for today — generate a profile-only competitive brief.
+      return `You are an elite Tour caddy. The player has no course loaded — give a profile-only brief.
 
 ${playerBlock}
 ${historyBlock}
 
-Generate a profile-only brief:
-
 ## Current form
-Based on scoring history, summarize where the game is right now. Be specific — use the actual numbers.
+Where the game is now. Use actual numbers.
 
 ## Where shots are leaking
-Identify the 2-3 most likely sources of dropped shots based on par-type averages, tournament vs casual gaps, and noted tendencies.
+2-3 sources of dropped shots from par-type averages and tendencies.
 
 ## Pattern to watch
-Front 9 vs back 9 pattern if visible. Tournament pressure patterns. Any trend from recent rounds.
+Front/back splits, pressure patterns, recent trends.
 
-## Focus areas for next competitive round
-2-3 specific, actionable points — not generic tips. Tied to the player's actual data.
+## Focus areas for next round
+2-3 specific actionable points tied to actual data.
 
-## Questions to ask yourself on the course
-3-4 pre-shot or strategic questions specific to this player's tendencies.
+## Pre-shot questions
+3-4 strategic questions for this player's tendencies.
 
-Be direct. Use actual figures. No filler.`
+Be direct. Short sentences. No filler.`
     }
 
     // ── Course-loaded mode: full pre-round brief ──
@@ -1423,61 +1446,64 @@ Be direct. Use actual figures. No filler.`
     const isMatchPlay = course.roundType === 'Match play'
     const sourceNote = course.source === 'GolfCourseAPI' ? 'Verified — GolfCourseAPI'
       : course.source === 'OpenGolfAPI'    ? 'Partial — OpenGolfAPI (par/HCP only, yardages from web)'
-      : course.source                      ? `Unverified — sourced via web search (${course.source}). Caveat yardages where confidence is low.`
+      : course.source                      ? `Unverified — via web search (${course.source}).`
       : 'Manual entry'
 
     const holesData = course.holes.map((h, i) => {
       const w    = holeWeather[i]
       const time = holeTimes[i]?.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       const wStr = w ? ` | ~${time}: ${Math.round(w.temp)}°F, ${windDir(w.windDir)} ${Math.round(w.windSpeed)}mph, ${w.precip}% rain` : ''
-      const nStr = h.notes ? ` | Caddy note: ${h.notes}` : ''
-      return `Hole ${i+1}: Par ${h.par}, ${h.yardage || '?'}y, HCP ${h.handicap}${nStr}${wStr}`
+      const nStr = h.notes ? ` | Note: ${h.notes}` : ''
+      const eStr = h.elevation ? ` | Elev: ${h.elevation}` : ''
+      return `H${i+1}: Par ${h.par}, ${h.yardage || '?'}y, HCP ${h.handicap}${eStr}${nStr}${wStr}`
     }).join('\n')
 
-    return `You are an elite Tour caddy. Generate a precision pre-round game plan.
+    return `You are an elite Tour caddy. Generate a concise game plan. IMPORTANT: You MUST cover ALL 18 holes — do not stop early.
 
 ${playerBlock}
 
 COURSE: ${course.name}, ${course.yardage}y, Rating ${course.rating} / Slope ${course.slope}, Par ${course.par}
-Data source: ${sourceNote}
-Round type: ${course.roundType} | Target: ${course.targetScore || 'under par'} | Conditions: ${course.conditions}
-${isPractice ? 'NOTE: This is a practice round — the player may be experimenting. Frame strategy around learning objectives, not just score.' : ''}
-${isMatchPlay ? 'NOTE: Match play format — adjust aggression and risk-reward framing for hole-by-hole match context.' : ''}
-${course.notes ? `Course notes: ${course.notes}` : ''}
-
-TEE TIME: ${teeTime} (${teeDate}) — Pace ${pace} min/hole
+Course Handicap: ${courseHandicap} | Data: ${sourceNote}
+${course.roundType} | Target: ${course.targetScore || 'under par'} | Conditions: ${course.conditions}
+${course.elevation ? `Course elevation: ${course.elevation}ft — factor into club selection (higher altitude = more carry)` : ''}
+${isPractice ? 'Practice round — frame around learning, not score.' : ''}${isMatchPlay ? 'Match play — adjust risk for hole-by-hole context.' : ''}
+${course.notes ? `Notes: ${course.notes}` : ''}
+Tee: ${teeTime} (${teeDate}), ${pace} min/hole
 ${historyBlock}
 
-HOLE-BY-HOLE:
+HOLES:
 ${holesData}
 
-Generate a complete competitive brief:
+IMPORTANT RULES:
+1. Cover ALL 18 holes. Do not stop at hole 11 or 12.
+2. Recommend draws AND fades AND straight shots — match shape to hole, not just one shape.
+3. Remember this is a ${handLabel} player — shot shapes curve differently.
+4. Keep caddy notes SHORT (1 sentence max, like a real caddy would say it, not AI-sounding).
+5. Be concise throughout — every word should earn its place.
 
 ## Round strategy
-2-3 sentences. Overall approach given conditions, course profile, and this player's tendencies. Be specific to today.
+2-3 sentences. Approach for today.
 
 ## Scoring roadmap
-One line per hole: "Hole N (Par X, Yds) — [attack / par / damage control] — reason"
-🟢 birdie targets | 🔴 danger holes | 🟡 par and move on
+One line per hole: "H[N] Par [X] [Yds]y — 🟢/🟡/🔴 — reason"
 
-## Hole-by-hole strategy
+## Hole-by-hole
 ### Hole [N] — Par [X] — [Yds]y — HCP [N]
-- **Tee shot**: Club, target, shape, where NOT to miss given ${playerInfo.miss} tendency
-- **Approach**: Distance from ideal position, club, landing zone
-- **Caddy note**: Green tendencies, weather adjustment, specific intel
-- **Green data**: After the caddy note, include a JSON code block with green details:
+- **Tee**: Club, target, shape (specify ball flight direction for this ${isLefty ? 'lefty' : 'righty'})
+- **Approach**: Club, distance, landing zone
+- **Caddy**: One short sentence. Sound like a human, not a manual.
 \`\`\`green-json
-{"depth_y":28,"width_y":24,"shape":"kidney|oval|round|oblong","front_y":165,"mid_y":172,"back_y":180,"pin":"front-right|front-left|center|back-right|back-left|center-right|center-left","slope":"back-to-front|front-to-back|left-to-right|right-to-left|flat","hazards":[{"type":"bunker|water|false_front|mound","loc":"left|right|front|back|front-left|front-right|back-left|back-right","carry_y":145}]}
+{"depth_y":28,"width_y":24,"shape":"kidney|oval|round|oblong","front_y":165,"mid_y":172,"back_y":180,"pin":"front-right|front-left|center|back-right|back-left|center-right|center-left","slope":"back-to-front|front-to-back|left-to-right|right-to-left|flat","tiers":0,"tier_desc":"","green_notes":"","hazards":[{"type":"bunker|water|false_front|mound","loc":"left|right|front|back|front-left|front-right|back-left|back-right","carry_y":145}]}
 \`\`\`
-Use your best estimate for green depth/width based on the course data. front_y/mid_y/back_y are approach distances from the player's likely layup or tee position. Include all relevant hazards around the green.
+"tiers" = number of tiers (0 for flat, 1 for subtle, 2+ for multi-tier). "tier_desc" = brief description of elevation changes on the green. "green_notes" = one-line green characteristic (e.g. "fast, firm, rejects right"). Use your best estimate for dimensions.
 
-## Weather adjustments
-How conditions shift across the round. Club up/down notes on key holes.
+## Weather
+Club adjustments for key holes only.
 
-## Pressure management
-Specific to this player's patterns${historyBlock ? ' (use the tournament vs casual data)' : ''}. Pre-shot anchor for the hardest stretch. How to handle bogeys.
+## Pressure
+${historyBlock ? 'Use tournament vs casual data. ' : ''}Pre-shot anchor. How to handle bogeys.
 
-Use actual yardages throughout. Be direct — no filler.`
+Be direct. No filler. ALL 18 HOLES.`
   }, [clubs, course, playerInfo, holeWeather, holeTimes, teeTime, teeDate, pace, scoringHistory])
 
   const generate = async () => {
@@ -1487,7 +1513,7 @@ Use actual yardages throughout. Be direct — no filler.`
     setPlanLoading(true); setPlanPhase('Analyzing scoring history'); setPlanError(''); setPlan(''); setTab('plan')
     const payload = {
       model: selectedModel,
-      max_tokens: 6000,
+      max_tokens: 16000,
       stream: true,
       messages: [{
         role: 'user',
@@ -1543,11 +1569,15 @@ Use actual yardages throughout. Be direct — no filler.`
     setPlanLoading(false)
     setPlan(p => {
       if (p) {
-        try {
-          const saved = JSON.parse(localStorage.getItem('golf_saved_briefs') || '[]')
-          saved.unshift({ course: course.name || 'Profile brief', date: new Date().toISOString().slice(0, 10), plan: p })
-          localStorage.setItem('golf_saved_briefs', JSON.stringify(saved.slice(0, 5)))
-        } catch {}
+        const entry = { course: course.name || 'Profile brief', date: new Date().toISOString().slice(0, 10), plan: p, tee: course.selectedTee || '' }
+        setSavedBriefs(prev => {
+          const updated = [entry, ...prev].slice(0, 10)
+          try { localStorage.setItem('golf_saved_briefs', JSON.stringify(updated)) } catch {}
+          return updated
+        })
+        if (user) {
+          savePlan(user.id, entry.course, p, entry.tee).catch(e => console.warn('[supabase] plan save:', e.message))
+        }
       }
       return p
     })
@@ -1714,8 +1744,7 @@ Use actual yardages throughout. Be direct — no filler.`
           <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 12, flexShrink: 1, overflow: 'hidden' }}>
             <span style={{ fontSize: isMobile ? 13 : 14, fontWeight: 600, color: C.text, letterSpacing: '-0.01em', whiteSpace: 'nowrap' }}>Strategy Engine</span>
             {!isMobile && <span style={{ color: C.border }}>|</span>}
-            {!isMobile && <span style={{ fontSize: 13, color: C.textMuted }}>{playerInfo.name || 'Player'} · HCP {playerInfo.handicap}</span>}
-            {!isMobile && currentProfile !== 'Default' && <span style={{ fontSize: 11, color: C.textFaint }}>({currentProfile})</span>}
+            {!isMobile && <span style={{ fontSize: 13, color: C.textMuted }}>{playerInfo.name || 'Player'} · {playerInfo.handedness === 'Left' ? 'LH' : 'RH'} · HCP {playerInfo.handicap}</span>}
             {!isMobile && course.name && <span style={{ fontSize: 13, color: C.textFaint, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 200 }}>· {course.name}</span>}
             {weather && <Badge label="Weather live" bg={C.blueMuted} fg={C.blue} />}
           </div>
@@ -1830,50 +1859,30 @@ Use actual yardages throughout. Be direct — no filler.`
         {/* ── BAG & PLAYER ── */}
         {tab === 'player' && (
           <div>
-            {/* Profile switcher */}
-            <div style={{ ...card, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-              <span style={{ ...lbl, margin: 0, whiteSpace: 'nowrap' }}>Profile</span>
-              <select style={{ ...inp, width: 'auto', minWidth: 160 }}
-                value={currentProfile}
-                onChange={e => switchProfile(e.target.value)}>
-                {(() => {
-                  const profiles = loadProfiles()
-                  profiles[currentProfile] = playerInfo
-                  return Object.keys(profiles).map(n => <option key={n}>{n}</option>)
-                })()}
-              </select>
-              {!showNewProfile
-                ? <button style={btnG} onClick={() => setShowNewProfile(true)}>+ New profile</button>
-                : <>
-                    <input style={{ ...inp, width: 160 }} placeholder="Profile name" value={newProfileName}
-                      onChange={e => setNewProfileName(e.target.value)}
-                      onKeyDown={e => e.key === 'Enter' && createProfile()} autoFocus />
-                    <button style={{ ...btnP, padding: '7px 14px', fontSize: 12 }} onClick={createProfile}>Create</button>
-                    <button style={btnG} onClick={() => { setShowNewProfile(false); setNewProfileName('') }}>Cancel</button>
-                  </>
-              }
-              {Object.keys(loadProfiles()).length > 1 &&
-                <button style={{ ...btnG, color: C.red, borderColor: C.red, marginLeft: 'auto' }}
-                  onClick={() => { if (window.confirm(`Delete profile "${currentProfile}"?`)) deleteProfile() }}>
-                  Delete profile
-                </button>
-              }
-            </div>
             <SectionHead
               title="Bag & player profile"
-              sub="Player profile and club distances save automatically with your profile across sessions."
+              sub="Your profile and club distances sync automatically with your account."
             />
             <div style={{ ...card, marginBottom: 12 }}>
               <p style={{ ...lbl, marginBottom: 12 }}>Player details</p>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 10 }}>
-                {[['Name','name','Player name'],['Handicap index','handicap','+0.7'],['GHIN number','ghin','Optional — for reference']].map(([l2,k,ph]) => (
+                {[['Name','name','Player name'],['Handicap Index','handicap','e.g. 4.2'],['GHIN number','ghin','Optional — for lookup']].map(([l2,k,ph]) => (
                   <div key={k}>
                     <label style={lbl}>{l2}</label>
                     <input style={inp} value={playerInfo[k]} onChange={e => setPlayerInfo({ ...playerInfo, [k]: e.target.value })} placeholder={ph} />
                   </div>
                 ))}
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 10 }}>
+              <p style={{ fontSize: 11, color: C.textFaint, margin: '4px 0 6px' }}>
+                Handicap Index is a USGA/GHIN portable number (e.g. 4.2). Course Handicap = Index × (Slope ÷ 113), auto-calculated when a course is loaded.
+              </p>
+              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : '1fr 1fr 1fr', gap: 10, marginTop: 10 }}>
+                <div>
+                  <label style={lbl}>Handedness</label>
+                  <select style={inp} value={playerInfo.handedness || 'Right'} onChange={e => setPlayerInfo({ ...playerInfo, handedness: e.target.value })}>
+                    {['Right','Left'].map(o => <option key={o}>{o}</option>)}
+                  </select>
+                </div>
                 <div>
                   <label style={lbl}>Typical miss</label>
                   <select style={inp} value={playerInfo.miss} onChange={e => setPlayerInfo({ ...playerInfo, miss: e.target.value })}>
@@ -2364,6 +2373,10 @@ Use actual yardages throughout. Be direct — no filler.`
                   <label style={lbl}>Target score</label>
                   <input style={inp} value={course.targetScore} onChange={e => setCourse({ ...course, targetScore: e.target.value })} placeholder="-2 (69)" />
                 </div>
+                <div>
+                  <label style={lbl}>Elevation (ft)</label>
+                  <input style={inp} type="number" value={course.elevation} onChange={e => setCourse({ ...course, elevation: e.target.value })} placeholder="e.g. 4500" />
+                </div>
               </div>
               <div style={{ marginTop: 10 }}>
                 <label style={lbl}>General course notes</label>
@@ -2410,6 +2423,7 @@ Use actual yardages throughout. Be direct — no filler.`
                             </select>
                             <input type="number" style={{ ...inp, padding: '6px 8px', fontSize: 12, flex: 1, minWidth: 70 }} value={h.yardage} onChange={e => upd('yardage', e.target.value)} placeholder="Yards" />
                             <input type="number" style={{ ...inp, padding: '6px 8px', fontSize: 12, flex: '0 0 auto', width: 60 }} value={h.handicap} onChange={e => upd('handicap', e.target.value)} placeholder="HCP" />
+                            <input type="number" style={{ ...inp, padding: '6px 8px', fontSize: 12, flex: '0 0 auto', width: 70 }} value={h.elevation} onChange={e => upd('elevation', e.target.value)} placeholder="Elev ft" />
                           </div>
                           <textarea style={{ ...inp, padding: '8px 10px', fontSize: 13, width: '100%', minHeight: 60, resize: 'vertical' }}
                             value={h.notes} onChange={e => upd('notes', e.target.value)}
@@ -2435,8 +2449,8 @@ Use actual yardages throughout. Be direct — no filler.`
                         <p style={{ fontSize: 10, color: C.textFaint, textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 }}>
                           {label} — {course.holes.slice(half * 9, half * 9 + 9).reduce((s, h) => s + (parseInt(h.yardage) || 0), 0)}y · Par {course.holes.slice(half * 9, half * 9 + 9).reduce((s, h) => s + h.par, 0)}
                         </p>
-                        <div style={{ display: 'grid', gridTemplateColumns: '28px 48px 66px 50px 1fr', gap: '4px 8px', marginBottom: 4 }}>
-                          {half === 0 && ['#','Par','Yds','HCP','Caddy notes'].map((h, i) =>
+                        <div style={{ display: 'grid', gridTemplateColumns: '28px 48px 66px 50px 56px 1fr', gap: '4px 8px', marginBottom: 4 }}>
+                          {half === 0 && ['#','Par','Yds','HCP','Elev','Caddy notes'].map((h, i) =>
                             <span key={i} style={{ fontSize: 10, color: C.textFaint, letterSpacing: '0.06em', textTransform: 'uppercase' }}>{h}</span>
                           )}
                         </div>
@@ -2444,13 +2458,14 @@ Use actual yardages throughout. Be direct — no filler.`
                           const idx = half * 9 + i
                           const upd = (field, val) => setCourse({ ...course, holes: course.holes.map((hh, j) => j === idx ? { ...hh, [field]: val } : hh) })
                           return (
-                            <div key={idx} style={{ display: 'grid', gridTemplateColumns: '28px 48px 66px 50px 1fr', gap: '3px 8px', marginBottom: 3, alignItems: 'center' }}>
+                            <div key={idx} style={{ display: 'grid', gridTemplateColumns: '28px 48px 66px 50px 56px 1fr', gap: '3px 8px', marginBottom: 3, alignItems: 'center' }}>
                               <span style={{ fontSize: 11, color: C.textMuted, textAlign: 'center' }}>{idx + 1}</span>
                               <select style={{ ...inp, padding: '4px 6px', fontSize: 12 }} value={h.par} onChange={e => upd('par', Number(e.target.value))}>
                                 {[3,4,5].map(p => <option key={p}>{p}</option>)}
                               </select>
                               <input type="number" style={{ ...inp, padding: '4px 6px', fontSize: 12 }} value={h.yardage} onChange={e => upd('yardage', e.target.value)} placeholder="yds" />
                               <input type="number" style={{ ...inp, padding: '4px 6px', fontSize: 12 }} value={h.handicap} onChange={e => upd('handicap', e.target.value)} placeholder="HCP" />
+                              <input type="number" style={{ ...inp, padding: '4px 6px', fontSize: 12 }} value={h.elevation} onChange={e => upd('elevation', e.target.value)} placeholder="ft" />
                               <input style={{ ...inp, padding: '4px 8px', fontSize: 12 }} value={h.notes} onChange={e => upd('notes', e.target.value)}
                                 placeholder="e.g. Green slopes back-to-front, false front, OB left, pin usually front-right..." />
                             </div>
@@ -2459,7 +2474,7 @@ Use actual yardages throughout. Be direct — no filler.`
                         {half === 0 && <div style={{ borderTop: `1px solid ${C.border}`, margin: '10px 0 10px' }} />}
                       </div>
                     ))}
-                    <div style={{ display: 'grid', gridTemplateColumns: '28px 48px 66px 50px 1fr', gap: '4px 8px', marginTop: 8, paddingTop: 8, borderTop: `1px solid ${C.border}` }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '28px 48px 66px 50px 56px 1fr', gap: '4px 8px', marginTop: 8, paddingTop: 8, borderTop: `1px solid ${C.border}` }}>
                       <span style={{ fontSize: 11, color: C.textFaint }}>Tot</span>
                       <span style={{ fontSize: 12, fontWeight: 600, color: C.text, padding: '4px 6px' }}>{course.holes.reduce((s, h) => s + h.par, 0)}</span>
                       <span style={{ fontSize: 12, fontWeight: 600, color: C.accent, padding: '4px 6px' }}>{course.holes.reduce((s, h) => s + (parseInt(h.yardage) || 0), 0).toLocaleString()}</span>
@@ -2540,27 +2555,31 @@ Use actual yardages throughout. Be direct — no filler.`
                     </>
                 }
                 <button style={{ ...btnP, marginTop: 16 }} onClick={generate}>Generate →</button>
-                {(() => {
-                  try {
-                    const saved = JSON.parse(localStorage.getItem('golf_saved_briefs') || '[]')
-                    if (!saved.length) return null
-                    return (
-                      <div style={{ marginTop: 20, textAlign: 'left' }}>
-                        <p style={{ fontSize: 11, fontWeight: 600, color: C.textFaint, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Recent briefs</p>
-                        {saved.map((b, i) => (
-                          <button key={i} onClick={() => setPlan(b.plan)} style={{
-                            display: 'block', width: '100%', background: C.bgInput, border: `1px solid ${C.border}`,
-                            borderRadius: 8, padding: '10px 14px', marginBottom: 6, cursor: 'pointer',
-                            textAlign: 'left', fontFamily: F,
-                          }}>
-                            <span style={{ fontSize: 13, color: C.text, fontWeight: 500 }}>{b.course}</span>
-                            <span style={{ fontSize: 11, color: C.textFaint, marginLeft: 8 }}>{b.date}</span>
-                          </button>
-                        ))}
+                {savedBriefs.length > 0 && (
+                  <div style={{ marginTop: 20, textAlign: 'left' }}>
+                    <p style={{ fontSize: 11, fontWeight: 600, color: C.textFaint, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Recent briefs</p>
+                    {savedBriefs.map((b, i) => (
+                      <div key={b.id || i} style={{
+                        display: 'flex', alignItems: 'center', gap: 8, background: C.bgInput, border: `1px solid ${C.border}`,
+                        borderRadius: 8, padding: '10px 14px', marginBottom: 6,
+                      }}>
+                        <button onClick={() => setPlan(b.plan)} style={{
+                          flex: 1, background: 'none', border: 'none', cursor: 'pointer',
+                          textAlign: 'left', fontFamily: F, padding: 0,
+                        }}>
+                          <span style={{ fontSize: 13, color: C.text, fontWeight: 500 }}>{b.course}</span>
+                          {b.tee && <span style={{ fontSize: 10, color: C.accent, marginLeft: 6 }}>{b.tee}</span>}
+                          <span style={{ fontSize: 11, color: C.textFaint, marginLeft: 8 }}>{b.date}</span>
+                        </button>
+                        <button onClick={() => {
+                          setSavedBriefs(prev => prev.filter((_, j) => j !== i))
+                          if (b.id && user) deleteSavedPlan(b.id).catch(() => {})
+                          try { const ls = JSON.parse(localStorage.getItem('golf_saved_briefs') || '[]'); ls.splice(i, 1); localStorage.setItem('golf_saved_briefs', JSON.stringify(ls)) } catch {}
+                        }} style={{ background: 'none', border: 'none', color: C.textFaint, cursor: 'pointer', fontSize: 14, padding: '2px 4px' }} title="Remove">×</button>
                       </div>
-                    )
-                  } catch { return null }
-                })()}
+                    ))}
+                  </div>
+                )}
               </div>
             )}
             {(plan || planLoading) && (<>
@@ -3144,10 +3163,10 @@ function AuthGate() {
   }
 
   // Handle onboarding completion — save initial profile + bag to Supabase
-  const handleOnboardingComplete = async ({ player, clubs, golfApiKey }) => {
+  const handleOnboardingComplete = async ({ player, clubs: onboardClubs, golfApiKey }) => {
     const u = user
     if (u) {
-      const playerData = { ...player, clubs }
+      const playerData = { ...player, clubs: onboardClubs }
       try {
         await saveUserProfile(u.id, player.name || 'Default', playerData)
         if (golfApiKey) await saveUserSettings(u.id, { golf_course_api_key: golfApiKey, current_profile: player.name || 'Default' })
@@ -3156,6 +3175,10 @@ function AuthGate() {
         console.warn('[onboarding] save error:', e.message)
       }
     }
+    setPlayerInfo(stripClubs({ ...player, clubs: onboardClubs }))
+    setClubs(onboardClubs)
+    if (golfApiKey) setGolfKey(golfApiKey)
+    setDbLoaded(true)
     setNeedsOnboarding(false)
   }
 
