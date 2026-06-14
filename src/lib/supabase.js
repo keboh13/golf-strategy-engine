@@ -136,3 +136,42 @@ export async function deleteCachedCourseDB(name, location) {
 function makeCacheKey(name, location) {
   return `${(name || '').toLowerCase().trim()}|${(location || '').toLowerCase().trim()}`
 }
+
+// ── Saved game plans ─────────────────────────────────────────────────────────
+
+export async function loadSavedPlans(userId) {
+  const { data, error } = await supabase
+    .from('saved_plans')
+    .select('*')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+    .limit(10)
+  if (error) throw error
+  return (data || []).map(r => ({
+    id: r.id,
+    course: r.course_name,
+    date: r.created_at?.slice(0, 10),
+    plan: r.plan_text,
+    tee: r.tee_name || '',
+  }))
+}
+
+export async function savePlan(userId, courseName, planText, teeName) {
+  const { error } = await supabase
+    .from('saved_plans')
+    .insert({
+      user_id: userId,
+      course_name: courseName,
+      plan_text: planText,
+      tee_name: teeName || null,
+    })
+  if (error) throw error
+}
+
+export async function deleteSavedPlan(planId) {
+  const { error } = await supabase
+    .from('saved_plans')
+    .delete()
+    .eq('id', planId)
+  if (error) throw error
+}
