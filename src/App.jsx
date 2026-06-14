@@ -945,7 +945,6 @@ function CourseSearch({ apiKey, golfCourseApiKey, onApiKeyNeeded, onSelect }) {
             </div>
             <button style={btnP} onClick={() => onSelect(detail)}>Use this scorecard →</button>
           </div>
-          <DataAccuracyTier course={detail} style={{ marginBottom: 10 }} />
           <ScorecardPreview holes={detail.holes} />
         </div>
       )}
@@ -1313,6 +1312,7 @@ function AppInner({ user, session, onSignOut }) {
   const [weather,        setWeather]        = useState(null)
   const [weatherLoading, setWeatherLoading] = useState(false)
   const [coords,         setCoords]         = useState(null)
+  const [cacheVersion,   setCacheVersion]   = useState(0)
 
   // Game plan
   const [plan,        setPlan]        = useState('')
@@ -1483,7 +1483,7 @@ function AppInner({ user, session, onSignOut }) {
     if (!course.name || !coords?.lat || !coords?.lng || course.osmEnriched) return
     const myId = ++enrichLoadIdRef.current
     ;(async () => {
-      let enriched = course
+      let osmHoles = null
       let osmWorked = false
       try {
         const osmData = await fetchOSMCourseData(coords.lat, coords.lng)
@@ -1492,24 +1492,26 @@ function AppInner({ user, session, onSignOut }) {
           const { holes: enrichedHoles, hasDesignData } = enrichHolesWithOSM(course.holes, osmData)
           if (hasDesignData) {
             osmWorked = true
+            osmHoles = enrichedHoles
             setCourse(prev => {
               const merged = prev.holes.map((h, i) => ({
                 ...h,
                 notes: h.notes || enrichedHoles[i]?.notes || '',
                 osmDesign: enrichedHoles[i]?.osmDesign || null,
               }))
-              enriched = { ...prev, holes: merged, osmEnriched: true }
-              setCachedCourse(enriched)
-              return enriched
+              const updated = { ...prev, holes: merged, osmEnriched: true }
+              setCachedCourse(updated)
+              return updated
             })
           }
         }
       } catch { /* OSM failed */ }
 
-      const holesWithDesign = enriched.holes.filter(h => h.osmDesign?.hazards?.length > 0 || h.notes).length
+      const holesForCheck = osmHoles || course.holes
+      const holesWithDesign = holesForCheck.filter(h => h.osmDesign?.hazards?.length > 0 || h.notes).length
       if (holesWithDesign < 9 && apiKey) {
         try {
-          const designData = await fetchHoleDesignViaSearch(apiKey, enriched.name, enriched.location)
+          const designData = await fetchHoleDesignViaSearch(apiKey, course.name, course.location)
           if (myId !== enrichLoadIdRef.current) return
           if (designData?.holes?.length) {
             setCourse(prev => {
@@ -3157,7 +3159,7 @@ Be direct. No filler. ALL 18 HOLES.`
                   </div>
                   {entries.length > 0 && (
                     <button style={{ ...btnG, color: C.red, borderColor: C.red, flexShrink: 0 }}
-                      onClick={() => { if (window.confirm('Clear all cached courses?')) { localStorage.removeItem(LS_COURSE_CACHE); setTab('admin') } }}>
+                      onClick={() => { if (window.confirm('Clear all cached courses?')) { localStorage.removeItem(LS_COURSE_CACHE); setCacheVersion(v => v + 1) } }}>
                       Clear all
                     </button>
                   )}
@@ -3192,7 +3194,7 @@ Be direct. No filler. ALL 18 HOLES.`
                               const updated = loadCourseCache()
                               delete updated[cacheKey(c.name, c.location)]
                               saveCourseCache(updated)
-                              setTab('admin')
+                              setCacheVersion(v => v + 1)
                             }}>
                             Remove
                           </button>
