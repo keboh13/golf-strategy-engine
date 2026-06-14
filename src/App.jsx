@@ -219,11 +219,16 @@ function AppInner({ user, session, onSignOut }) {
   const [coords,         setCoords]         = useState(null)
   const [cacheVersion,   setCacheVersion]   = useState(0)
 
+  // Enrichment loading state
+  const [enriching,      setEnriching]      = useState(false)
+  const [enrichStatus,   setEnrichStatus]   = useState('')
+
   // Game plan
   const [plan,        setPlan]        = useState('')
   const [planLoading, setPlanLoading] = useState(false)
   const [planPhase,   setPlanPhase]   = useState('')
   const [planError,   setPlanError]   = useState('')
+  const abortRef = useRef(null)
   const [planView,    setPlanView]    = useState('companion')
   const [currentHole, setCurrentHole] = useState(0)
   const [copied,      setCopied]      = useState(false)
@@ -382,58 +387,80 @@ function AppInner({ user, session, onSignOut }) {
     else setCoords(null)
   }, [])
 
-  // Enrich course with OSM/web design data at the parent level
-  // This ensures enrichment updates propagate to course state even after CourseSearch unmounts
+  // Enrich course with OSM/web design data (parallelized with retry + UI feedback)
   const enrichLoadIdRef = useRef(0)
   useEffect(() => {
     if (!course.name || !coords?.lat || !coords?.lng || course.osmEnriched) return
     const myId = ++enrichLoadIdRef.current
+    const ctrl = new AbortController()
+    setEnriching(true)
+    setEnrichStatus('Loading course design data...')
     ;(async () => {
-      let osmHoles = null
       let osmWorked = false
-      try {
-        const osmData = await fetchOSMCourseData(coords.lat, coords.lng)
-        if (myId !== enrichLoadIdRef.current) return
-        if (osmData) {
-          const { holes: enrichedHoles, hasDesignData } = enrichHolesWithOSM(course.holes, osmData)
-          if (hasDesignData) {
-            osmWorked = true
-            osmHoles = enrichedHoles
-            setCourse(prev => {
-              const merged = prev.holes.map((h, i) => ({
-                ...h,
-                notes: h.notes || enrichedHoles[i]?.notes || '',
-                osmDesign: enrichedHoles[i]?.osmDesign || null,
-              }))
-              const updated = { ...prev, holes: merged, osmEnriched: true }
-              setCachedCourse(updated)
-              return updated
-            })
+
+      // Phase 1: OSM enrichment
+      setEnrichStatus('Fetching hazard data from OpenStreetMap...')
+      for (let attempt = 0; attempt < 2; attempt++) {
+        if (ctrl.signal.aborted || myId !== enrichLoadIdRef.current) return
+        try {
+          const osmData = await fetchOSMCourseData(coords.lat, coords.lng)
+          if (myId !== enrichLoadIdRef.current) return
+          if (osmData) {
+            const { holes: enrichedHoles, hasDesignData } = enrichHolesWithOSM(course.holes, osmData)
+            if (hasDesignData) {
+              osmWorked = true
+              setCourse(prev => {
+                const merged = prev.holes.map((h, i) => ({
+                  ...h,
+                  notes: h.notes || enrichedHoles[i]?.notes || '',
+                  osmDesign: enrichedHoles[i]?.osmDesign || null,
+                }))
+                const updated = { ...prev, holes: merged, osmEnriched: true }
+                setCachedCourse(updated)
+                return updated
+              })
+            }
+          }
+          break
+        } catch {
+          if (attempt === 0) setEnrichStatus('Retrying OSM data...')
+        }
+      }
+
+      // Phase 2: Web search enrichment (if OSM coverage is sparse)
+      const authToken = session?.access_token || ''
+      const holesWithDesign = course.holes.filter(h => h.osmDesign?.hazards?.length > 0 || h.notes).length
+      if (holesWithDesign < 9 && authToken) {
+        setEnrichStatus('Searching for hole design details...')
+        for (let attempt = 0; attempt < 2; attempt++) {
+          if (ctrl.signal.aborted || myId !== enrichLoadIdRef.current) return
+          try {
+            const designData = await fetchHoleDesignViaSearch(authToken, course.name, course.location)
+            if (myId !== enrichLoadIdRef.current) return
+            if (designData?.holes?.length) {
+              setCourse(prev => {
+                const mergedHoles = mergeDesignDataIntoHoles(prev.holes, designData)
+                const updated = { ...prev, holes: mergedHoles, webDesignSource: designData.source || 'web search', osmEnriched: true }
+                setCachedCourse(updated)
+                return updated
+              })
+            }
+            break
+          } catch {
+            if (attempt === 0) setEnrichStatus('Retrying design search...')
           }
         }
-      } catch { /* OSM failed */ }
-
-      const authToken = session?.access_token || ''
-      const holesWithDesign = enriched.holes.filter(h => h.osmDesign?.hazards?.length > 0 || h.notes).length
-      if (holesWithDesign < 9 && authToken) {
-        try {
-          const designData = await fetchHoleDesignViaSearch(authToken, enriched.name, enriched.location)
-          if (myId !== enrichLoadIdRef.current) return
-          if (designData?.holes?.length) {
-            setCourse(prev => {
-              const mergedHoles = mergeDesignDataIntoHoles(prev.holes, designData)
-              const updated = { ...prev, holes: mergedHoles, webDesignSource: designData.source || 'web search', osmEnriched: true }
-              setCachedCourse(updated)
-              return updated
-            })
-          }
-        } catch { /* web search failed */ }
       }
 
       if (!osmWorked && myId === enrichLoadIdRef.current) {
         setCourse(prev => ({ ...prev, osmEnriched: true }))
       }
+      if (myId === enrichLoadIdRef.current) {
+        setEnriching(false)
+        setEnrichStatus('')
+      }
     })()
+    return () => ctrl.abort()
   }, [course.name, coords?.lat, coords?.lng, course.osmEnriched, session])
 
   const buildPrompt = useCallback(() => {
@@ -653,9 +680,17 @@ ${historyBlock ? 'Use tournament vs casual data. ' : ''}Pre-shot anchor. How to 
 Be direct. No filler. ALL 18 HOLES.`
   }, [clubs, course, playerInfo, holeWeather, holeTimes, teeTime, teeDate, pace, scoringHistory])
 
+  const cancelGenerate = () => {
+    if (abortRef.current) { abortRef.current.abort(); abortRef.current = null }
+    setPlanLoading(false); setPlanPhase('')
+  }
+
   const generate = async () => {
     const authToken = session?.access_token || ''
     if (!authToken) { setPlanError('Please sign in to generate a game plan.'); return }
+    if (abortRef.current) abortRef.current.abort()
+    const ctrl = new AbortController()
+    abortRef.current = ctrl
     setPlanLoading(true); setPlanPhase('Analyzing scoring history'); setPlanError(''); setPlan(''); setTab('prep'); setPrepStep(4)
     const payload = {
       model: selectedModel,
@@ -674,6 +709,7 @@ Be direct. No filler. ALL 18 HOLES.`
           'Authorization': `Bearer ${authToken}`,
         },
         body: JSON.stringify(payload),
+        signal: ctrl.signal,
       })
       if (!res.ok) {
         const errText = await res.text()
@@ -708,9 +744,11 @@ Be direct. No filler. ALL 18 HOLES.`
         }
       }
     } catch (e) {
+      if (e.name === 'AbortError') return
       setPlanError(e.message)
     }
     setPlanLoading(false)
+    abortRef.current = null
     setPlan(p => {
       if (p) {
         const entry = { course: course.name || 'Profile brief', date: new Date().toISOString().slice(0, 10), plan: p, tee: course.selectedTee || '' }
@@ -944,16 +982,16 @@ Be direct. No filler. ALL 18 HOLES.`
 
       {/* Tabs */}
       <div style={{ borderBottom: `1px solid ${C.border}`, padding: '0 1.5rem' }}>
-        <div className="tab-bar" style={{ maxWidth: 1020, margin: '0 auto', display: 'flex', overflowX: 'auto', scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
+        <div className="tab-bar" role="tablist" aria-label="Main navigation" style={{ maxWidth: 1020, margin: '0 auto', display: 'flex', overflowX: 'auto', scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
           {TABS.map(t => (
-            <button key={t.id} onClick={() => setTab(t.id)} style={{
+            <button key={t.id} role="tab" aria-selected={tab === t.id} aria-controls={`panel-${t.id}`} onClick={() => setTab(t.id)} style={{
               background: 'transparent', border: 'none',
               borderBottom: tab === t.id ? `2px solid ${C.accent}` : '2px solid transparent',
               padding: isMobile ? '12px 14px' : '13px 18px',
               fontSize: isMobile ? 12 : 13, fontFamily: F,
               color: tab === t.id ? C.text : C.textMuted, cursor: 'pointer',
               display: 'flex', alignItems: 'center', gap: isMobile ? 4 : 6,
-              flexShrink: 0, whiteSpace: 'nowrap',
+              flexShrink: 0, whiteSpace: 'nowrap', minHeight: 44,
             }}>
               {t.icon} {isMobile ? t.short : t.label}
             </button>
@@ -976,16 +1014,16 @@ Be direct. No filler. ALL 18 HOLES.`
             />
 
             {/* Sub-tab navigation */}
-            <div style={{ display: 'flex', gap: 4, marginBottom: 16, background: C.bgInput, borderRadius: 10, padding: 4, overflowX: 'auto' }}>
+            <div role="tablist" aria-label="Player sections" style={{ display: 'flex', gap: 4, marginBottom: 16, background: C.bgInput, borderRadius: 10, padding: 4, overflowX: 'auto' }}>
               {PLAYER_SUBS.map(s => (
-                <button key={s.id} onClick={() => setPlayerSubTab(s.id)} style={{
+                <button key={s.id} role="tab" aria-selected={playerSubTab === s.id} onClick={() => setPlayerSubTab(s.id)} style={{
                   flex: isMobile ? 1 : 'none',
                   padding: isMobile ? '10px 8px' : '10px 18px',
                   fontSize: isMobile ? 11 : 13, fontWeight: 500, fontFamily: F,
                   border: 'none', borderRadius: 8, cursor: 'pointer',
                   background: playerSubTab === s.id ? C.accent : 'transparent',
                   color: playerSubTab === s.id ? C.bg : C.textMuted,
-                  whiteSpace: 'nowrap', transition: 'all 0.15s',
+                  whiteSpace: 'nowrap', transition: 'all 0.15s', minHeight: 44,
                 }}>
                   {s.icon} {isMobile ? s.label.split(' ')[0] : s.label}
                 </button>
@@ -1567,15 +1605,21 @@ Be direct. No filler. ALL 18 HOLES.`
                       </div>
                     </div>
 
-                    <button style={{ ...btnP, padding: '12px 32px', fontSize: 15 }} onClick={generate}>Generate Round Prep Report →</button>
+                    {enriching && (
+                      <div role="status" aria-live="polite" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 16, padding: '8px 14px', background: C.blueMuted, border: `1px solid ${C.blue}33`, borderRadius: 8 }}>
+                        <Spin /><span style={{ fontSize: 12, color: C.blue }}>{enrichStatus || 'Loading course data...'}</span>
+                      </div>
+                    )}
+                    <button style={{ ...btnP, padding: '12px 32px', fontSize: 15 }} onClick={generate} aria-label="Generate round prep report">Generate Round Prep Report →</button>
                   </div>
                 )}
 
                 {/* Loading / streaming state */}
                 {planLoading && (
                   <div style={{ ...card, padding: '2rem', textAlign: 'center' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, marginBottom: 16 }}>
+                    <div role="status" aria-live="polite" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, marginBottom: 16 }}>
                       <Spin /><span style={{ fontSize: 14, color: C.textMuted }}>{planPhase || 'Generating'}...</span>
+                      <button onClick={cancelGenerate} style={{ ...btnG, padding: '4px 12px', fontSize: 11, minHeight: 44, minWidth: 44 }} aria-label="Cancel generation">Cancel</button>
                     </div>
                     {plan && (
                       <div style={{ textAlign: 'left' }}>

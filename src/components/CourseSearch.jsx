@@ -151,7 +151,7 @@ export default function CourseSearch({ authToken, onSelect }) {
           <input style={inp} value={location} onChange={e => setLocation(e.target.value)} placeholder="Las Vegas, NV" />
         </div>
         <div style={{ display: 'flex', alignItems: 'flex-end' }}>
-          <button style={{ ...btnP, display: 'flex', alignItems: 'center', gap: 7, whiteSpace: 'nowrap' }} onClick={search} disabled={loading}>
+          <button style={{ ...btnP, display: 'flex', alignItems: 'center', gap: 7, whiteSpace: 'nowrap', minHeight: 44 }} onClick={search} disabled={loading} aria-label="Search for golf course">
             {loading ? <><Spin /> Searching...</> : 'Search →'}
           </button>
         </div>
