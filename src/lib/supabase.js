@@ -56,20 +56,34 @@ export async function loadUserHistory(userId) {
 }
 
 export async function saveUserHistory(userId, rounds) {
-  // Full replace: delete all rows for user, reinsert
-  const { error: delErr } = await supabase
+  const { data: existing } = await supabase
     .from('scoring_history')
-    .delete()
+    .select('id')
     .eq('user_id', userId)
-  if (delErr) throw delErr
+  const existingIds = new Set((existing || []).map(r => r.id))
 
-  if (rounds.length === 0) return
-  const rows = rounds.map(r => {
+  const toUpsert = []
+  const keepIds = new Set()
+  for (const r of rounds) {
     const { _rowId, ...round } = r
-    return { user_id: userId, round_data: round }
-  })
-  const { error } = await supabase.from('scoring_history').insert(rows)
-  if (error) throw error
+    if (_rowId) {
+      keepIds.add(_rowId)
+      toUpsert.push({ id: _rowId, user_id: userId, round_data: round })
+    } else {
+      toUpsert.push({ user_id: userId, round_data: round })
+    }
+  }
+
+  const toDelete = [...existingIds].filter(id => !keepIds.has(id))
+  if (toDelete.length > 0) {
+    const { error } = await supabase.from('scoring_history').delete().in('id', toDelete)
+    if (error) throw error
+  }
+
+  if (toUpsert.length > 0) {
+    const { error } = await supabase.from('scoring_history').upsert(toUpsert, { onConflict: 'id' })
+    if (error) throw error
+  }
 }
 
 export async function loadUserSettings(userId) {
@@ -100,8 +114,7 @@ export async function getCachedCourseDB(name, location) {
     .eq('cache_key', key)
     .maybeSingle()
   if (error || !data) return null
-  // Bump hit count async (fire and forget)
-  supabase.from('course_cache').update({ hit_count: supabase.raw('hit_count + 1') }).eq('cache_key', key).then(() => {})
+  supabase.rpc('increment_cache_hit', { p_cache_key: key }).then(() => {})
   return { ...data.course_data, source: data.source, _cachedAt: new Date(data.cached_at).getTime() }
 }
 
