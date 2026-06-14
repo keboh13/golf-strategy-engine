@@ -547,7 +547,7 @@ async function searchGolfCourseAPI(query, apiKey) {
 function normalizeGolfCourseAPICourse(raw, selectedTee) {
   const maleTees   = raw.tees?.male   || []
   const femaleTees = raw.tees?.female || []
-  const allTees    = maleTees.length ? maleTees : femaleTees
+  const allTees    = [...maleTees, ...femaleTees]
 
   const chosen = selectedTee
     || allTees.find(t => /black|championship|tournament/i.test(t.tee_name))
@@ -1723,7 +1723,7 @@ Be direct. Short sentences. No filler.`
 
 ${playerBlock}
 
-COURSE: ${course.name}, ${course.yardage}y, Rating ${course.rating} / Slope ${course.slope}, Par ${course.par}
+COURSE: ${course.name}${course.selectedTee ? ` (${course.selectedTee} tees)` : ''}, ${course.yardage}y, Rating ${course.rating} / Slope ${course.slope}, Par ${course.par}
 Course Handicap: ${courseHandicap} | Data: ${sourceNote}
 ${course.roundType} | Target: ${course.targetScore || 'under par'} | Conditions: ${course.conditions}
 ${course.elevation ? `Course elevation: ${course.elevation}ft — factor into club selection (higher altitude = more carry)` : ''}
@@ -2599,6 +2599,44 @@ Be direct. No filler. ALL 18 HOLES.`
             {prepStep === 3 && (
               <div>
                 {course.name && <DataAccuracyTier course={course} style={{ marginBottom: 12 }} />}
+                {/* Tee selector — switch tees without going back */}
+                {course.tees?.length > 1 && (
+                  <div style={{ ...card, marginBottom: 12 }}>
+                    <p style={{ ...lbl, marginBottom: 8 }}>Playing tees</p>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {course.tees.map((t, i) => {
+                        const active = course.selectedTee === t.name
+                        return (
+                          <button key={i} onClick={() => {
+                            setCourse(prev => ({
+                              ...prev,
+                              selectedTee: t.name,
+                              yardage: String(t.yardage || prev.yardage),
+                              rating: String(t.rating || prev.rating),
+                              slope: String(t.slope || prev.slope),
+                              par: t.par || prev.par,
+                              holes: prev.holes.map((h, hi) => ({
+                                ...h,
+                                yardage: String(t.holes?.[hi]?.yardage || h.yardage || ''),
+                                par: t.holes?.[hi]?.par || h.par,
+                                handicap: t.holes?.[hi]?.handicap || h.handicap,
+                              })),
+                            }))
+                          }} style={{
+                            background: active ? C.accentMuted : C.bgInput,
+                            border: `1px solid ${active ? C.accent : C.border}`,
+                            borderRadius: 8, padding: '8px 14px', cursor: 'pointer',
+                            fontFamily: F, transition: 'all 0.15s',
+                          }}>
+                            <span style={{ fontSize: 13, fontWeight: 600, color: active ? C.accent : C.text }}>{t.name}</span>
+                            <span style={{ fontSize: 11, color: active ? C.accent : C.textMuted, marginLeft: 8 }}>{Number(t.yardage).toLocaleString()}y</span>
+                            {t.rating && <span style={{ fontSize: 10, color: C.textFaint, marginLeft: 6 }}>{t.rating}/{t.slope}</span>}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
                 <div style={{ ...card, marginBottom: 12 }}>
                   <p style={{ ...lbl, marginBottom: 12 }}>Course details</p>
                   <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : '2fr 1fr 1fr 1fr', gap: 10 }}>
