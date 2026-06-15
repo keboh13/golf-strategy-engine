@@ -2,10 +2,20 @@
 // Fetches hazard polygons, green polygons, and pin positions from OSM
 // and associates them with each hole to produce per-hole design data.
 
-const OVERPASS_URL = 'https://overpass-api.de/api/interpreter'
-const BBOX_PADDING = 0.025 // ~2.5km padding — covers large multi-course properties like Medinah, Torrey Pines
+const OVERPASS_URLS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+]
+const BBOX_PADDING = 0.025 // ~2.5km — fallback only when no leisure=golf_course area is found
 
-function buildQuery(lat, lng) {
+// Preferred: clip to the leisure=golf_course area within 400m of the coords.
+// This avoids bleeding into neighbouring courses on multi-course properties
+// (Medinah, Torrey Pines). Falls back to a bbox query if no area is found.
+function buildAreaQuery(lat, lng) {
+  return `[out:json][timeout:30];area[leisure=golf_course](around:400,${lat},${lng})->.c;(nwr(area.c)[golf];);out body;>;out skel qt;`
+}
+
+function buildBboxQuery(lat, lng) {
   const s = lat - BBOX_PADDING
   const n = lat + BBOX_PADDING
   const w = lng - BBOX_PADDING
@@ -62,18 +72,44 @@ function resolveNodes(wayOrRelation, nodeMap) {
   return []
 }
 
+async function overpassFetch(query) {
+  let lastErr = null
+  for (const url of OVERPASS_URLS) {
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'data=' + encodeURIComponent(query),
+      })
+      if (res.ok) return await res.json()
+      lastErr = new Error(`Overpass ${url} HTTP ${res.status}`)
+    } catch (e) {
+      lastErr = e
+    }
+  }
+  throw lastErr || new Error('Overpass: all endpoints failed')
+}
+
 export async function fetchOSMCourseData(lat, lng) {
   if (!lat || !lng) return null
 
-  const query = buildQuery(lat, lng)
-  const res = await fetch(OVERPASS_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: 'data=' + encodeURIComponent(query),
-  })
-
-  if (!res.ok) return null
-  const data = await res.json()
+  let data = null
+  try {
+    data = await overpassFetch(buildAreaQuery(lat, lng))
+  } catch {
+    data = null
+  }
+  // If the area query returned nothing useful, fall back to the bbox query.
+  // We treat "no golf-tagged elements" as no area match.
+  const hasGolf = data?.elements?.some(e => e.tags?.golf)
+  if (!hasGolf) {
+    try {
+      data = await overpassFetch(buildBboxQuery(lat, lng))
+    } catch {
+      return null
+    }
+  }
+  if (!data) return null
   const elements = data.elements || []
 
   // Build node lookup
@@ -88,6 +124,7 @@ export async function fetchOSMCourseData(lat, lng) {
   const pins = []
   const bunkers = []
   const waterHazards = []
+  const fairways = []
   const greens = []
   const tees = []
   const holes = []
@@ -101,11 +138,15 @@ export async function fetchOSMCourseData(lat, lng) {
     } else if (g === 'bunker' && e.type === 'way') {
       const nodes = resolveNodes(e, nodeMap)
       const c = centroid(nodes)
-      if (c) bunkers.push(c)
+      if (c) bunkers.push({ ...c, nodes })
     } else if ((g === 'water_hazard' || g === 'lateral_water_hazard') && e.type === 'way') {
       const nodes = resolveNodes(e, nodeMap)
       const c = centroid(nodes)
-      if (c) waterHazards.push(c)
+      if (c) waterHazards.push({ ...c, nodes })
+    } else if (g === 'fairway' && e.type === 'way') {
+      const nodes = resolveNodes(e, nodeMap)
+      const c = centroid(nodes)
+      if (c) fairways.push({ ...c, nodes })
     } else if (g === 'green' && e.type === 'way') {
       const nodes = resolveNodes(e, nodeMap)
       const c = centroid(nodes)
@@ -113,7 +154,7 @@ export async function fetchOSMCourseData(lat, lng) {
     } else if (g === 'tee' && e.type === 'way') {
       const nodes = resolveNodes(e, nodeMap)
       const c = centroid(nodes)
-      if (c) tees.push(c)
+      if (c) tees.push({ ...c, nodes })
     } else if (g === 'hole' && e.type === 'way') {
       const nodes = resolveNodes(e, nodeMap)
       if (nodes.length >= 2) {
@@ -126,7 +167,7 @@ export async function fetchOSMCourseData(lat, lng) {
     }
   }
 
-  return { pins, bunkers, waterHazards, greens, tees, holes, raw: elements }
+  return { pins, bunkers, waterHazards, fairways, greens, tees, holes, raw: elements }
 }
 
 // Estimate green dimensions from polygon nodes
@@ -373,4 +414,169 @@ function matchPinsToHoleOrder(pins, tees, numHoles) {
   }
 
   return ordered.length >= numHoles ? ordered : null
+}
+
+// ─── GeoJSON exporter ────────────────────────────────────────────────────────
+// Converts the parsed OSM data into a normalized FeatureCollection plus a
+// per-hole bbox map. Polygon rings are closed and emitted as [lng, lat].
+// holeRef is assigned by proximity to golf=hole centerlines; features that
+// can't be confidently associated keep holeRef: null and are still emitted.
+
+function ringFromNodes(nodes) {
+  if (!nodes || nodes.length < 3) return null
+  const ring = nodes.map(n => [n.lng, n.lat])
+  const first = ring[0], last = ring[ring.length - 1]
+  if (first[0] !== last[0] || first[1] !== last[1]) ring.push([first[0], first[1]])
+  return ring
+}
+
+function lineFromNodes(nodes) {
+  if (!nodes || nodes.length < 2) return null
+  return nodes.map(n => [n.lng, n.lat])
+}
+
+function bboxFromCoords(coords) {
+  let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity
+  for (const c of coords) {
+    if (c[0] < w) w = c[0]; if (c[0] > e) e = c[0]
+    if (c[1] < s) s = c[1]; if (c[1] > n) n = c[1]
+  }
+  return [w, s, e, n]
+}
+
+function unionBbox(a, b) {
+  if (!a) return b; if (!b) return a
+  return [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])]
+}
+
+function nearestHoleRef(lat, lng, holeIndex) {
+  let bestRef = null, bestDist = Infinity
+  for (const { ref, nodes } of holeIndex) {
+    for (const n of nodes) {
+      const d = haversineMeters(lat, lng, n.lat, n.lng)
+      if (d < bestDist) { bestDist = d; bestRef = ref }
+    }
+  }
+  return { ref: bestRef, distM: bestDist }
+}
+
+export function exportCourseGeoJSON(osmData /*, courseHoles */) {
+  if (!osmData) return { type: 'FeatureCollection', features: [], bboxByHole: {} }
+
+  const { pins = [], bunkers = [], waterHazards = [], fairways = [], greens = [], tees = [], holes = [] } = osmData
+
+  // Build a hole index from golf=hole ways with valid refs (1–18).
+  const holeIndex = holes
+    .filter(h => h.nodes?.length >= 2 && h.ref >= 1 && h.ref <= 18)
+    .map(h => ({ ref: h.ref, par: h.par || 0, nodes: h.nodes }))
+
+  const features = []
+  const bboxByHole = {}
+
+  const addBboxForHole = (ref, coords) => {
+    if (ref == null) return
+    bboxByHole[ref] = unionBbox(bboxByHole[ref], bboxFromCoords(coords))
+  }
+
+  // Centerlines from golf=hole ways.
+  for (const h of holeIndex) {
+    const line = lineFromNodes(h.nodes)
+    if (!line) continue
+    features.push({
+      type: 'Feature',
+      properties: { kind: 'centerline', holeRef: h.ref, par: h.par },
+      geometry: { type: 'LineString', coordinates: line },
+    })
+    addBboxForHole(h.ref, line)
+  }
+
+  // Polygons (green/fairway/bunker/water/tee). Association rules:
+  // - green: nearest hole within 80m
+  // - fairway: nearest hole within 150m
+  // - bunker: nearest hole within 60m
+  // - water:  nearest hole within 120m
+  // - tee:    nearest hole within 80m (also closest to its tee-side node)
+  const polyKinds = [
+    { list: greens,       kind: 'green',   maxM: 80  },
+    { list: fairways,     kind: 'fairway', maxM: 150 },
+    { list: bunkers,      kind: 'bunker',  maxM: 60  },
+    { list: waterHazards, kind: 'water',   maxM: 120 },
+    { list: tees,         kind: 'tee',     maxM: 80  },
+  ]
+  for (const { list, kind, maxM } of polyKinds) {
+    for (const item of list) {
+      const ring = ringFromNodes(item.nodes)
+      if (!ring) continue
+      let holeRef = null
+      if (holeIndex.length) {
+        const { ref, distM } = nearestHoleRef(item.lat, item.lng, holeIndex)
+        if (distM <= maxM) holeRef = ref
+      }
+      features.push({
+        type: 'Feature',
+        properties: { kind, holeRef },
+        geometry: { type: 'Polygon', coordinates: [ring] },
+      })
+      if (holeRef != null) addBboxForHole(holeRef, ring)
+    }
+  }
+
+  // Pins as Points; associate to nearest hole within 30m.
+  for (const p of pins) {
+    let holeRef = null
+    if (p.ref && parseInt(p.ref) >= 1 && parseInt(p.ref) <= 18) {
+      holeRef = parseInt(p.ref)
+    } else if (holeIndex.length) {
+      const { ref, distM } = nearestHoleRef(p.lat, p.lng, holeIndex)
+      if (distM <= 30) holeRef = ref
+    }
+    features.push({
+      type: 'Feature',
+      properties: { kind: 'pin', holeRef },
+      geometry: { type: 'Point', coordinates: [p.lng, p.lat] },
+    })
+    if (holeRef != null) addBboxForHole(holeRef, [[p.lng, p.lat]])
+  }
+
+  return { type: 'FeatureCollection', features, bboxByHole }
+}
+
+// ─── Tier classifier ─────────────────────────────────────────────────────────
+// Returns 1, 2, or 3 based on geometry coverage. Driven entirely by the
+// FeatureCollection so callers don't need to re-walk the raw osmData.
+export function classifyTier(geojson, courseHoles) {
+  if (!geojson || !Array.isArray(geojson.features)) return 3
+  const N = courseHoles?.length || 18
+
+  const holeRefs = (kind) => {
+    const refs = new Set()
+    for (const f of geojson.features) {
+      if (f.properties?.kind === kind && f.properties.holeRef != null) refs.add(f.properties.holeRef)
+    }
+    return refs
+  }
+  const greens   = holeRefs('green')
+  const holeways = holeRefs('centerline')
+  const fairways = holeRefs('fairway')
+
+  if (greens.size >= 0.7 * N && (holeways.size >= 0.7 * N || fairways.size >= 0.5 * N)) return 1
+  if (greens.size >= 3 || holeways.size >= 3) return 2
+  return 3
+}
+
+// ─── Coverage map ────────────────────────────────────────────────────────────
+// Per-hole map of which feature kinds were rendered. Used by the UI for the
+// coverage badge in Tier 2 and to decide where to drop the GreenView inset.
+export function computeCoverage(geojson, courseHoles) {
+  const N = courseHoles?.length || 18
+  const out = {}
+  for (let i = 1; i <= N; i++) out[i] = { green: false, fairway: false, centerline: false, bunker: false, water: false, tee: false, pin: false }
+  if (!geojson?.features) return out
+  for (const f of geojson.features) {
+    const ref = f.properties?.holeRef
+    const kind = f.properties?.kind
+    if (ref == null || !out[ref] || !kind) continue
+    out[ref][kind] = true
+  }
+  return out
 }

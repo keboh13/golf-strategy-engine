@@ -1,14 +1,16 @@
 import { useState, useCallback, useEffect, useRef, useMemo, Component } from 'react'
 import { supabase, loadUserProfiles, saveUserProfile, deleteUserProfile, loadUserHistory, saveUserHistory, loadUserSettings, saveUserSettings, getCachedCourseDB, setCachedCourseDB, getAllCachedCoursesDB, deleteCachedCourseDB, loadSavedPlans, savePlan, deleteSavedPlan } from './lib/supabase.js'
 import { buildBagSection } from './lib/promptSections.js'
-import { fetchOSMCourseData, enrichHolesWithOSM } from './lib/osmCourseData.js'
+import { fetchOSMCourseData, enrichHolesWithOSM, exportCourseGeoJSON, classifyTier, computeCoverage } from './lib/osmCourseData.js'
+import { computeHoleDistances, formatDistancesLine } from './lib/courseGeometry.js'
+import { getCachedGeo, setCachedGeo } from './lib/courseGeoCache.js'
 import { C, F, card, inp, lbl, btnP, btnG } from './theme.js'
 import { useIsMobile, Badge, Spin, SectionHead, InfoBox, computeDataTier, DataAccuracyTier } from './components/ui.jsx'
 import GreenView from './components/GreenView.jsx'
+import CourseHoleMap from './components/CourseHoleMap.jsx'
 import CourseSearch from './components/CourseSearch.jsx'
 import ScorecardPreview from './components/ScorecardPreview.jsx'
 import WeatherPanel from './components/WeatherPanel.jsx'
-import CourseMapEmbed from './components/CourseMapEmbed.jsx'
 import { computeHoleTimes, getWeatherAtHour, toParStr, windDir } from './lib/weather.js'
 import { fetchHoleDesignViaSearch, mergeDesignDataIntoHoles, searchGolfCourseAPI, normalizeGolfCourseAPICourse } from './lib/courseApi.js'
 import { loadCourseCache, getCachedCourse, setCachedCourse, cacheKey, saveCourseCache } from './lib/courseCache.js'
@@ -398,8 +400,20 @@ function AppInner({ user, session, onSignOut }) {
     ;(async () => {
       let osmWorked = false
 
-      // Phase 1: OSM enrichment
+      // Phase 1: OSM enrichment + geometry export (Tier 1/2/3 classifier)
       setEnrichStatus('Fetching hazard data from OpenStreetMap...')
+      // Cached geometry first — avoid a second Overpass hit on the same course.
+      let cachedGeo = null
+      try { cachedGeo = await getCachedGeo(course.name, course.location) } catch {}
+      if (cachedGeo?.geojson || cachedGeo?.tier === 3) {
+        setCourse(prev => ({
+          ...prev,
+          geojson: cachedGeo.geojson || null,
+          bboxByHole: cachedGeo.bboxByHole || null,
+          coverage: cachedGeo.coverage || null,
+          tier: cachedGeo.tier,
+        }))
+      }
       for (let attempt = 0; attempt < 2; attempt++) {
         if (ctrl.signal.aborted || myId !== enrichLoadIdRef.current) return
         try {
@@ -407,19 +421,48 @@ function AppInner({ user, session, onSignOut }) {
           if (myId !== enrichLoadIdRef.current) return
           if (osmData) {
             const { holes: enrichedHoles, hasDesignData } = enrichHolesWithOSM(course.holes, osmData)
-            if (hasDesignData) {
-              osmWorked = true
-              setCourse(prev => {
-                const merged = prev.holes.map((h, i) => ({
-                  ...h,
-                  notes: h.notes || enrichedHoles[i]?.notes || '',
-                  osmDesign: enrichedHoles[i]?.osmDesign || null,
-                }))
-                const updated = { ...prev, holes: merged, osmEnriched: true }
-                setCachedCourse(updated)
-                return updated
-              })
+            const geojson = exportCourseGeoJSON(osmData, course.holes)
+            const tier = classifyTier(geojson, course.holes)
+            const coverage = computeCoverage(geojson, course.holes)
+            const bboxByHole = geojson.bboxByHole
+
+            // Compute verified distances per hole (Tier 1 holes get tee→pin,
+            // front/center/back of green, and carry-to-hazard from the tee).
+            const distancesByRef = {}
+            for (const h of enrichedHoles) {
+              const ref = course.holes.indexOf(h) + 1 // enrichedHoles preserves order
+              const d = computeHoleDistances(geojson, ref)
+              if (d) distancesByRef[ref] = d
             }
+
+            if (hasDesignData || tier <= 2) osmWorked = true
+            setCourse(prev => {
+              const merged = prev.holes.map((h, i) => {
+                const eh = enrichedHoles[i]
+                const dist = distancesByRef[i + 1] || null
+                return {
+                  ...h,
+                  notes: h.notes || eh?.notes || '',
+                  osmDesign: eh?.osmDesign
+                    ? { ...eh.osmDesign, distances: dist }
+                    : (dist ? { source: 'OpenStreetMap', distances: dist } : null),
+                }
+              })
+              const updated = { ...prev, holes: merged, osmEnriched: true, geojson: geojson.features?.length ? geojson : null, bboxByHole, coverage, tier }
+              setCachedCourse(updated)
+              return updated
+            })
+            // Persist geometry separately (course_cache stores the AI-facing
+            // course shape; course_geo stores the rendering geometry).
+            try {
+              await setCachedGeo(course.name, course.location, {
+                tier,
+                geojson: geojson.features?.length ? geojson : null,
+                bboxByHole,
+                coverage,
+                source: 'osm',
+              })
+            } catch {}
           }
           break
         } catch {
@@ -606,6 +649,12 @@ Be direct. Short sentences. No filler.`
           parts.push('hazards: ' + h.osmDesign.hazards.map(hz => `${hz.type} ${hz.loc}`).join(', '))
         }
         if (h.osmDesign.greenWidth) parts.push(`green ~${h.osmDesign.greenWidth}y wide × ${h.osmDesign.greenDepth}y deep`)
+        if (h.osmDesign.distances) {
+          const d = h.osmDesign.distances
+          parts.push(`tee→pin ${d.teeToPin}y`)
+          const distLine = formatDistancesLine(d)
+          if (distLine) parts.push(distLine)
+        }
         if (parts.length) designStr = ` | Design (OSM verified): ${parts.join('; ')}`
       } else if (h.webDesign) {
         const parts = []
@@ -653,6 +702,7 @@ Follow these rules strictly:
 - For green-json: set "hazards" to an EMPTY array [] unless a hole's design data or note explicitly describes a specific hazard near the green. Do NOT guess bunker or water locations.
 - For green-json: when a hole has "Design (OSM verified)" data, use those hazards with "confidence":"verified". When a hole has "Design (web search)" data, use with "confidence":"uncertain". When a hole has NO design data, set "hazards":[] and use generic values.
 - For tee shot strategy: when a hole has design data including dogleg direction, use that to inform shot shape. When a hole has bearing data, factor in wind direction vs hole bearing. Otherwise, recommend shape based on the player's natural ball flight and miss tendency — do NOT fabricate doglegs or fairway shapes.
+- When a hole's "Design (OSM verified)" data includes specific distances (e.g. "tee→pin 425y", "green 142/158/168y (F/C/B)", "carry Bunker R 235y"), use those exact numbers when discussing carry distances, club choices, and lay-up targets. They are surveyed from OSM and accurate within ~±5 yards. Do NOT round them to "about 240" — say "235y carry over the right fairway bunker" and pick the club that matches. Carry distances are measured FROM THE TEE along the centerline.
 - When in doubt, say "standard approach" rather than inventing hazards to avoid.
 
 ## Round strategy
@@ -1710,6 +1760,20 @@ Be direct. No filler. ALL 18 HOLES.`
                       <div style={card}>
                         {currentHole === 0 && parsedHoles.preamble && <div style={{ marginBottom: 16, paddingBottom: 12, borderBottom: `1px solid ${C.border}` }}>{renderPlan(parsedHoles.preamble)}</div>}
                         {renderPlan(parsedHoles.holes[currentHole]?.content || '')}
+                        {course?.geojson && parsedHoles.holes[currentHole]?.num != null && (
+                          <CourseHoleMap
+                            courseName={course.name}
+                            geojson={course.geojson}
+                            bboxByHole={course.bboxByHole}
+                            coverage={course.coverage}
+                            holes={parsedHoles.holes}
+                            selectedHole={parsedHoles.holes[currentHole].num}
+                            onSelectHole={(n) => {
+                              const idx = parsedHoles.holes.findIndex(h => h.num === n)
+                              if (idx >= 0) setCurrentHole(idx)
+                            }}
+                          />
+                        )}
                         <GreenView green={parsedHoles.holes[currentHole]?.green} holeNum={parsedHoles.holes[currentHole]?.num} />
                         {(() => {
                           const hNum = parsedHoles.holes[currentHole]?.num; if (!hNum) return null
