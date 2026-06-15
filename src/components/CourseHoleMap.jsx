@@ -4,11 +4,11 @@ import 'maplibre-gl/dist/maplibre-gl.css'
 import { C, card, lbl } from '../theme.js'
 import { computeHoleDistances, formatDistancesLine } from '../lib/courseGeometry.js'
 
-// Tier 1 / Tier 2 hole map. Reads a normalized FeatureCollection (from
-// exportCourseGeoJSON) and a bboxByHole map. Renders satellite + polygons +
-// centerline + pin marker for the selected hole, plus a distances panel
-// (front/center/back of green and carry-to-hazard FROM THE TEE — carries
-// around the green don't make practical sense).
+// Always-on satellite map. Decoupled from OSM completion: it boots as soon
+// as `coords` are known and lays overlays on top as `geojson` arrives. When
+// no per-hole bbox is available (Tier 3 or unmapped holes), it frames the
+// whole course around `coords` at a wide zoom so the player still sees the
+// satellite — not a placeholder.
 
 const ESRI_TILES = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
 
@@ -26,15 +26,12 @@ const STYLE = {
   layers: [{ id: 'sat', type: 'raster', source: 'sat' }],
 }
 
-// Layer styling — semi-transparent so satellite reads through.
 const LAYER_STYLES = {
   fairway: { color: '#5a9e5a', opacity: 0.35 },
   water:   { color: '#38bdf8', opacity: 0.55 },
   bunker:  { color: '#d4a944', opacity: 0.7  },
   green:   { color: '#3a7d44', opacity: 0.65 },
 }
-// Render order: fairway under everything, water above fairway, bunkers above
-// water, green on top so its outline stays visible.
 const POLY_ORDER = ['fairway', 'water', 'bunker', 'green']
 
 function filterForHole(geojson, holeRef) {
@@ -45,28 +42,39 @@ function filterForHole(geojson, holeRef) {
   }
 }
 
-export default function CourseHoleMap({ courseName, geojson, bboxByHole, holes, coverage, selectedHole, onSelectHole }) {
+export default function CourseHoleMap({
+  courseName,
+  coords,           // { lat, lng } — required; the map will frame here when no hole bbox
+  geojson,          // optional FeatureCollection from exportCourseGeoJSON
+  bboxByHole,       // optional { [ref]: [w,s,e,n] }
+  holes,            // array of hole objects with `.num`
+  coverage,         // optional per-hole coverage map
+  tier,             // 1 | 2 | 3 | undefined — drives the inline banner copy
+  selectedHole,     // number — currently selected hole ref
+  onSelectHole,     // (ref) => void
+}) {
   const containerRef = useRef(null)
   const mapRef = useRef(null)
   const pinMarkerRef = useRef(null)
   const [ready, setReady] = useState(false)
 
-  // Init map once.
+  // Init map once `coords` are known. Critical for perf: we don't wait for
+  // OSM/Overpass to finish — the satellite renders the moment we know where
+  // the course is.
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return
+    if (!coords?.lat || !coords?.lng) return
     const map = new maplibregl.Map({
       container: containerRef.current,
       style: STYLE,
       attributionControl: false,
-      center: defaultCenter(geojson) || [-98.0, 39.5],
-      zoom: 14,
+      center: [coords.lng, coords.lat],
+      zoom: 15.5, // wide enough to show the whole course
     })
     map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right')
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right')
     map.on('load', () => {
-      // Empty source we update per selected hole.
       map.addSource('hole', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
-
       for (const kind of POLY_ORDER) {
         const s = LAYER_STYLES[kind]
         map.addLayer({
@@ -84,7 +92,6 @@ export default function CourseHoleMap({ courseName, geojson, bboxByHole, holes, 
         filter: ['==', ['get', 'kind'], 'centerline'],
         paint: { 'line-color': '#fbbf24', 'line-width': 2, 'line-dasharray': [2, 2] },
       })
-
       mapRef.current = map
       setReady(true)
     })
@@ -93,11 +100,12 @@ export default function CourseHoleMap({ courseName, geojson, bboxByHole, holes, 
       pinMarkerRef.current = null
       map.remove()
       mapRef.current = null
+      setReady(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [coords?.lat, coords?.lng])
 
-  // Push the selected hole's features into the source + fit bounds + place pin.
+  // Frame/overlay updates when the selected hole or geojson changes.
   useEffect(() => {
     if (!ready || !mapRef.current) return
     const map = mapRef.current
@@ -106,13 +114,17 @@ export default function CourseHoleMap({ courseName, geojson, bboxByHole, holes, 
 
     const bbox = selectedHole != null ? bboxByHole?.[selectedHole] : null
     if (bbox) {
+      // Tier 1/2 — we have hole-level geometry: zoom into the hole
       map.fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]], { padding: 50, duration: 600, maxZoom: 18 })
+    } else if (coords?.lat) {
+      // No hole bbox — keep the whole-course view centered on coords. This
+      // is the Tier 3 / unmapped-hole path: satellite still useful.
+      map.easeTo({ center: [coords.lng, coords.lat], zoom: 15.5, duration: 600 })
     }
 
-    // Pin marker
     pinMarkerRef.current?.remove()
     pinMarkerRef.current = null
-    const pinFeat = fc.features.find(f => f.properties.kind === 'pin')
+    const pinFeat = fc.features.find(f => f.properties?.kind === 'pin')
     if (pinFeat) {
       const el = document.createElement('div')
       el.style.cssText = 'width:14px;height:14px;border-radius:50%;background:#ef4444;border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,0.4)'
@@ -120,11 +132,10 @@ export default function CourseHoleMap({ courseName, geojson, bboxByHole, holes, 
         .setLngLat(pinFeat.geometry.coordinates)
         .addTo(map)
     }
-  }, [ready, selectedHole, geojson, bboxByHole])
+  }, [ready, selectedHole, geojson, bboxByHole, coords?.lat, coords?.lng])
 
   const holeRefs = useMemo(() => {
-    const list = holes?.map(h => h.num || h.ref).filter(n => n >= 1 && n <= 18) || []
-    return list
+    return holes?.map(h => h.num || h.ref).filter(n => n >= 1 && n <= 18) || []
   }, [holes])
 
   const distances = useMemo(() => {
@@ -134,6 +145,25 @@ export default function CourseHoleMap({ courseName, geojson, bboxByHole, holes, 
 
   const cov = (coverage && selectedHole != null) ? coverage[selectedHole] : null
   const coverageBadge = cov ? buildCoverageBadge(cov) : null
+  const hasHoleGeometry = !!bboxByHole?.[selectedHole]
+
+  const banner = (() => {
+    if (tier === 3 || (!geojson && coords?.lat)) {
+      return {
+        tone: 'blue',
+        title: 'Satellite view only',
+        body: "This course isn't mapped in OpenStreetMap yet, so we can't draw hole boundaries or compute carry distances. The satellite is still useful for picking lines.",
+      }
+    }
+    if (tier === 2 && !hasHoleGeometry) {
+      return {
+        tone: 'amber',
+        title: 'Hole boundaries not mapped',
+        body: 'This hole has no OSM polygons — showing the course area. Other holes on this course do have geometry; try the hole buttons above.',
+      }
+    }
+    return null
+  })()
 
   return (
     <div style={{ ...card, marginBottom: 14 }}>
@@ -168,8 +198,27 @@ export default function CourseHoleMap({ courseName, geojson, bboxByHole, holes, 
 
       <div
         ref={containerRef}
-        style={{ height: 480, borderRadius: 10, overflow: 'hidden', border: `1px solid ${C.border}` }}
+        style={{ height: 480, borderRadius: 10, overflow: 'hidden', border: `1px solid ${C.border}`, background: '#0c1410' }}
       />
+      {!coords?.lat && (
+        <p style={{ marginTop: 10, fontSize: 11, color: C.textMuted, fontStyle: 'italic' }}>
+          Course coordinates not yet known — fetch live weather to geocode the course, then the map will load.
+        </p>
+      )}
+
+      {banner && (
+        <div
+          style={{
+            marginTop: 10, padding: '8px 12px', borderRadius: 8,
+            background: banner.tone === 'amber' ? C.amberMuted : C.blueMuted,
+            border: `1px solid ${banner.tone === 'amber' ? C.amber : C.blue}`,
+          }}
+        >
+          <p style={{ fontSize: 11, color: banner.tone === 'amber' ? C.amber : C.blue, margin: 0, lineHeight: 1.5 }}>
+            <strong>{banner.title}.</strong> {banner.body}
+          </p>
+        </div>
+      )}
 
       {distances && (
         <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 14, fontSize: 12, color: C.text }}>
@@ -186,11 +235,6 @@ export default function CourseHoleMap({ courseName, geojson, bboxByHole, holes, 
             />
           ))}
         </div>
-      )}
-      {selectedHole != null && !distances && (
-        <p style={{ marginTop: 10, fontSize: 11, color: C.textMuted, fontStyle: 'italic' }}>
-          Distances not available — hole geometry not mapped.
-        </p>
       )}
     </div>
   )
@@ -220,17 +264,4 @@ function buildCoverageBadge(cov) {
   return parts.join(' + ') + ' mapped'
 }
 
-function defaultCenter(geojson) {
-  if (!geojson?.features?.length) return null
-  for (const f of geojson.features) {
-    const g = f.geometry
-    if (g?.type === 'Point') return g.coordinates
-    if (g?.type === 'LineString' && g.coordinates.length) return g.coordinates[0]
-    if (g?.type === 'Polygon' && g.coordinates[0]?.length) return g.coordinates[0][0]
-  }
-  return null
-}
-
-// Re-export the prompt-friendly distance formatter so App.jsx can pull it
-// without depending on the geometry library directly.
 export { formatDistancesLine }
