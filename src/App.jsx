@@ -8,7 +8,6 @@ import { C, F, card, inp, lbl, btnP, btnG } from './theme.js'
 import { useIsMobile, Badge, Spin, SectionHead, InfoBox, computeDataTier, DataAccuracyTier } from './components/ui.jsx'
 import GreenView from './components/GreenView.jsx'
 import CourseHoleMap from './components/CourseHoleMap.jsx'
-import HoleSchematic from './components/HoleSchematic.jsx'
 import CourseSearch from './components/CourseSearch.jsx'
 import ScorecardPreview from './components/ScorecardPreview.jsx'
 import WeatherPanel from './components/WeatherPanel.jsx'
@@ -1768,60 +1767,26 @@ Be direct. No filler. ALL 18 HOLES.`
                         {renderPlan(parsedHoles.holes[currentHole]?.content || '')}
                         {(() => {
                           const num = parsedHoles.holes[currentHole]?.num
-                          if (num == null) return null
-                          const tier = course?.tier
-                          const hasGeo = !!course?.geojson
-                          const holeRec = course?.holes?.[num - 1]
-                          const greenForHole = parsedHoles.holes[currentHole]?.green
-                          // Tier 1 / 2 → real map. Tier 2 with no geometry for this hole still
-                          // renders the map (it'll show "Distances not available") + GreenView below.
-                          if (hasGeo && (tier === 1 || tier === 2)) {
-                            return (
-                              <>
-                                {tier === 2 && (
-                                  <div style={{ marginTop: 10, marginBottom: 6, padding: '8px 12px', background: C.amberMuted, border: `1px solid ${C.amber}`, borderRadius: 8 }}>
-                                    <p style={{ fontSize: 11, color: C.amber, margin: 0, lineHeight: 1.45 }}>
-                                      <strong>Tier 2 — partial map data.</strong> Some holes have full geometry; others fall back to the green-only schematic below. Numbers are computed only where mapped.
-                                    </p>
-                                  </div>
-                                )}
-                                <CourseHoleMap
-                                  courseName={course.name}
-                                  geojson={course.geojson}
-                                  bboxByHole={course.bboxByHole}
-                                  coverage={course.coverage}
-                                  holes={parsedHoles.holes}
-                                  selectedHole={num}
-                                  onSelectHole={(n) => {
-                                    const idx = parsedHoles.holes.findIndex(h => h.num === n)
-                                    if (idx >= 0) setCurrentHole(idx)
-                                  }}
-                                />
-                              </>
-                            )
-                          }
-                          // Tier 3 (or no OSM at all) → schematic. Banner explains coverage,
-                          // then a top-down hole diagram + yardage book panel.
-                          const parMatch = (parsedHoles.holes[currentHole]?.content || '').match(/Par\s+(\d)/i)
-                          const par = parMatch ? parseInt(parMatch[1]) : (holeRec?.par || 4)
+                          if (num == null || !coords?.lat) return null
+                          // Always render the satellite map when we have course coords. It
+                          // boots independently of OSM (which can be slow / absent), and
+                          // overlays/distances appear as soon as geojson lands. Banner copy
+                          // inside CourseHoleMap handles the "no geometry" honest message.
                           return (
-                            <>
-                              {tier === 3 && (
-                                <div style={{ marginTop: 10, marginBottom: 6, padding: '8px 12px', background: C.blueMuted, border: `1px solid ${C.blue}`, borderRadius: 8 }}>
-                                  <p style={{ fontSize: 11, color: C.blue, margin: 0, lineHeight: 1.45 }}>
-                                    <strong>Tier 3 — schematic view.</strong> Detailed map data isn't available for this course yet. Diagrams are stylized and use scorecard + web-search hints.
-                                  </p>
-                                </div>
-                              )}
-                              <HoleSchematic
-                                hole={holeRec || {}}
-                                holeNum={num}
-                                par={par}
-                                yardage={holeRec?.yardage}
-                                handicap={holeRec?.handicap}
-                                strategyLine={greenForHole?.green_notes || holeRec?.notes || ''}
-                              />
-                            </>
+                            <CourseHoleMap
+                              courseName={course.name}
+                              coords={coords}
+                              geojson={course?.geojson}
+                              bboxByHole={course?.bboxByHole}
+                              coverage={course?.coverage}
+                              tier={course?.tier}
+                              holes={parsedHoles.holes}
+                              selectedHole={num}
+                              onSelectHole={(n) => {
+                                const idx = parsedHoles.holes.findIndex(h => h.num === n)
+                                if (idx >= 0) setCurrentHole(idx)
+                              }}
+                            />
                           )
                         })()}
                         <GreenView green={parsedHoles.holes[currentHole]?.green} holeNum={parsedHoles.holes[currentHole]?.num} />
