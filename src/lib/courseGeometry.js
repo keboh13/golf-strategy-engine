@@ -10,6 +10,44 @@ import * as turf from '@turf/turf'
 
 const M_TO_Y = 1.09361
 
+// ── Phase 6 polish: shrink the persisted/state geometry ─────────────────────
+// At Esri zoom 17–18 we don't need polygons with sub-meter precision, and the
+// network/storage payload matters (course_geo rows are jsonb). Two cheap wins:
+//   1. turf.simplify each polygon/line (tolerance ~1e-5 ≈ 1m at the equator)
+//   2. trim every coord to 6 decimals (~11cm — well below render precision)
+// Pin points stay full-precision (one Point per hole — saves nothing).
+
+function trimCoord(c) {
+  return [Math.round(c[0] * 1e6) / 1e6, Math.round(c[1] * 1e6) / 1e6]
+}
+function trimRing(ring) { return ring.map(trimCoord) }
+
+export function simplifyAndTrimGeoJSON(geojson) {
+  if (!geojson?.features) return geojson
+  const out = { ...geojson, features: [] }
+  for (const f of geojson.features) {
+    if (!f.geometry) continue
+    let g = f.geometry
+    if (g.type === 'Polygon') {
+      try {
+        const simplified = turf.simplify(turf.polygon(g.coordinates), { tolerance: 0.00001, highQuality: false, mutate: false })
+        g = { type: 'Polygon', coordinates: simplified.geometry.coordinates.map(trimRing) }
+      } catch {
+        g = { type: 'Polygon', coordinates: g.coordinates.map(trimRing) }
+      }
+    } else if (g.type === 'LineString') {
+      try {
+        const simplified = turf.simplify(turf.lineString(g.coordinates), { tolerance: 0.00001, highQuality: false, mutate: false })
+        g = { type: 'LineString', coordinates: simplified.geometry.coordinates.map(trimCoord) }
+      } catch {
+        g = { type: 'LineString', coordinates: g.coordinates.map(trimCoord) }
+      }
+    }
+    out.features.push({ ...f, geometry: g })
+  }
+  return out
+}
+
 function holeFeatures(geojson, holeRef) {
   const out = { centerline: null, green: null, pin: null, hazards: [] }
   if (!geojson?.features) return out

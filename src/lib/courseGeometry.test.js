@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { computeHoleDistances, formatDistancesLine } from './courseGeometry.js'
+import { computeHoleDistances, formatDistancesLine, simplifyAndTrimGeoJSON } from './courseGeometry.js'
 
 // Build a straight north-pointing hole at the equator (where 1° lng ≈ 1° lat
 // in length, makes mental arithmetic simpler). 1° lat ≈ 111_111 meters.
@@ -132,5 +132,47 @@ describe('formatDistancesLine', () => {
     expect(out).toContain('green 142/158/168y (F/C/B)')
     expect(out).toContain('carry Bunker R 235y')
     expect(out).toContain('carry Water L 250y')
+  })
+})
+
+describe('simplifyAndTrimGeoJSON', () => {
+  it('returns the same shape with trimmed coordinates', () => {
+    const fc = {
+      type: 'FeatureCollection',
+      features: [
+        {
+          type: 'Feature', properties: { kind: 'centerline', holeRef: 1 },
+          geometry: { type: 'LineString', coordinates: [[-116.123456789, 33.123456789], [-116.123456788, 33.124456789]] },
+        },
+        {
+          type: 'Feature', properties: { kind: 'green', holeRef: 1 },
+          geometry: { type: 'Polygon', coordinates: [[
+            [-116.123456789, 33.123456789], [-116.123, 33.123], [-116.124, 33.124], [-116.123456789, 33.123456789],
+          ]] },
+        },
+        {
+          type: 'Feature', properties: { kind: 'pin', holeRef: 1 },
+          geometry: { type: 'Point', coordinates: [-116.123456789, 33.123456789] },
+        },
+      ],
+    }
+    const out = simplifyAndTrimGeoJSON(fc)
+    expect(out.features).toHaveLength(3)
+    const decimals = (n) => (n.toString().split('.')[1] || '').length
+    // Centerline first vertex
+    const lineFirst = out.features[0].geometry.coordinates[0]
+    expect(decimals(lineFirst[0])).toBeLessThanOrEqual(6)
+    expect(decimals(lineFirst[1])).toBeLessThanOrEqual(6)
+    // Polygon first vertex
+    const polyFirst = out.features[1].geometry.coordinates[0][0]
+    expect(decimals(polyFirst[0])).toBeLessThanOrEqual(6)
+    expect(decimals(polyFirst[1])).toBeLessThanOrEqual(6)
+    // Pin coords are kept full-precision (we don't trim Points)
+    expect(out.features[2].geometry.coordinates).toEqual([-116.123456789, 33.123456789])
+  })
+
+  it('is a no-op when geojson has no features', () => {
+    expect(simplifyAndTrimGeoJSON(null)).toBe(null)
+    expect(simplifyAndTrimGeoJSON({ type: 'FeatureCollection', features: [] }).features).toEqual([])
   })
 })

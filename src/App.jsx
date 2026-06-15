@@ -2,12 +2,13 @@ import { useState, useCallback, useEffect, useRef, useMemo, Component } from 're
 import { supabase, loadUserProfiles, saveUserProfile, deleteUserProfile, loadUserHistory, saveUserHistory, loadUserSettings, saveUserSettings, getCachedCourseDB, setCachedCourseDB, getAllCachedCoursesDB, deleteCachedCourseDB, loadSavedPlans, savePlan, deleteSavedPlan } from './lib/supabase.js'
 import { buildBagSection } from './lib/promptSections.js'
 import { fetchOSMCourseData, enrichHolesWithOSM, exportCourseGeoJSON, classifyTier, computeCoverage } from './lib/osmCourseData.js'
-import { computeHoleDistances, formatDistancesLine } from './lib/courseGeometry.js'
+import { computeHoleDistances, formatDistancesLine, simplifyAndTrimGeoJSON } from './lib/courseGeometry.js'
 import { getCachedGeo, setCachedGeo } from './lib/courseGeoCache.js'
 import { C, F, card, inp, lbl, btnP, btnG } from './theme.js'
 import { useIsMobile, Badge, Spin, SectionHead, InfoBox, computeDataTier, DataAccuracyTier } from './components/ui.jsx'
 import GreenView from './components/GreenView.jsx'
 import CourseHoleMap from './components/CourseHoleMap.jsx'
+import HoleSchematic from './components/HoleSchematic.jsx'
 import CourseSearch from './components/CourseSearch.jsx'
 import ScorecardPreview from './components/ScorecardPreview.jsx'
 import WeatherPanel from './components/WeatherPanel.jsx'
@@ -421,7 +422,12 @@ function AppInner({ user, session, onSignOut }) {
           if (myId !== enrichLoadIdRef.current) return
           if (osmData) {
             const { holes: enrichedHoles, hasDesignData } = enrichHolesWithOSM(course.holes, osmData)
-            const geojson = exportCourseGeoJSON(osmData, course.holes)
+            const rawGeojson = exportCourseGeoJSON(osmData, course.holes)
+            // Phase 6 polish: simplify polygons + trim coords before stashing
+            // and persisting. Distances/classifier/coverage all read the
+            // simplified version so what we compute matches what we render.
+            const geojson = simplifyAndTrimGeoJSON(rawGeojson)
+            geojson.bboxByHole = rawGeojson.bboxByHole
             const tier = classifyTier(geojson, course.holes)
             const coverage = computeCoverage(geojson, course.holes)
             const bboxByHole = geojson.bboxByHole
@@ -1760,20 +1766,64 @@ Be direct. No filler. ALL 18 HOLES.`
                       <div style={card}>
                         {currentHole === 0 && parsedHoles.preamble && <div style={{ marginBottom: 16, paddingBottom: 12, borderBottom: `1px solid ${C.border}` }}>{renderPlan(parsedHoles.preamble)}</div>}
                         {renderPlan(parsedHoles.holes[currentHole]?.content || '')}
-                        {course?.geojson && parsedHoles.holes[currentHole]?.num != null && (
-                          <CourseHoleMap
-                            courseName={course.name}
-                            geojson={course.geojson}
-                            bboxByHole={course.bboxByHole}
-                            coverage={course.coverage}
-                            holes={parsedHoles.holes}
-                            selectedHole={parsedHoles.holes[currentHole].num}
-                            onSelectHole={(n) => {
-                              const idx = parsedHoles.holes.findIndex(h => h.num === n)
-                              if (idx >= 0) setCurrentHole(idx)
-                            }}
-                          />
-                        )}
+                        {(() => {
+                          const num = parsedHoles.holes[currentHole]?.num
+                          if (num == null) return null
+                          const tier = course?.tier
+                          const hasGeo = !!course?.geojson
+                          const holeRec = course?.holes?.[num - 1]
+                          const greenForHole = parsedHoles.holes[currentHole]?.green
+                          // Tier 1 / 2 → real map. Tier 2 with no geometry for this hole still
+                          // renders the map (it'll show "Distances not available") + GreenView below.
+                          if (hasGeo && (tier === 1 || tier === 2)) {
+                            return (
+                              <>
+                                {tier === 2 && (
+                                  <div style={{ marginTop: 10, marginBottom: 6, padding: '8px 12px', background: C.amberMuted, border: `1px solid ${C.amber}`, borderRadius: 8 }}>
+                                    <p style={{ fontSize: 11, color: C.amber, margin: 0, lineHeight: 1.45 }}>
+                                      <strong>Tier 2 — partial map data.</strong> Some holes have full geometry; others fall back to the green-only schematic below. Numbers are computed only where mapped.
+                                    </p>
+                                  </div>
+                                )}
+                                <CourseHoleMap
+                                  courseName={course.name}
+                                  geojson={course.geojson}
+                                  bboxByHole={course.bboxByHole}
+                                  coverage={course.coverage}
+                                  holes={parsedHoles.holes}
+                                  selectedHole={num}
+                                  onSelectHole={(n) => {
+                                    const idx = parsedHoles.holes.findIndex(h => h.num === n)
+                                    if (idx >= 0) setCurrentHole(idx)
+                                  }}
+                                />
+                              </>
+                            )
+                          }
+                          // Tier 3 (or no OSM at all) → schematic. Banner explains coverage,
+                          // then a top-down hole diagram + yardage book panel.
+                          const parMatch = (parsedHoles.holes[currentHole]?.content || '').match(/Par\s+(\d)/i)
+                          const par = parMatch ? parseInt(parMatch[1]) : (holeRec?.par || 4)
+                          return (
+                            <>
+                              {tier === 3 && (
+                                <div style={{ marginTop: 10, marginBottom: 6, padding: '8px 12px', background: C.blueMuted, border: `1px solid ${C.blue}`, borderRadius: 8 }}>
+                                  <p style={{ fontSize: 11, color: C.blue, margin: 0, lineHeight: 1.45 }}>
+                                    <strong>Tier 3 — schematic view.</strong> Detailed map data isn't available for this course yet. Diagrams are stylized and use scorecard + web-search hints.
+                                  </p>
+                                </div>
+                              )}
+                              <HoleSchematic
+                                hole={holeRec || {}}
+                                holeNum={num}
+                                par={par}
+                                yardage={holeRec?.yardage}
+                                handicap={holeRec?.handicap}
+                                strategyLine={greenForHole?.green_notes || holeRec?.notes || ''}
+                              />
+                            </>
+                          )
+                        })()}
                         <GreenView green={parsedHoles.holes[currentHole]?.green} holeNum={parsedHoles.holes[currentHole]?.num} />
                         {(() => {
                           const hNum = parsedHoles.holes[currentHole]?.num; if (!hNum) return null
