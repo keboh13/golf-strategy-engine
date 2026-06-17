@@ -16,6 +16,7 @@ import WeatherPanel from './components/WeatherPanel.jsx'
 import { computeHoleTimes, getWeatherAtHour, toParStr, windDir } from './lib/weather.js'
 import { fetchHoleDesignViaSearch, mergeDesignDataIntoHoles, searchGolfCourseAPI, normalizeGolfCourseAPICourse, adminUploadScorecardPdf } from './lib/courseApi.js'
 import { loadCourseCache, getCachedCourse, setCachedCourse, cacheKey, saveCourseCache } from './lib/courseCache.js'
+import { mergeUploadedScorecard, isSameCourseKey } from './lib/scorecardMerge.js'
 import AuthScreen from './screens/AuthScreen.jsx'
 import ImportTab from './components/ImportTab.jsx'
 import OnboardingScreen from './screens/OnboardingScreen.jsx'
@@ -2394,6 +2395,19 @@ Be direct. No filler. ALL 18 HOLES.`
                       pdfUrl: url,
                     })
                     const conf = result?._confidence || 'medium'
+
+                    // Propagate the freshly-parsed scorecard everywhere so
+                    // distances / layout / hazards reflect the PDF immediately
+                    // — no need for the admin to re-search the course.
+                    const merged = { ...result, name: c.name, location: c.location }
+                    setCachedCourse(merged)                                                  // local LS cache
+                    try { await setCachedCourseDB(merged) } catch {}                         // shared DB cache (server already wrote, this just nudges any stale row)
+                    if (isSameCourseKey(course, c)) {
+                      const hazardsByRef = await loadCourseHazards(c.name, c.location).catch(() => ({}))
+                      setCourse(prev => mergeUploadedScorecard(prev, result, hazardsByRef))
+                      setCacheVersion(v => v + 1)
+                    }
+
                     setScorecardMsg(`✓ Scorecard updated for ${c.name} (confidence: ${conf}). Visible to all users.`)
                     await loadSharedCache()
                   } catch (e) {
