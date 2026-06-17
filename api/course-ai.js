@@ -1,9 +1,10 @@
-// Vercel Edge Function — server-side proxy for course-related Claude API calls.
-// Replaces client-side calls that used anthropic-dangerous-direct-browser-access.
-// Supports six actions: geocode, scorecard-search, hole-design-search, yardage-book, hazard-extract, parse-yardage-book-pdf.
+// Vercel Node Function — server-side proxy for course-related Claude API calls.
+// Runs on Node (not Edge) so large yardage-book PDF parses can exceed the
+// 25s edge wall-clock. The handler entry adapts Node IncomingMessage/
+// ServerResponse to the Web Request/Response API the rest of this file uses.
 // Required env vars: ANTHROPIC_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 
-export const config = { runtime: 'nodejs', maxDuration: 60 }
+export const config = { maxDuration: 60 }
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin':  process.env.ALLOWED_ORIGIN || '*',
@@ -269,7 +270,44 @@ function validateScorecardJson(parsed) {
   return issues
 }
 
-export default async function handler(req) {
+// Vercel's Node runtime hands us (req: IncomingMessage, res: ServerResponse).
+// The rest of this file is written against the Web `Request`/`Response` API,
+// so we adapt at the boundary instead of rewriting every jsonResponse return.
+export default async function nodeHandler(nodeReq, nodeRes) {
+  try {
+    const url = `http://localhost${nodeReq.url || '/'}`
+    const headers = new Headers()
+    for (const [k, v] of Object.entries(nodeReq.headers || {})) {
+      if (v == null) continue
+      headers.set(k, Array.isArray(v) ? v.join(',') : String(v))
+    }
+    let bodyBuf
+    if (nodeReq.method !== 'GET' && nodeReq.method !== 'HEAD') {
+      bodyBuf = await new Promise((resolve, reject) => {
+        const chunks = []
+        nodeReq.on('data', c => chunks.push(c))
+        nodeReq.on('end', () => resolve(Buffer.concat(chunks)))
+        nodeReq.on('error', reject)
+      })
+    }
+    const webReq = new Request(url, {
+      method: nodeReq.method,
+      headers,
+      body: bodyBuf && bodyBuf.length ? bodyBuf : undefined,
+    })
+    const webRes = await handleRequest(webReq)
+    nodeRes.statusCode = webRes.status
+    webRes.headers.forEach((value, key) => nodeRes.setHeader(key, value))
+    const buf = Buffer.from(await webRes.arrayBuffer())
+    nodeRes.end(buf)
+  } catch (e) {
+    nodeRes.statusCode = 500
+    nodeRes.setHeader('Content-Type', 'application/json')
+    nodeRes.end(JSON.stringify({ error: `Handler crashed: ${e.message}` }))
+  }
+}
+
+async function handleRequest(req) {
   if (req.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS })
   if (req.method !== 'POST') return new Response('Method not allowed', { status: 405, headers: CORS_HEADERS })
 
