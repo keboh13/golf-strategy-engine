@@ -142,6 +142,88 @@ export async function fetchScorecardViaClaudeSearch(authToken, courseName, locat
   return { ...data.result, source: data.result.source || 'web search' }
 }
 
+export async function fetchYardageBookViaClaudeSearch(authToken, courseName, location) {
+  const res = await fetch('/api/course-ai', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+    },
+    body: JSON.stringify({ action: 'yardage-book', courseName, location: location || '' }),
+  })
+  const data = await res.json()
+  if (!res.ok || data.error) throw new Error(data.error || 'Yardage-book search failed')
+  const r = data.result
+  const hazardsByHole = r.hazardsByHole || []
+  return {
+    name: r.name || courseName,
+    location: r.location || location || '',
+    yardage: String(r.yardage || ''),
+    rating: String(r.rating || ''),
+    slope: String(r.slope || ''),
+    par: r.par || (r.holes || []).reduce((s, h) => s + (h.par || 0), 0),
+    selectedTee: r.selectedTee || '',
+    source: r.source || r._sourcePdf || 'yardage book',
+    holes: (r.holes || []).map((h, i) => ({
+      par: h.par || 4,
+      yardage: String(h.yardage || ''),
+      handicap: h.handicap || i + 1,
+      notes: '',
+      hzDesign: hazardsByHole.find(z => z?.hole === i + 1) || null,
+    })),
+    hazardsByHole,
+    _source: 'yardage_book',
+    _sourcePdf: r._sourcePdf || null,
+    _sourceHtml: r._sourceHtml || null,
+    _discoveryTitle: r._discoveryTitle || null,
+    _confidence: r._confidence || 'low',
+    _validationIssues: r._validationIssues || [],
+  }
+}
+
+// Admin-only: upload a PDF scorecard for an existing cached course, then trigger
+// server-side parse + persist. The server enforces the admin check (HTTP 403 if
+// the user isn't in the admins table). The new scorecard + hazards are written
+// to the shared course_cache and course_hole_hazards tables, so every user sees
+// the enriched data on the next lookup.
+export async function adminUploadScorecardPdf(authToken, { courseName, location, pdfUrl, onProgress }) {
+  if (!pdfUrl) throw new Error('Missing pdfUrl')
+  onProgress?.('Parsing PDF with Claude…')
+  const courseKey = `${(courseName || '').toLowerCase().trim()}|${(location || '').toLowerCase().trim()}`
+  const res = await fetch('/api/course-ai', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+    },
+    body: JSON.stringify({
+      action: 'parse-yardage-book-pdf',
+      courseName,
+      location: location || '',
+      pdf_url: pdfUrl,
+      course_key: courseKey,
+      persist: true,
+    }),
+  })
+  const data = await res.json()
+  if (!res.ok || data.error) throw new Error(data.error || 'PDF parse failed')
+  return data.result
+}
+
+export async function extractHazardsForHole(authToken, { course_key, hole, image_url, image_base64, image_media_type, persist }) {
+  const res = await fetch('/api/course-ai', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+    },
+    body: JSON.stringify({ action: 'hazard-extract', course_key, hole, image_url, image_base64, image_media_type, persist: persist !== false }),
+  })
+  const data = await res.json()
+  if (!res.ok || data.error) throw new Error(data.error || 'Hazard extraction failed')
+  return data.result
+}
+
 export async function fetchHoleDesignViaSearch(authToken, courseName, location) {
   const res = await fetch('/api/course-ai', {
     method: 'POST',
