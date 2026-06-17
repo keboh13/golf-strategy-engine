@@ -3,7 +3,7 @@
 // Supports six actions: geocode, scorecard-search, hole-design-search, yardage-book, hazard-extract, parse-yardage-book-pdf.
 // Required env vars: ANTHROPIC_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 
-export const config = { runtime: 'edge' }
+export const config = { runtime: 'nodejs', maxDuration: 60 }
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin':  process.env.ALLOWED_ORIGIN || '*',
