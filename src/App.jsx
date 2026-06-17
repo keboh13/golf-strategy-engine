@@ -9,6 +9,7 @@ import { C, F, card, inp, lbl, btnP, btnG } from './theme.js'
 import { useIsMobile, Badge, Spin, SectionHead, InfoBox, computeDataTier, DataAccuracyTier } from './components/ui.jsx'
 import GreenView from './components/GreenView.jsx'
 import CourseHoleMap from './components/CourseHoleMap.jsx'
+import UserMenu from './components/UserMenu.jsx'
 import CourseSearch from './components/CourseSearch.jsx'
 import ScorecardPreview from './components/ScorecardPreview.jsx'
 import WeatherPanel from './components/WeatherPanel.jsx'
@@ -1072,6 +1073,12 @@ Be direct. No filler. ALL 18 HOLES.`
             {!isMobile && course.name && <span style={{ fontSize: 13, color: C.textFaint, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 200 }}>· {course.name}</span>}
             {weather && <Badge label="Weather live" bg={C.blueMuted} fg={C.blue} />}
           </div>
+          <UserMenu
+            user={user}
+            compact={isMobile}
+            onSignOut={onSignOut}
+            onOpenSettings={() => setTab('admin')}
+          />
         </div>
       </div>
 
