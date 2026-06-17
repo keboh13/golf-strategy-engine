@@ -4,6 +4,7 @@ import { buildBagSection } from './lib/promptSections.js'
 import { fetchOSMCourseData, enrichHolesWithOSM, exportCourseGeoJSON, classifyTier, computeCoverage } from './lib/osmCourseData.js'
 import { computeHoleDistances, formatDistancesLine, simplifyAndTrimGeoJSON } from './lib/courseGeometry.js'
 import { getCachedGeo, setCachedGeo } from './lib/courseGeoCache.js'
+import { getContrib, saveContrib, mergeContribIntoGeojson } from './lib/holeContributions.js'
 import { C, F, card, inp, lbl, btnP, btnG } from './theme.js'
 import { useIsMobile, Badge, Spin, SectionHead, InfoBox, computeDataTier, DataAccuracyTier } from './components/ui.jsx'
 import GreenView from './components/GreenView.jsx'
@@ -503,6 +504,18 @@ function AppInner({ user, session, onSignOut }) {
       if (!osmWorked && myId === enrichLoadIdRef.current) {
         setCourse(prev => ({ ...prev, osmEnriched: true }))
       }
+
+      // Phase 3: User-contributed hole pins. We always try this — it's the
+      // only data source for many Tier 3 courses, and a cheap LS/Supabase
+      // lookup. Contributions flow into the rendered geojson via the memo
+      // below; nothing else needs to know about them.
+      try {
+        const contrib = await getContrib(course.name, course.location)
+        if (myId === enrichLoadIdRef.current && contrib && Object.keys(contrib).length) {
+          setCourse(prev => ({ ...prev, contribByRef: contrib }))
+        }
+      } catch {}
+
       if (myId === enrichLoadIdRef.current) {
         setEnriching(false)
         setEnrichStatus('')
@@ -510,6 +523,33 @@ function AppInner({ user, session, onSignOut }) {
     })()
     return () => ctrl.abort()
   }, [course.name, coords?.lat, coords?.lng, course.osmEnriched, session])
+
+  // Memoized: merge OSM geojson + user contributions for rendering. We never
+  // mutate course.geojson with contributions (keeps the persisted OSM cache
+  // honest) — instead the map consumes this derived value.
+  const displayGeo = useMemo(() => {
+    if (!course?.contribByRef || !Object.keys(course.contribByRef).length) {
+      return { geojson: course?.geojson || null, bboxByHole: course?.bboxByHole || null }
+    }
+    return mergeContribIntoGeojson(course.geojson, course.bboxByHole, course.contribByRef)
+  }, [course?.geojson, course?.bboxByHole, course?.contribByRef])
+
+  const contributedHoleSet = useMemo(
+    () => new Set(Object.keys(course?.contribByRef || {}).map(n => parseInt(n))),
+    [course?.contribByRef]
+  )
+
+  // Handler passed to CourseHoleMap. Persists the tee/pin pair locally + to
+  // Supabase, then merges it into state so distances light up immediately.
+  const handleHoleContribution = useCallback(async ({ ref, teeLng, teeLat, pinLng, pinLat }) => {
+    if (!course?.name || !ref) return
+    const contrib = { teeLng, teeLat, pinLng, pinLat, source: 'user', updatedAt: new Date().toISOString() }
+    try { await saveContrib(course.name, course.location, ref, contrib) } catch {}
+    setCourse(prev => ({
+      ...prev,
+      contribByRef: { ...(prev.contribByRef || {}), [ref]: contrib },
+    }))
+  }, [course?.name, course?.location])
 
   const buildPrompt = useCallback(() => {
     // ── Shared: club list ──
@@ -1776,8 +1816,8 @@ Be direct. No filler. ALL 18 HOLES.`
                             <CourseHoleMap
                               courseName={course.name}
                               coords={coords}
-                              geojson={course?.geojson}
-                              bboxByHole={course?.bboxByHole}
+                              geojson={displayGeo.geojson}
+                              bboxByHole={displayGeo.bboxByHole}
                               coverage={course?.coverage}
                               tier={course?.tier}
                               holes={parsedHoles.holes}
@@ -1786,6 +1826,8 @@ Be direct. No filler. ALL 18 HOLES.`
                                 const idx = parsedHoles.holes.findIndex(h => h.num === n)
                                 if (idx >= 0) setCurrentHole(idx)
                               }}
+                              onContribute={handleHoleContribution}
+                              contributedHoles={contributedHoleSet}
                             />
                           )
                         })()}

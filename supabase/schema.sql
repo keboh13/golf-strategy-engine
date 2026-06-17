@@ -1,5 +1,6 @@
 -- Golf Strategy Engine — Supabase schema
 -- Run this in: Supabase Dashboard → SQL Editor → New query → Run
+-- Safe to re-run: every policy/trigger is dropped before being recreated.
 
 -- ─── Extensions ──────────────────────────────────────────────────────────────
 create extension if not exists "uuid-ossp";
@@ -18,6 +19,7 @@ create table if not exists public.user_profiles (
 
 alter table public.user_profiles enable row level security;
 
+drop policy if exists "users can manage own profiles" on public.user_profiles;
 create policy "users can manage own profiles"
   on public.user_profiles
   for all
@@ -35,6 +37,7 @@ create table if not exists public.scoring_history (
 
 alter table public.scoring_history enable row level security;
 
+drop policy if exists "users can manage own history" on public.scoring_history;
 create policy "users can manage own history"
   on public.scoring_history
   for all
@@ -55,6 +58,7 @@ create table if not exists public.user_settings (
 
 alter table public.user_settings enable row level security;
 
+drop policy if exists "users can manage own settings" on public.user_settings;
 create policy "users can manage own settings"
   on public.user_settings
   for all
@@ -73,23 +77,25 @@ create table if not exists public.course_cache (
 
 alter table public.course_cache enable row level security;
 
--- Anyone can read (even anon during unauthenticated fallback)
+drop policy if exists "anyone can read course cache" on public.course_cache;
 create policy "anyone can read course cache"
   on public.course_cache
   for select
   using (true);
 
--- Only authenticated users can write
+drop policy if exists "authenticated users can write course cache" on public.course_cache;
 create policy "authenticated users can write course cache"
   on public.course_cache
   for insert
   with check (auth.role() = 'authenticated');
 
+drop policy if exists "authenticated users can update course cache" on public.course_cache;
 create policy "authenticated users can update course cache"
   on public.course_cache
   for update
   using (auth.role() = 'authenticated');
 
+drop policy if exists "authenticated users can delete course cache" on public.course_cache;
 create policy "authenticated users can delete course cache"
   on public.course_cache
   for delete
@@ -118,7 +124,7 @@ alter table public.api_usage
 
 alter table public.api_usage enable row level security;
 
--- Users can only read their own usage
+drop policy if exists "users can read own usage" on public.api_usage;
 create policy "users can read own usage"
   on public.api_usage
   for select
@@ -130,6 +136,72 @@ create policy "users can read own usage"
 
 create index if not exists api_usage_user_time_idx on public.api_usage(user_id, used_at desc);
 
+-- ─── course_geo ──────────────────────────────────────────────────────────────
+-- GLOBAL: cached OSM/contributed course geometry, keyed by course_key.
+-- The frontend (CourseHoleMap) reads this on cold load instead of refetching
+-- from Overpass; tier 3 entries (no geometry) are persisted too so we don't
+-- re-attempt fruitlessly.
+create table if not exists public.course_geo (
+  course_key   text primary key,
+  tier         integer not null default 3,
+  geojson      jsonb,
+  bbox_by_hole jsonb,
+  coverage     jsonb,
+  source       text not null default 'osm',
+  updated_at   timestamptz not null default now()
+);
+
+alter table public.course_geo enable row level security;
+
+drop policy if exists "anyone can read course geo" on public.course_geo;
+create policy "anyone can read course geo"
+  on public.course_geo for select using (true);
+
+drop policy if exists "authenticated users can write course geo" on public.course_geo;
+create policy "authenticated users can write course geo"
+  on public.course_geo for insert with check (auth.role() = 'authenticated');
+
+drop policy if exists "authenticated users can update course geo" on public.course_geo;
+create policy "authenticated users can update course geo"
+  on public.course_geo for update using (auth.role() = 'authenticated');
+
+-- ─── course_hole_contrib ─────────────────────────────────────────────────────
+-- User-contributed tee/pin pairs for individual holes. Used when OSM has no
+-- centerline for a hole. One row per (course, hole). The frontend merges
+-- these into the rendered geojson before computing distances, so a single
+-- contribution unlocks the distance UI for that hole for every future user.
+create table if not exists public.course_hole_contrib (
+  course_key  text not null,
+  hole_ref    integer not null check (hole_ref between 1 and 18),
+  tee_lng     double precision not null,
+  tee_lat     double precision not null,
+  pin_lng     double precision not null,
+  pin_lat     double precision not null,
+  source      text not null default 'user',
+  contributor uuid references auth.users(id) on delete set null,
+  updated_at  timestamptz not null default now(),
+  primary key (course_key, hole_ref)
+);
+
+alter table public.course_hole_contrib enable row level security;
+
+drop policy if exists "anyone can read hole contributions" on public.course_hole_contrib;
+create policy "anyone can read hole contributions"
+  on public.course_hole_contrib for select using (true);
+
+drop policy if exists "authenticated users can contribute holes" on public.course_hole_contrib;
+create policy "authenticated users can contribute holes"
+  on public.course_hole_contrib for insert
+  with check (auth.role() = 'authenticated');
+
+drop policy if exists "authenticated users can update hole contributions" on public.course_hole_contrib;
+create policy "authenticated users can update hole contributions"
+  on public.course_hole_contrib for update
+  using (auth.role() = 'authenticated');
+
+create index if not exists course_hole_contrib_key_idx
+  on public.course_hole_contrib(course_key);
+
 -- ─── Helper: updated_at trigger ───────────────────────────────────────────────
 create or replace function public.set_updated_at()
 returns trigger language plpgsql as $$
@@ -139,10 +211,12 @@ begin
 end;
 $$;
 
+drop trigger if exists user_profiles_updated_at on public.user_profiles;
 create trigger user_profiles_updated_at
   before update on public.user_profiles
   for each row execute function public.set_updated_at();
 
+drop trigger if exists user_settings_updated_at on public.user_settings;
 create trigger user_settings_updated_at
   before update on public.user_settings
   for each row execute function public.set_updated_at();
