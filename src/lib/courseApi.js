@@ -205,8 +205,15 @@ export async function adminUploadScorecardPdf(authToken, { courseName, location,
       persist: true,
     }),
   })
-  const data = await res.json()
-  if (!res.ok || data.error) throw new Error(data.error || 'PDF parse failed')
+  const raw = await res.text()
+  let data
+  try { data = JSON.parse(raw) } catch {
+    const snippet = raw.slice(0, 200).replace(/\s+/g, ' ').trim()
+    throw new Error(res.status === 504 || /timeout/i.test(snippet)
+      ? `PDF parse timed out (HTTP ${res.status}). Try a smaller PDF or retry.`
+      : `PDF parse failed (HTTP ${res.status}): ${snippet || 'no response body'}`)
+  }
+  if (!res.ok || data.error) throw new Error(data.error || `PDF parse failed (HTTP ${res.status})`)
   return data.result
 }
 
