@@ -150,6 +150,94 @@ function makeCacheKey(name, location) {
   return `${(name || '').toLowerCase().trim()}|${(location || '').toLowerCase().trim()}`
 }
 
+// ── Course hole hazards ──────────────────────────────────────────────────────
+
+export async function loadCourseHazards(name, location) {
+  const key = makeCacheKey(name, location)
+  const { data, error } = await supabase
+    .from('course_hole_hazards')
+    .select('hole_ref, hazards, source, image_path, confidence')
+    .eq('course_key', key)
+  if (error || !data) return {}
+  const byRef = {}
+  for (const row of data) byRef[row.hole_ref] = { ...row.hazards, _source: row.source, _confidence: row.confidence }
+  return byRef
+}
+
+function courseKeySlug(name, location) {
+  return makeCacheKey(name, location).replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+}
+
+export async function listCoursePdfs(name, location) {
+  const prefix = courseKeySlug(name, location)
+  const { data, error } = await supabase.storage.from('course-art').list(prefix, { limit: 100 })
+  if (error || !data) return []
+  return data
+    .filter(o => o.name && o.name.toLowerCase().endsWith('.pdf'))
+    .map(o => {
+      const path = `${prefix}/${o.name}`
+      const { data: u } = supabase.storage.from('course-art').getPublicUrl(path)
+      return { path, name: o.name, url: u?.publicUrl || '', created_at: o.created_at || null }
+    })
+}
+
+export async function uploadCoursePdfToBucket(name, location, file) {
+  const slug = courseKeySlug(name, location)
+  const objectPath = `${slug}/yardage-book-${Date.now()}.pdf`
+  const { error } = await supabase.storage.from('course-art').upload(objectPath, file, {
+    contentType: 'application/pdf',
+    upsert: true,
+  })
+  if (error) throw error
+  const { data } = supabase.storage.from('course-art').getPublicUrl(objectPath)
+  if (!data?.publicUrl) throw new Error('Could not resolve public URL for uploaded PDF')
+  return { path: objectPath, url: data.publicUrl }
+}
+
+export async function deleteAllCoursePdfs(name, location) {
+  const objs = await listCoursePdfs(name, location)
+  if (!objs.length) return 0
+  const { error } = await supabase.storage.from('course-art').remove(objs.map(o => o.path))
+  if (error) throw error
+  return objs.length
+}
+
+export async function deleteCourseHazards(name, location) {
+  const key = makeCacheKey(name, location)
+  const { error } = await supabase.from('course_hole_hazards').delete().eq('course_key', key)
+  if (error) throw error
+}
+
+export async function clearCachedScorecardPdfRef(name, location) {
+  const key = makeCacheKey(name, location)
+  const { data: row } = await supabase.from('course_cache').select('course_data').eq('cache_key', key).maybeSingle()
+  if (!row) return
+  const course_data = { ...(row.course_data || {}) }
+  delete course_data._sourcePdf
+  delete course_data.hazardsByHole
+  delete course_data._sourceHtml
+  delete course_data._discoveryTitle
+  course_data._needs_review = true
+  const { error } = await supabase.from('course_cache').update({ course_data }).eq('cache_key', key)
+  if (error) throw error
+}
+
+export async function saveCourseHazards(name, location, holeRef, hazardsJson, { source = 'vision', imagePath = null, confidence = 'medium' } = {}) {
+  const key = makeCacheKey(name, location)
+  const { error } = await supabase
+    .from('course_hole_hazards')
+    .upsert({
+      course_key: key,
+      hole_ref: holeRef,
+      hazards: hazardsJson,
+      source,
+      image_path: imagePath,
+      confidence,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'course_key,hole_ref' })
+  if (error) console.warn('[course_hole_hazards] upsert error:', error.message)
+}
+
 // ── Saved game plans ─────────────────────────────────────────────────────────
 
 export async function loadSavedPlans(userId) {

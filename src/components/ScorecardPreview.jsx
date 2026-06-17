@@ -1,9 +1,25 @@
 import { C } from '../theme.js'
 
+function hazardSummary(hz) {
+  if (!hz) return ''
+  const parts = []
+  if (hz.dogleg && hz.dogleg !== 'straight') parts.push(`DL${hz.dogleg[0].toUpperCase()}`)
+  if (Array.isArray(hz.hazards)) {
+    const counts = {}
+    for (const z of hz.hazards) {
+      const k = (z.type || 'haz')[0].toUpperCase() + (z.side || '')
+      counts[k] = (counts[k] || 0) + 1
+    }
+    for (const [k, n] of Object.entries(counts)) parts.push(n > 1 ? `${k}×${n}` : k)
+  }
+  return parts.join(' ')
+}
+
 export default function ScorecardPreview({ holes }) {
   if (!holes || holes.length < 18) return null
   const front = holes.slice(0, 9)
   const back  = holes.slice(9, 18)
+  const hasHazards = holes.some(h => h.hzDesign)
   const row = (label, fn, color = C.textMuted) => (
     <tr>
       <td style={{ color: C.textFaint, padding: '3px 4px', fontSize: 10 }}>{label}</td>
@@ -35,6 +51,28 @@ export default function ScorecardPreview({ holes }) {
           {row('HCP', h => h.handicap, C.textFaint)}
         </tbody>
       </table>
+      {hasHazards && (
+        <div style={{ marginTop: 10, padding: '8px 10px', background: C.bgInput, border: `1px solid ${C.border}`, borderRadius: 8 }}>
+          <div style={{ fontSize: 10, color: C.textFaint, marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+            Yardage-book hazards (from PDF)
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 6 }}>
+            {holes.map((h, i) => {
+              if (!h.hzDesign) return null
+              const summary = hazardSummary(h.hzDesign)
+              return (
+                <div key={i} style={{ fontSize: 11, color: C.text, padding: '4px 6px', background: C.bg, borderRadius: 6, border: `1px solid ${C.border}` }}>
+                  <span style={{ color: C.accent, fontWeight: 600 }}>H{i + 1}</span>
+                  <span style={{ color: C.textMuted, marginLeft: 6 }}>{summary || '—'}</span>
+                  {h.hzDesign.green_notes && (
+                    <div style={{ fontSize: 10, color: C.textFaint, marginTop: 2 }}>{h.hzDesign.green_notes}</div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

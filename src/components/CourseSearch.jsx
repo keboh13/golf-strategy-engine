@@ -2,8 +2,9 @@ import { useState, useRef } from 'react'
 import { C, card, inp, lbl, btnP } from '../theme.js'
 import { useIsMobile, Badge, Spin } from './ui.jsx'
 import ScorecardPreview from './ScorecardPreview.jsx'
-import { searchGolfCourseAPI, searchOpenGolfAPI, fetchOpenGolfAPICourse, normalizeOpenGolfCourse, normalizeGolfCourseAPICourse, fetchScorecardViaClaudeSearch } from '../lib/courseApi.js'
+import { searchGolfCourseAPI, searchOpenGolfAPI, fetchOpenGolfAPICourse, normalizeOpenGolfCourse, normalizeGolfCourseAPICourse, fetchScorecardViaClaudeSearch, fetchYardageBookViaClaudeSearch } from '../lib/courseApi.js'
 import { getCachedCourse, setCachedCourse } from '../lib/courseCache.js'
+import { getCachedCourseDB, setCachedCourseDB } from '../lib/supabase.js'
 
 export default function CourseSearch({ authToken, onSelect }) {
   const isMobile = useIsMobile()
@@ -21,6 +22,17 @@ export default function CourseSearch({ authToken, onSelect }) {
     if (!query.trim()) return
     setLoading(true); setError(''); setStatus(''); setResults([]); setDetail(null); setSource('')
     const q = query + (location ? ' ' + location : '')
+
+    // Shared cache lookup — pre-resolved courses skip the API ladder entirely.
+    try {
+      const cached = await getCachedCourseDB(query, location)
+      if (cached) {
+        setDetail(cached)
+        setSource(cached.source ? `cache (${cached.source})` : 'cache')
+        setLoading(false)
+        return
+      }
+    } catch {}
 
     try {
       const courses = await searchGolfCourseAPI(q, authToken)
@@ -49,12 +61,30 @@ export default function CourseSearch({ authToken, onSelect }) {
       return
     }
     try {
+      setStatus('Searching for verified scorecard…')
       const d = await fetchScorecardViaClaudeSearch(authToken, query, location)
-      setDetail(d)
+      const yardageSum = (d.holes || []).reduce((s, h) => s + (parseInt(h.yardage) || 0), 0)
+      if (!d.holes?.length || yardageSum < 4000) throw new Error('Scorecard search returned incomplete data')
+      const normalized = { ...d, _confidence: 'medium', _source: 'scorecard_search' }
+      setDetail(normalized)
       setSource(d.source || 'web search')
-    } catch (e) {
-      setError(`No results found across all sources.\n\nTry a more specific course name (e.g. include city/state) or enter yardages manually below.`)
+      setCachedCourse(normalized)
+      setCachedCourseDB(normalized).catch(() => {})
+    } catch {
+      try {
+        setStatus('Falling back to yardage-book lookup…')
+        const yb = await fetchYardageBookViaClaudeSearch(authToken, query, location)
+        if (!yb?.holes?.length) throw new Error('Yardage book returned no holes')
+        const normalized = { ...yb, _confidence: yb._confidence || 'low', _source: 'yardage_book', source: yb.source || 'yardage book', needs_review: yb._confidence !== 'high' }
+        setDetail(normalized)
+        setSource(`yardage book${normalized.needs_review ? ' (needs review)' : ''}`)
+        setCachedCourse(normalized)
+        setCachedCourseDB(normalized).catch(() => {})
+      } catch (e2) {
+        setError(`No results found across all sources.\n\nTry a more specific course name (e.g. include city/state) or enter yardages manually below.\n\n(${e2.message})`)
+      }
     }
+    setStatus('')
     setLoading(false)
   }
 
@@ -71,6 +101,7 @@ export default function CourseSearch({ authToken, onSelect }) {
           : (rawLoc || '')
         const teeSuffix = selectedTee ? `|${selectedTee.tee_name}` : ''
         const cached = getCachedCourse(stubName + teeSuffix, stubLoc)
+          || await getCachedCourseDB(stubName + teeSuffix, stubLoc).catch(() => null)
         if (cached) {
           if (myId !== loadIdRef.current) return
           setDetail(cached)
@@ -82,6 +113,7 @@ export default function CourseSearch({ authToken, onSelect }) {
         normalized = normalizeGolfCourseAPICourse(courseStub, selectedTee)
         if (myId !== loadIdRef.current) return
         setCachedCourse(normalized)
+        setCachedCourseDB(normalized).catch(() => {})
         setDetail(normalized)
         setSource('GolfCourseAPI')
       } else {
@@ -108,6 +140,7 @@ export default function CourseSearch({ authToken, onSelect }) {
               })),
             }
             setCachedCourse(normalized)
+            setCachedCourseDB(normalized).catch(() => {})
             setDetail(normalized)
             setSource(webData.source || 'web search')
           } catch {
@@ -117,6 +150,7 @@ export default function CourseSearch({ authToken, onSelect }) {
           }
         } else {
           setCachedCourse(normalized)
+          setCachedCourseDB(normalized).catch(() => {})
           setDetail(normalized)
           setSource(normalized.source || 'OpenGolfAPI')
         }

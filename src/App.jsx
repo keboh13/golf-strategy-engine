@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef, useMemo, Component } from 'react'
-import { supabase, loadUserProfiles, saveUserProfile, deleteUserProfile, loadUserHistory, saveUserHistory, loadUserSettings, saveUserSettings, getCachedCourseDB, setCachedCourseDB, getAllCachedCoursesDB, deleteCachedCourseDB, loadSavedPlans, savePlan, deleteSavedPlan } from './lib/supabase.js'
+import { supabase, loadUserProfiles, saveUserProfile, deleteUserProfile, loadUserHistory, saveUserHistory, loadUserSettings, saveUserSettings, getCachedCourseDB, setCachedCourseDB, getAllCachedCoursesDB, deleteCachedCourseDB, loadSavedPlans, savePlan, deleteSavedPlan, loadCourseHazards, listCoursePdfs, uploadCoursePdfToBucket, deleteAllCoursePdfs, deleteCourseHazards, clearCachedScorecardPdfRef } from './lib/supabase.js'
 import { buildBagSection } from './lib/promptSections.js'
 import { fetchOSMCourseData, enrichHolesWithOSM, exportCourseGeoJSON, classifyTier, computeCoverage } from './lib/osmCourseData.js'
 import { computeHoleDistances, formatDistancesLine, simplifyAndTrimGeoJSON } from './lib/courseGeometry.js'
@@ -14,7 +14,7 @@ import CourseSearch from './components/CourseSearch.jsx'
 import ScorecardPreview from './components/ScorecardPreview.jsx'
 import WeatherPanel from './components/WeatherPanel.jsx'
 import { computeHoleTimes, getWeatherAtHour, toParStr, windDir } from './lib/weather.js'
-import { fetchHoleDesignViaSearch, mergeDesignDataIntoHoles, searchGolfCourseAPI, normalizeGolfCourseAPICourse } from './lib/courseApi.js'
+import { fetchHoleDesignViaSearch, mergeDesignDataIntoHoles, searchGolfCourseAPI, normalizeGolfCourseAPICourse, adminUploadScorecardPdf } from './lib/courseApi.js'
 import { loadCourseCache, getCachedCourse, setCachedCourse, cacheKey, saveCourseCache } from './lib/courseCache.js'
 import AuthScreen from './screens/AuthScreen.jsx'
 import ImportTab from './components/ImportTab.jsx'
@@ -171,6 +171,13 @@ function AppInner({ user, session, onSignOut }) {
   const [adminUsersError, setAdminUsersError] = useState('')
   const [adminDeleteMsg,  setAdminDeleteMsg]  = useState('')
   const [adminGrantMsg,   setAdminGrantMsg]   = useState('')
+
+  // ── Admin shared-cache (PDF scorecards) state ────────────────────────────
+  const [sharedCache,        setSharedCache]        = useState(null)  // null = not loaded
+  const [sharedCacheLoading, setSharedCacheLoading] = useState(false)
+  const [sharedCacheError,   setSharedCacheError]   = useState('')
+  const [scorecardBusyKey,   setScorecardBusyKey]   = useState('')    // cache_key currently uploading/removing
+  const [scorecardMsg,       setScorecardMsg]       = useState('')
 
   // Persist all keys together whenever any changes
   const setApiKey = (v) => { setApiKeyRaw(v);       saveKeys({ ...loadSavedKeys(), anthropic:  v }) }
@@ -517,6 +524,22 @@ function AppInner({ user, session, onSignOut }) {
         }
       } catch {}
 
+      // Phase 4: Per-hole hazard intelligence (yardage-book vision pass).
+      // Cheap structured lookup — vision was paid once per course upstream.
+      try {
+        const hazardsByRef = await loadCourseHazards(course.name, course.location)
+        if (myId === enrichLoadIdRef.current && hazardsByRef && Object.keys(hazardsByRef).length) {
+          setCourse(prev => ({
+            ...prev,
+            holes: prev.holes.map((h, i) => {
+              const hz = hazardsByRef[i + 1]
+              return hz ? { ...h, hzDesign: hz } : h
+            }),
+            hazardsLoaded: true,
+          }))
+        }
+      } catch {}
+
       if (myId === enrichLoadIdRef.current) {
         setEnriching(false)
         setEnrichStatus('')
@@ -671,9 +694,13 @@ Be direct. Short sentences. No filler.`
     const isMatchPlay = course.roundType === 'Match play'
     const hasOSMData = course.osmEnriched && course.holes.some(h => h.osmDesign)
     const hasWebDesign = course.holes.some(h => h.webDesign)
-    const designNote = hasOSMData && hasWebDesign ? ' + OSM + web-search design data'
-      : hasOSMData ? ' + OSM hole design data (hazards, greens)'
-      : hasWebDesign ? ' + web-search design data (hazards, layout)'
+    const hasHazardData = course.holes.some(h => h.hzDesign)
+    const designNote = [
+      hasOSMData ? 'OSM' : null,
+      hasWebDesign ? 'web' : null,
+      hasHazardData ? 'yardage-book vision' : null,
+    ].filter(Boolean).length
+      ? ' + design data (' + [hasOSMData && 'OSM', hasWebDesign && 'web', hasHazardData && 'yardage-book vision'].filter(Boolean).join(' + ') + ')'
       : ''
     const sourceNote = course.source === 'GolfCourseAPI' ? `Verified — GolfCourseAPI${designNote}`
       : course.source === 'OpenGolfAPI'    ? `Partial — OpenGolfAPI (par/HCP only, yardages from web)${designNote}`
@@ -711,6 +738,26 @@ Be direct. Short sentences. No filler.`
         if (h.webDesign.green_notes) parts.push(`green: ${h.webDesign.green_notes}`)
         if (parts.length) designStr = ` | Design (web search — use with moderate confidence): ${parts.join('; ')}`
       }
+
+      // Yardage-book vision hazards: structured per-hole, treat as verified-by-image.
+      if (h.hzDesign) {
+        const hz = h.hzDesign
+        const parts = []
+        if (hz.dogleg && hz.dogleg !== 'straight') parts.push(`dogleg ${hz.dogleg}`)
+        if (Array.isArray(hz.hazards) && hz.hazards.length) {
+          parts.push('hazards: ' + hz.hazards.map(z => {
+            const carry = z.carry_yards ? ` carry ${z.carry_yards}y` : ''
+            const note = z.notes ? ` (${z.notes})` : ''
+            return `${z.type} ${z.side}${carry}${note}`
+          }).join(', '))
+        }
+        if (hz.green_notes) parts.push(`green: ${hz.green_notes}`)
+        if (hz.recommended_line) parts.push(`line: ${hz.recommended_line}`)
+        if (parts.length) {
+          const confLabel = hz._confidence === 'high' ? 'high confidence' : hz._confidence === 'low' ? 'low confidence' : 'verified-by-image'
+          designStr += ` | Design (yardage book — ${confLabel}): ${parts.join('; ')}`
+        }
+      }
       const nStr = h.notes ? ` | Note: ${h.notes}` : (!designStr ? ' | Note: no design data — do not assume hazards' : '')
       return `H${i+1}: Par ${h.par}, ${h.yardage || '?'}y, HCP ${h.handicap}${eStr}${designStr}${nStr}${wStr}`
     }).join('\n')
@@ -739,14 +786,18 @@ IMPORTANT RULES:
 5. Be concise throughout — every word should earn its place.
 
 DATA ACCURACY — CRITICAL:
-${hasOSMData || hasWebDesign
-  ? `Some holes have design data from ${hasOSMData ? 'OpenStreetMap (marked "Design (OSM verified)")' : ''}${hasOSMData && hasWebDesign ? ' and/or ' : ''}${hasWebDesign ? 'web search (marked "Design (web search)")' : ''}. OSM data is from geographic surveys — treat as verified. Web search data is moderately reliable — use it but don't over-rely on specific details. For holes WITHOUT any design data, follow the strict rules below.`
+${hasOSMData || hasWebDesign || hasHazardData
+  ? `Some holes have design data from ${[
+      hasOSMData ? 'OpenStreetMap (marked "Design (OSM verified)")' : null,
+      hasWebDesign ? 'web search (marked "Design (web search)")' : null,
+      hasHazardData ? 'the course yardage book parsed by vision (marked "Design (yardage book)")' : null,
+    ].filter(Boolean).join(', ')}. OSM data and yardage-book data are treated as verified (the yardage-book hazards came from the official course diagram). Web search data is moderately reliable — use it but don't over-rely on specific details. For holes WITHOUT any design data, follow the strict rules below.`
   : `You only have scorecard data (par, yardage, handicap) for each hole. You do NOT have verified hole design data (hazard locations, water, OB, doglegs, fairway shape, green surrounds).`}
 Follow these rules strictly:
 - Do NOT invent or guess specific hazard placements (bunkers, water, OB) unless explicitly provided in a hole's data (via "Design (OSM verified)", "Design (web search)", or a user "Note:"). If none exist — do NOT fabricate hazards.
 - Do NOT recommend shot shapes to "avoid" hazards you are not certain exist. Base tee shot shape recommendations on: the player's ball flight and miss tendency, the par/yardage, and wind — NOT on assumed hole layouts.
 - For green-json: set "hazards" to an EMPTY array [] unless a hole's design data or note explicitly describes a specific hazard near the green. Do NOT guess bunker or water locations.
-- For green-json: when a hole has "Design (OSM verified)" data, use those hazards with "confidence":"verified". When a hole has "Design (web search)" data, use with "confidence":"uncertain". When a hole has NO design data, set "hazards":[] and use generic values.
+- For green-json: when a hole has "Design (OSM verified)" or "Design (yardage book)" data, use those hazards with "confidence":"verified". When a hole has "Design (web search)" data, use with "confidence":"uncertain". When a hole has NO design data, set "hazards":[] and use generic values.
 - For tee shot strategy: when a hole has design data including dogleg direction, use that to inform shot shape. When a hole has bearing data, factor in wind direction vs hole bearing. Otherwise, recommend shape based on the player's natural ball flight and miss tendency — do NOT fabricate doglegs or fairway shapes.
 - When a hole's "Design (OSM verified)" data includes specific distances (e.g. "tee→pin 425y", "green 142/158/168y (F/C/B)", "carry Bunker R 235y"), use those exact numbers when discussing carry distances, club choices, and lay-up targets. They are surveyed from OSM and accurate within ~±5 yards. Do NOT round them to "about 240" — say "235y carry over the right fairway bunker" and pick the club that matches. Carry distances are measured FROM THE TEE along the centerline.
 - When in doubt, say "standard approach" rather than inventing hazards to avoid.
@@ -2306,6 +2357,155 @@ Be direct. No filler. ALL 18 HOLES.`
                   </div>
                 )}
               </div>
+
+              {/* ── Shared course scorecards (admin only) ── */}
+              {isAdmin === true && (() => {
+                const authToken = session?.access_token || ''
+
+                const loadSharedCache = async () => {
+                  setSharedCacheLoading(true); setSharedCacheError(''); setScorecardMsg('')
+                  try {
+                    const rows = await getAllCachedCoursesDB()
+                    const withPdfs = await Promise.all(rows.map(async (c) => {
+                      const pdfs = await listCoursePdfs(c.name, c.location).catch(() => [])
+                      return { ...c, _pdfs: pdfs }
+                    }))
+                    setSharedCache(withPdfs)
+                  } catch (e) {
+                    setSharedCacheError(e.message)
+                  }
+                  setSharedCacheLoading(false)
+                }
+
+                const handleUploadScorecard = async (c, file) => {
+                  if (!file) return
+                  if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+                    setScorecardMsg('Error: file must be a PDF.'); return
+                  }
+                  const key = c._cacheKey
+                  setScorecardBusyKey(key); setScorecardMsg('')
+                  try {
+                    setScorecardMsg(`Uploading PDF for ${c.name}…`)
+                    const { url } = await uploadCoursePdfToBucket(c.name, c.location, file)
+                    setScorecardMsg(`Parsing PDF for ${c.name}…`)
+                    const result = await adminUploadScorecardPdf(authToken, {
+                      courseName: c.name,
+                      location: c.location,
+                      pdfUrl: url,
+                    })
+                    const conf = result?._confidence || 'medium'
+                    setScorecardMsg(`✓ Scorecard updated for ${c.name} (confidence: ${conf}). Visible to all users.`)
+                    await loadSharedCache()
+                  } catch (e) {
+                    setScorecardMsg(`Error: ${e.message}`)
+                  }
+                  setScorecardBusyKey('')
+                }
+
+                const handleRemoveScorecard = async (c) => {
+                  if (!window.confirm(`Remove the uploaded scorecard PDF + extracted hazards for ${c.name}?\n\nThe course will fall back to API / auto-discovered data on next lookup. All users will see this change.`)) return
+                  setScorecardBusyKey(c._cacheKey); setScorecardMsg('')
+                  try {
+                    const n = await deleteAllCoursePdfs(c.name, c.location)
+                    await deleteCourseHazards(c.name, c.location)
+                    await clearCachedScorecardPdfRef(c.name, c.location)
+                    setScorecardMsg(`✓ Removed ${n} PDF${n === 1 ? '' : 's'} + hazards for ${c.name}. Visible to all users.`)
+                    await loadSharedCache()
+                  } catch (e) {
+                    setScorecardMsg(`Error: ${e.message}`)
+                  }
+                  setScorecardBusyKey('')
+                }
+
+                return (
+                  <div style={{ ...card, marginBottom: 16 }}>
+                    {sectionHead('Shared course scorecards (admin)', 'Upload official yardage book PDFs as a manual backup when auto-discovery falls short. Stored in the shared cache — every user sees the update on next lookup.')}
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
+                      <button style={btnG} onClick={loadSharedCache} disabled={sharedCacheLoading}>
+                        {sharedCacheLoading ? 'Loading…' : sharedCache ? 'Refresh' : 'Load cached courses'}
+                      </button>
+                      {scorecardMsg && (
+                        <span style={{ fontSize: 12, color: scorecardMsg.startsWith('Error') ? C.red : scorecardMsg.startsWith('✓') ? C.green : C.textMuted }}>
+                          {scorecardMsg}
+                        </span>
+                      )}
+                    </div>
+                    {sharedCacheError && (
+                      <div style={{ padding: '10px 14px', background: C.redMuted, border: `1px solid ${C.red}`, borderRadius: 8, marginBottom: 10 }}>
+                        <p style={{ fontSize: 12, color: C.red, margin: 0 }}>⚠ {sharedCacheError}</p>
+                      </div>
+                    )}
+                    {sharedCache && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        <p style={{ fontSize: 11, color: C.textMuted, margin: 0 }}>
+                          {sharedCache.length} course{sharedCache.length !== 1 ? 's' : ''} in shared cache (Supabase)
+                        </p>
+                        {sharedCache.length === 0 && (
+                          <p style={{ fontSize: 12, color: C.textFaint, fontStyle: 'italic', textAlign: 'center', padding: '1rem 0', margin: 0 }}>
+                            No courses cached yet. After a user resolves a course, it appears here.
+                          </p>
+                        )}
+                        {sharedCache.map(c => {
+                          const busy = scorecardBusyKey === c._cacheKey
+                          const hasPdf = c._pdfs?.length > 0 || !!c._sourcePdf
+                          return (
+                            <div key={c._cacheKey} style={{ background: C.bgInput, border: `1px solid ${C.border}`, borderRadius: 8, padding: '10px 14px' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                                <div style={{ flex: 1, minWidth: 200 }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                    <p style={{ fontSize: 13, fontWeight: 600, color: C.text, margin: 0 }}>{c.name}</p>
+                                    <Badge
+                                      label={c.source === 'GolfCourseAPI' ? '✓ API' : c.source === 'yardage_book' ? '📄 Yardage book' : c.source === 'OpenGolfAPI' ? '~ OpenGolf' : c.source || '—'}
+                                      bg={c.source === 'GolfCourseAPI' ? C.greenMuted : c.source === 'yardage_book' ? C.blueMuted : C.amberMuted}
+                                      fg={c.source === 'GolfCourseAPI' ? C.green : c.source === 'yardage_book' ? C.blue : C.amber}
+                                    />
+                                    {hasPdf && <Badge label="PDF on file" bg={C.accentMuted} fg={C.accent} />}
+                                    {c._needs_review && <Badge label="needs review" bg={C.redMuted} fg={C.red} />}
+                                  </div>
+                                  <p style={{ fontSize: 11, color: C.textMuted, margin: '2px 0 0' }}>
+                                    {c.location} · Par {c.par} · {c.yardage ? Number(c.yardage).toLocaleString() + 'y' : '—'}
+                                    {c._hitCount != null ? ` · ${c._hitCount} hit${c._hitCount === 1 ? '' : 's'}` : ''}
+                                  </p>
+                                  {c._pdfs?.length > 0 && (
+                                    <p style={{ fontSize: 11, color: C.textFaint, margin: '4px 0 0' }}>
+                                      {c._pdfs.length} PDF{c._pdfs.length === 1 ? '' : 's'} stored ·{' '}
+                                      <a href={c._pdfs[c._pdfs.length - 1].url} target="_blank" rel="noopener noreferrer" style={{ color: C.accent }}>
+                                        view latest
+                                      </a>
+                                    </p>
+                                  )}
+                                </div>
+                                <div style={{ display: 'flex', gap: 8, flexShrink: 0, flexWrap: 'wrap' }}>
+                                  <label style={{ ...btnG, padding: '6px 10px', cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.5 : 1, pointerEvents: busy ? 'none' : 'auto', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                                    {busy ? 'Working…' : '📄 Upload PDF'}
+                                    <input
+                                      type="file"
+                                      accept="application/pdf,.pdf"
+                                      style={{ display: 'none' }}
+                                      disabled={busy}
+                                      onChange={e => {
+                                        const f = e.target.files?.[0]
+                                        e.target.value = ''
+                                        if (f) handleUploadScorecard(c, f)
+                                      }}
+                                    />
+                                  </label>
+                                  {hasPdf && (
+                                    <button style={{ ...btnG, color: C.red, borderColor: C.red, padding: '6px 10px' }} disabled={busy}
+                                      onClick={() => handleRemoveScorecard(c)}>
+                                      Remove PDF
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
 
               {/* ── User management (admin only — hidden entirely for non-admins) ── */}
               {isAdmin === true && (
