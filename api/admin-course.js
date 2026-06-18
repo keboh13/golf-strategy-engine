@@ -11,7 +11,7 @@
 
 import { validateAuth, isAdminUser } from './_lib/admin.js'
 
-export const config = { maxDuration: 60 }
+export const config = { maxDuration: 300 }
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin':  process.env.ALLOWED_ORIGIN || '*',
@@ -19,7 +19,7 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 }
 
-const MODEL = 'claude-sonnet-4-6'
+const MODEL = 'claude-haiku-4-5-20251001'  // PDF re-parse — Haiku is ~5–10× faster than Sonnet for structured extraction
 
 function jsonResponse(body, status) {
   return new Response(JSON.stringify(body), {
@@ -353,7 +353,7 @@ async function handleRequest(req) {
       const pdfUrl = current._sourcePdf
       if (!pdfUrl) return jsonResponse({ error: 'No stored PDF for this course. Upload one first.' }, 422)
 
-      const text = await callClaude(buildReparseMessages(pdfUrl, current.name, current.location || ''), 6000)
+      const text = await callClaude(buildReparseMessages(pdfUrl, current.name, current.location || ''), 4000)
       const clean = text.replace(/```json|```/g, '').trim()
       const m = clean.match(/\{[\s\S]*\}/)
       if (!m) return jsonResponse({ error: 'No JSON in re-parse response.' }, 502)

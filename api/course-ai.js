@@ -6,7 +6,7 @@
 
 import { validateAuth, isAdminUser } from './_lib/admin.js'
 
-export const config = { maxDuration: 60 }
+export const config = { maxDuration: 300 }
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin':  process.env.ALLOWED_ORIGIN || '*',
@@ -15,6 +15,10 @@ const CORS_HEADERS = {
 }
 
 const MODEL = 'claude-sonnet-4-6'
+// PDF / image vision extraction uses Haiku — ~5–10× faster than Sonnet for
+// structured JSON extraction off a document, well within the quality bar for
+// scorecard fields. Keep Sonnet for web-search and hole-design reasoning.
+const MODEL_FAST = 'claude-haiku-4-5-20251001'
 
 function jsonResponse(body, status) {
   return new Response(JSON.stringify(body), {
@@ -23,12 +27,12 @@ function jsonResponse(body, status) {
   })
 }
 
-async function callClaude(messages, maxTokens, useWebSearch, extraTools) {
+async function callClaude(messages, maxTokens, useWebSearch, extraTools, modelOverride) {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not configured on server.')
 
   const body = {
-    model: MODEL,
+    model: modelOverride || MODEL,
     max_tokens: maxTokens,
     messages,
   }
@@ -296,7 +300,7 @@ async function handleRequest(req) {
 
   async function parsePdfAndPersist(pdfUrl) {
     const messages = buildPdfParseMessages(pdfUrl, courseName, location || '')
-    const text = await callClaude(messages, 6000, false)
+    const text = await callClaude(messages, 4000, false, undefined, MODEL_FAST)
     const clean = text.replace(/```json|```/g, '').trim()
     const m = clean.match(/\{[\s\S]*\}/)
     if (!m) throw new Error('No JSON in PDF parse response.')
@@ -475,7 +479,7 @@ If you cannot extract a verifiable scorecard: {"error":"…"}`,
         ? { kind: 'url', value: image_url }
         : { kind: 'base64', value: image_base64, media_type: image_media_type }
       const messages = buildHazardExtractMessages(hole, imageRef)
-      const text = await callClaude(messages, 2000, false)
+      const text = await callClaude(messages, 2000, false, undefined, MODEL_FAST)
       const m = text.replace(/```json|```/g, '').trim().match(/\{[\s\S]*\}/)
       if (!m) return jsonResponse({ error: 'No JSON in vision response.' }, 502)
       const parsed = JSON.parse(m[0])
