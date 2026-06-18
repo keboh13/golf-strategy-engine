@@ -185,19 +185,24 @@ function buildPdfParseMessages(pdfUrl, courseName, location) {
       { type: 'document', source: { type: 'url', url: pdfUrl } },
       { type: 'text', text: `This PDF is the official yardage book / scorecard for "${courseName}"${location ? ` in ${location}` : ''}.
 
-Extract TWO things and return them in ONE JSON payload:
+Extract THREE things and return them in ONE JSON payload:
 
 (1) The standard scorecard for the longest tees available (Championship / Tournament / Black / Tips). Capture all 18 holes plus rating, slope, total yards, par total.
 
 (2) Per-hole hazards and design features from the diagrams. For each hole 1-18, look at the hole illustration and pull every visible hazard, dogleg, and green note.
 
-Each hazard:
+(3) **Per-hole written content from the PDF text.** For each hole 1-18, also capture:
+   - "holeName": the caddie/marketing nickname for the hole if one is printed near the hole number (e.g. "Mind the Gap", "All of Texas", "Cascades"). Use null if no nickname exists.
+   - "description": the full prose paragraph that describes the hole's strategy / design / approach. Capture it VERBATIM from the PDF — do not paraphrase or shorten. This is the caddie-style write-up usually printed under the hole title. Use null if absent.
+   - "greenDepth": the printed green depth in yards (often shown as "DEPTH = 31"). Integer. Use null if absent.
+
+Each hazard (in hazards[]):
 - "type": "bunker" | "water" | "creek" | "native" | "OB" | "trees"
 - "side": "L" | "R" | "C" | "front" | "back"
 - "carry_yards": carry distance from back tee if labeled, else null
 - "notes": short positional label ("fairway 240-260", "greenside", etc.)
 
-CRITICAL: never guess. If a number isn't in the PDF, leave null and lower confidence. Confidence rubric: "high" only when every hole was matched against the document; "medium" when most were; "low" when partial.
+CRITICAL: never guess. If a number isn't in the PDF, leave null and lower confidence. Capture the description paragraph EXACTLY as printed — do not summarize. Confidence rubric: "high" only when every hole was matched against the document; "medium" when most were; "low" when partial.
 
 Return ONLY this JSON (no markdown):
 {
@@ -212,7 +217,7 @@ Return ONLY this JSON (no markdown):
   "_confidence": "high|medium|low",
   "holes": [{"par":4,"yardage":379,"handicap":7}, ...all 18],
   "hazardsByHole": [
-    {"hole":1,"dogleg":"left|right|straight","hazards":[{"type":"bunker","side":"R","carry_yards":235,"notes":"fairway"}],"green_notes":"","recommended_line":""},
+    {"hole":1,"holeName":"Outward Right","description":"This medium-length, dogleg right plays along…","greenDepth":31,"dogleg":"left|right|straight","hazards":[{"type":"bunker","side":"R","carry_yards":235,"notes":"fairway"}],"green_notes":"","recommended_line":""},
     ...all 18
   ]
 }
@@ -300,7 +305,8 @@ async function handleRequest(req) {
 
   async function parsePdfAndPersist(pdfUrl) {
     const messages = buildPdfParseMessages(pdfUrl, courseName, location || '')
-    const text = await callClaude(messages, 4000, false, undefined, MODEL_FAST)
+    // 8000 tokens budget: scorecard (~1.5k) + 18 hole descriptions verbatim (~3–5k) + hazards.
+    const text = await callClaude(messages, 8000, false, undefined, MODEL_FAST)
     const clean = text.replace(/```json|```/g, '').trim()
     const m = clean.match(/\{[\s\S]*\}/)
     if (!m) throw new Error('No JSON in PDF parse response.')

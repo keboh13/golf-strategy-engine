@@ -132,6 +132,25 @@ export async function getCachedCourseDB(name, location) {
     }
   }
 
+  // Still no hit — try a name-fuzzy fallback against course_data->>'name'.
+  // This covers the post-rename case where the user types the new name but
+  // doesn't supply (or supplies a different) location — the cache_key won't
+  // match exactly but the row is clearly the right course.
+  if (!error && !data && name?.trim()) {
+    const needle = name.trim().toLowerCase()
+    const { data: rows } = await supabase
+      .from('course_cache')
+      .select('course_data, source, cached_at, edit_version, cache_key')
+      .ilike('course_data->>name', `%${needle}%`)
+      .order('updated_at', { ascending: false, nullsFirst: false })
+      .limit(5)
+    if (rows && rows.length) {
+      // Prefer exact name match (case-insensitive); else take most-recently-updated.
+      const exact = rows.find(r => (r.course_data?.name || '').toLowerCase() === needle)
+      data = exact || rows[0]
+    }
+  }
+
   if (error || !data) return null
   supabase.rpc('increment_cache_hit', { p_cache_key: data.cache_key }).then(() => {})
   return {
