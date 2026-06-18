@@ -108,14 +108,39 @@ export async function saveUserSettings(userId, patch) {
 
 export async function getCachedCourseDB(name, location) {
   const key = makeCacheKey(name, location)
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from('course_cache')
-    .select('course_data, source, cached_at')
+    .select('course_data, source, cached_at, edit_version, cache_key')
     .eq('cache_key', key)
     .maybeSingle()
+
+  // No direct hit — fall back to course_aliases (admin renamed the course)
+  if (!error && !data) {
+    const { data: alias } = await supabase
+      .from('course_aliases')
+      .select('canonical_key')
+      .eq('alias_key', key)
+      .maybeSingle()
+    if (alias?.canonical_key) {
+      const r = await supabase
+        .from('course_cache')
+        .select('course_data, source, cached_at, edit_version, cache_key')
+        .eq('cache_key', alias.canonical_key)
+        .maybeSingle()
+      data = r.data
+      error = r.error
+    }
+  }
+
   if (error || !data) return null
-  supabase.rpc('increment_cache_hit', { p_cache_key: key }).then(() => {})
-  return { ...data.course_data, source: data.source, _cachedAt: new Date(data.cached_at).getTime() }
+  supabase.rpc('increment_cache_hit', { p_cache_key: data.cache_key }).then(() => {})
+  return {
+    ...data.course_data,
+    source: data.source,
+    _cachedAt: new Date(data.cached_at).getTime(),
+    _editVersion: data.edit_version ?? 0,
+    _canonicalKey: data.cache_key,
+  }
 }
 
 export async function setCachedCourseDB(normalized) {
@@ -137,7 +162,22 @@ export async function getAllCachedCoursesDB() {
     .select('*')
     .order('cached_at', { ascending: false })
   if (error) throw error
-  return (data || []).map(r => ({ ...r.course_data, source: r.source, _cachedAt: new Date(r.cached_at).getTime(), _cacheKey: r.cache_key, _hitCount: r.hit_count }))
+  return (data || []).map(r => ({ ...r.course_data, source: r.source, _cachedAt: new Date(r.cached_at).getTime(), _cacheKey: r.cache_key, _hitCount: r.hit_count, _editVersion: r.edit_version ?? 0, _updatedAt: r.updated_at }))
+}
+
+// Returns the set of canonical cache_keys currently in course_cache. Used by
+// the client on boot to purge orphaned localStorage entries (courses that
+// were renamed away from a key the user previously visited).
+export async function listCanonicalCacheKeys() {
+  const { data, error } = await supabase.from('course_cache').select('cache_key')
+  if (error) return null
+  return new Set((data || []).map(r => r.cache_key))
+}
+
+export async function listAliasKeys() {
+  const { data, error } = await supabase.from('course_aliases').select('alias_key, canonical_key')
+  if (error) return null
+  return data || []
 }
 
 export async function deleteCachedCourseDB(name, location) {
