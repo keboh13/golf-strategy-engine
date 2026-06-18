@@ -196,6 +196,10 @@ Extract THREE things and return them in ONE JSON payload:
    - "description": the full prose paragraph that describes the hole's strategy / design / approach. Capture it VERBATIM from the PDF — do not paraphrase or shorten. This is the caddie-style write-up usually printed under the hole title. Use null if absent.
    - "greenDepth": the printed green depth in yards (often shown as "DEPTH = 31"). Integer. Use null if absent.
 
+(4) **Visual analysis of the hole diagram (the picture).** For each hole 1-18, study the actual hole illustration / overhead diagram and extract observations a caddie would make from looking at the image — things not necessarily in the prose. Capture as:
+   - "visualNotes": 2-4 concise observations as a single string, semicolon-separated. Focus on (a) distance numbers visible on the diagram that aren't covered by hazards/carry_yards — sprinkler-to-landmark yardages, distances to bunker centers, distance to forced carries; (b) fairway shape — pinches, widening, doglegs visible from the overhead; (c) green shape and orientation (kidney, round, peanut, angled L-R, etc.); (d) elevation / cross-slope cues if drawn (downhill arrows, shading). Example: "FW pinches to 25y wide at 240y carry; cross-bunker 35y short of green; green angled left-to-right, ~38y deep; sprinkler at 150 reads as 156 to back pin." Use null if the diagram has no visible markers worth noting.
+   - "distanceMarkers": array of {label, yards} for sprinkler/landmark distances clearly readable on the diagram (e.g. {"label":"sprinkler to back of green","yards":85}). Empty array if none readable.
+
 Each hazard (in hazards[]):
 - "type": "bunker" | "water" | "creek" | "native" | "OB" | "trees"
 - "side": "L" | "R" | "C" | "front" | "back"
@@ -217,7 +221,7 @@ Return ONLY this JSON (no markdown):
   "_confidence": "high|medium|low",
   "holes": [{"par":4,"yardage":379,"handicap":7}, ...all 18],
   "hazardsByHole": [
-    {"hole":1,"holeName":"Outward Right","description":"This medium-length, dogleg right plays along…","greenDepth":31,"dogleg":"left|right|straight","hazards":[{"type":"bunker","side":"R","carry_yards":235,"notes":"fairway"}],"green_notes":"","recommended_line":""},
+    {"hole":1,"holeName":"Outward Right","description":"This medium-length, dogleg right plays along…","greenDepth":31,"visualNotes":"FW narrows to ~28y at 240; cross-bunker carved into inside corner; green angled left-to-right with hollow short-left","distanceMarkers":[{"label":"sprinkler to front green","yards":62},{"label":"sprinkler to back","yards":108}],"dogleg":"left|right|straight","hazards":[{"type":"bunker","side":"R","carry_yards":235,"notes":"fairway"}],"green_notes":"","recommended_line":""},
     ...all 18
   ]
 }
@@ -305,8 +309,9 @@ async function handleRequest(req) {
 
   async function parsePdfAndPersist(pdfUrl) {
     const messages = buildPdfParseMessages(pdfUrl, courseName, location || '')
-    // 8000 tokens budget: scorecard (~1.5k) + 18 hole descriptions verbatim (~3–5k) + hazards.
-    const text = await callClaude(messages, 8000, false, undefined, MODEL_FAST)
+    // 10000 tokens budget: scorecard (~1.5k) + 18 verbatim descriptions (~3–5k) +
+    // hazards + per-hole visual analysis from the diagrams (~2k).
+    const text = await callClaude(messages, 10000, false, undefined, MODEL_FAST)
     const clean = text.replace(/```json|```/g, '').trim()
     const m = clean.match(/\{[\s\S]*\}/)
     if (!m) throw new Error('No JSON in PDF parse response.')

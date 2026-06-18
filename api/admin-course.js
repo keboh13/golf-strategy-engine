@@ -65,10 +65,12 @@ function buildReparseMessages(pdfUrl, courseName, location) {
       { type: 'document', source: { type: 'url', url: pdfUrl } },
       { type: 'text', text: `This PDF is the official yardage book / scorecard for "${courseName}"${location ? ` in ${location}` : ''}.
 
-Extract scorecard + per-hole hazards + per-hole written content. For each hole capture:
+Extract scorecard + per-hole hazards + per-hole written content + per-hole visual analysis from the hole diagram. For each hole capture:
 - "holeName": caddie nickname if printed (e.g. "Mind the Gap"), else null
 - "description": the full prose paragraph describing the hole, VERBATIM, else null
 - "greenDepth": green depth in yards (e.g. "DEPTH = 31"), integer, else null
+- "visualNotes": 2-4 caddie-eye observations from the hole IMAGE/diagram itself (fairway shape/pinches, green shape & orientation, elevation cues, distance markers visible) as a semicolon-separated string. Complements the prose — capture what the picture shows that the text doesn't. Null if none.
+- "distanceMarkers": array of {label, yards} for sprinkler/landmark distances clearly readable on the diagram. Empty array if none.
 
 {
   "name": "Full course name",
@@ -81,7 +83,7 @@ Extract scorecard + per-hole hazards + per-hole written content. For each hole c
   "_confidence": "high|medium|low",
   "holes": [{"par":4,"yardage":379,"handicap":7}, ...all 18],
   "hazardsByHole": [
-    {"hole":1,"holeName":"Outward Right","description":"This medium-length…","greenDepth":31,"dogleg":"left|right|straight","hazards":[{"type":"bunker","side":"R","carry_yards":235,"notes":"fairway"}],"green_notes":"","recommended_line":""},
+    {"hole":1,"holeName":"Outward Right","description":"This medium-length…","greenDepth":31,"visualNotes":"FW narrows at 240; cross-bunker carved into inside corner; green angled L-R","distanceMarkers":[{"label":"sprinkler to front","yards":62}],"dogleg":"left|right|straight","hazards":[{"type":"bunker","side":"R","carry_yards":235,"notes":"fairway"}],"green_notes":"","recommended_line":""},
     ...all 18
   ]
 }
@@ -356,7 +358,7 @@ async function handleRequest(req) {
       const pdfUrl = current._sourcePdf
       if (!pdfUrl) return jsonResponse({ error: 'No stored PDF for this course. Upload one first.' }, 422)
 
-      const text = await callClaude(buildReparseMessages(pdfUrl, current.name, current.location || ''), 8000)
+      const text = await callClaude(buildReparseMessages(pdfUrl, current.name, current.location || ''), 10000)
       const clean = text.replace(/```json|```/g, '').trim()
       const m = clean.match(/\{[\s\S]*\}/)
       if (!m) return jsonResponse({ error: 'No JSON in re-parse response.' }, 502)

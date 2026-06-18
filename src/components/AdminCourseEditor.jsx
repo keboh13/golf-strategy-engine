@@ -397,6 +397,10 @@ function HazardEditor({ hole, hz, onChange, onAdd, onUpdateItem, onRemoveItem })
         <label style={lbl}>Yardage-book description (verbatim from PDF)</label>
         <textarea style={{ ...inp, minHeight: 60 }} value={hz.description || ''} onChange={e => onChange({ description: e.target.value })} placeholder="Pasted from the printed yardage book — feeds the recommendation engine as caddie context." />
       </div>
+      <div style={{ marginBottom: 8 }}>
+        <label style={lbl}>Diagram observations (from the hole image)</label>
+        <textarea style={{ ...inp, minHeight: 50 }} value={hz.visualNotes || ''} onChange={e => onChange({ visualNotes: e.target.value })} placeholder="FW pinches at 240; green angled L-R, ~38y deep; cross-bunker 35y short" />
+      </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
         <div>
           <label style={lbl}>Green notes</label>
