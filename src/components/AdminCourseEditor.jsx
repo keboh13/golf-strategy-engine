@@ -316,7 +316,13 @@ export default function AdminCourseEditor({ course, authToken, onClose, onSaved 
                 <input style={inp} value={h.elevation || ''} onChange={e => updateHole(i, { elevation: e.target.value })} />
                 <input style={inp} value={h.notes || ''} onChange={e => updateHole(i, { notes: e.target.value })} />
                 <button style={btnG} onClick={() => setHazardOpen(hazardOpen === i ? null : i)}>
-                  {hazardOpen === i ? 'Hide' : (h.hzDesign?.hazards?.length ? `Edit (${h.hzDesign.hazards.length})` : 'Edit')}
+                  {hazardOpen === i ? 'Hide' : (() => {
+                    const tags = []
+                    if (h.hzDesign?.holeName) tags.push('"' + h.hzDesign.holeName.slice(0, 12) + '"')
+                    if (h.hzDesign?.description) tags.push('📝')
+                    if (h.hzDesign?.hazards?.length) tags.push(`${h.hzDesign.hazards.length}hz`)
+                    return tags.length ? `Edit ${tags.join(' ')}` : 'Edit'
+                  })()}
                 </button>
               </div>
               {hazardOpen === i && <HazardEditor
@@ -369,7 +375,11 @@ function Field({ label, value, onChange, placeholder }) {
 function HazardEditor({ hole, hz, onChange, onAdd, onUpdateItem, onRemoveItem }) {
   return (
     <div style={{ background: C.bgInput, border: `1px solid ${C.border}`, borderRadius: 7, padding: 10, marginBottom: 8 }}>
-      <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr 1fr', gap: 8, marginBottom: 8 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 100px', gap: 8, marginBottom: 8 }}>
+        <div>
+          <label style={lbl}>Hole name (caddie nickname)</label>
+          <input style={inp} value={hz.holeName || ''} placeholder='e.g. "Mind the Gap"' onChange={e => onChange({ holeName: e.target.value })} />
+        </div>
         <div>
           <label style={lbl}>Dogleg</label>
           <select style={inp} value={hz.dogleg || 'straight'} onChange={e => onChange({ dogleg: e.target.value })}>
@@ -378,6 +388,20 @@ function HazardEditor({ hole, hz, onChange, onAdd, onUpdateItem, onRemoveItem })
             <option value="right">right</option>
           </select>
         </div>
+        <div>
+          <label style={lbl}>Green depth (y)</label>
+          <input style={inp} type="number" value={hz.greenDepth ?? ''} onChange={e => onChange({ greenDepth: e.target.value ? Number(e.target.value) : null })} />
+        </div>
+      </div>
+      <div style={{ marginBottom: 8 }}>
+        <label style={lbl}>Yardage-book description (verbatim from PDF)</label>
+        <textarea style={{ ...inp, minHeight: 60 }} value={hz.description || ''} onChange={e => onChange({ description: e.target.value })} placeholder="Pasted from the printed yardage book — feeds the recommendation engine as caddie context." />
+      </div>
+      <div style={{ marginBottom: 8 }}>
+        <label style={lbl}>Diagram observations (from the hole image)</label>
+        <textarea style={{ ...inp, minHeight: 50 }} value={hz.visualNotes || ''} onChange={e => onChange({ visualNotes: e.target.value })} placeholder="FW pinches at 240; green angled L-R, ~38y deep; cross-bunker 35y short" />
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
         <div>
           <label style={lbl}>Green notes</label>
           <input style={inp} value={hz.green_notes || ''} onChange={e => onChange({ green_notes: e.target.value })} />

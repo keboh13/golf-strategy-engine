@@ -763,6 +763,7 @@ Be direct. Short sentences. No filler.`
       }
 
       // Yardage-book vision hazards: structured per-hole, treat as verified-by-image.
+      let yardageBookText = ''
       if (h.hzDesign) {
         const hz = h.hzDesign
         const parts = []
@@ -774,15 +775,26 @@ Be direct. Short sentences. No filler.`
             return `${z.type} ${z.side}${carry}${note}`
           }).join(', '))
         }
+        if (hz.greenDepth) parts.push(`green depth ${hz.greenDepth}y`)
         if (hz.green_notes) parts.push(`green: ${hz.green_notes}`)
         if (hz.recommended_line) parts.push(`line: ${hz.recommended_line}`)
         if (parts.length) {
           const confLabel = hz._confidence === 'high' ? 'high confidence' : hz._confidence === 'low' ? 'low confidence' : 'verified-by-image'
           designStr += ` | Design (yardage book — ${confLabel}): ${parts.join('; ')}`
         }
+        // Caddie nickname + verbatim description from the printed yardage book.
+        // These reflect the architect's intent; lean on them when shaping shot calls.
+        if (hz.holeName) yardageBookText += ` | "${hz.holeName}"`
+        if (hz.description) yardageBookText += `\n   Book: ${hz.description}`
+        // Visual observations from the hole diagram — caddie-eye reading of
+        // the picture (fairway shape, green orientation, distance markers).
+        if (hz.visualNotes) yardageBookText += `\n   Diagram: ${hz.visualNotes}`
+        if (Array.isArray(hz.distanceMarkers) && hz.distanceMarkers.length) {
+          yardageBookText += `\n   Distances: ${hz.distanceMarkers.map(d => `${d.label} ${d.yards}y`).join('; ')}`
+        }
       }
       const nStr = h.notes ? ` | Note: ${h.notes}` : (!designStr ? ' | Note: no design data — do not assume hazards' : '')
-      return `H${i+1}: Par ${h.par}, ${h.yardage || '?'}y, HCP ${h.handicap}${eStr}${designStr}${nStr}${wStr}`
+      return `H${i+1}: Par ${h.par}, ${h.yardage || '?'}y, HCP ${h.handicap}${eStr}${designStr}${nStr}${wStr}${yardageBookText}`
     }).join('\n')
 
     return `You are an elite Tour caddy. Generate a concise game plan. IMPORTANT: You MUST cover ALL 18 holes — do not stop early.
@@ -829,6 +841,8 @@ Follow these rules strictly:
 - For tee shot strategy: when a hole has design data including dogleg direction, use that to inform shot shape. When a hole has bearing data, factor in wind direction vs hole bearing. Otherwise, recommend shape based on the player's natural ball flight and miss tendency — do NOT fabricate doglegs or fairway shapes.
 - When a hole's "Design (OSM verified)" data includes specific distances (e.g. "tee→pin 425y", "green 142/158/168y (F/C/B)", "carry Bunker R 235y"), use those exact numbers when discussing carry distances, club choices, and lay-up targets. They are surveyed from OSM and accurate within ~±5 yards. Do NOT round them to "about 240" — say "235y carry over the right fairway bunker" and pick the club that matches. Carry distances are measured FROM THE TEE along the centerline.
 - When in doubt, say "standard approach" rather than inventing hazards to avoid.
+- When a hole has a "Book:" line, that's the verbatim yardage-book description written by the course/architect. Treat it as authoritative caddie context — the strategy hints there (where to land, what to avoid, ideal line) reflect the architect's intent. Lean on it when shaping shot calls, but DON'T quote it verbatim back in your output — translate it into a player-facing caddie line.
+- When a hole has a "Diagram:" line, that's a caddie-eye reading of the hole's overhead picture from the yardage book — treat the observations (fairway pinches, green shape/angle, elevation cues) as verified-by-image. Combine with "Book:" prose and "Distances:" numbers to pick a landing zone and club. Distance markers from the diagram are typically accurate within ±5y.
 
 ## Round strategy
 2-3 sentences. Approach for today.
