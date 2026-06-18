@@ -217,6 +217,60 @@ export async function adminUploadScorecardPdf(authToken, { courseName, location,
   return data.result
 }
 
+// Admin-only: patch course metadata in place. Bumps edit_version so clients
+// lazily refresh their localStorage entries. Server rejects name/location
+// changes — use adminRenameCourse for those.
+export async function adminUpdateMetadata(authToken, { course_key, patch, hazardsByHole }) {
+  if (!course_key) throw new Error('Missing course_key')
+  const res = await fetch('/api/admin-course', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+    },
+    body: JSON.stringify({ action: 'update-metadata', course_key, patch, hazardsByHole }),
+  })
+  const data = await res.json()
+  if (!res.ok || data.error) throw new Error(data.error || `update failed (HTTP ${res.status})`)
+  return data
+}
+
+// Admin-only: atomically rename a course. Migrates cache_key across
+// course_cache, course_hole_hazards, course_geo, course_hole_contrib +
+// inserts a course_aliases row so old-name searches still resolve.
+export async function adminRenameCourse(authToken, { old_key, new_name, new_location, new_course_data }) {
+  if (!old_key || !new_name) throw new Error('Missing old_key or new_name')
+  const res = await fetch('/api/admin-course', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+    },
+    body: JSON.stringify({ action: 'rename', old_key, new_name, new_location, new_course_data }),
+  })
+  const data = await res.json()
+  if (!res.ok || data.error) throw new Error(data.error || `rename failed (HTTP ${res.status})`)
+  return data
+}
+
+// Admin-only: re-run Claude vision parse against the course's stored PDF.
+// Returns { parsed, diff, pdfUrl } — admin reviews diff, accepts selected
+// fields via adminUpdateMetadata.
+export async function adminReparsePdf(authToken, { course_key }) {
+  if (!course_key) throw new Error('Missing course_key')
+  const res = await fetch('/api/admin-course', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+    },
+    body: JSON.stringify({ action: 'reparse-pdf', course_key }),
+  })
+  const data = await res.json()
+  if (!res.ok || data.error) throw new Error(data.error || `re-parse failed (HTTP ${res.status})`)
+  return data
+}
+
 export async function extractHazardsForHole(authToken, { course_key, hole, image_url, image_base64, image_media_type, persist }) {
   const res = await fetch('/api/course-ai', {
     method: 'POST',

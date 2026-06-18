@@ -4,6 +4,8 @@
 // ServerResponse to the Web Request/Response API the rest of this file uses.
 // Required env vars: ANTHROPIC_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 
+import { validateAuth, isAdminUser } from './_lib/admin.js'
+
 export const config = { maxDuration: 60 }
 
 const CORS_HEADERS = {
@@ -19,45 +21,6 @@ function jsonResponse(body, status) {
     status,
     headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
   })
-}
-
-async function validateAuth(req) {
-  const authHeader = req.headers.get('Authorization') || ''
-  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
-  if (!token) return null
-
-  const supabaseUrl = process.env.SUPABASE_URL
-  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-  if (!supabaseUrl || !supabaseServiceKey) return 'dev-user'
-
-  try {
-    const res = await fetch(`${supabaseUrl}/auth/v1/user`, {
-      headers: { Authorization: `Bearer ${token}`, apikey: supabaseServiceKey },
-    })
-    if (!res.ok) return null
-    const user = await res.json()
-    return user.id
-  } catch {
-    return null
-  }
-}
-
-async function isAdminUser(userId) {
-  if (userId === 'dev-user') return true
-  const supabaseUrl = process.env.SUPABASE_URL
-  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-  if (!supabaseUrl || !supabaseServiceKey) return false
-  try {
-    const res = await fetch(
-      `${supabaseUrl}/rest/v1/admins?user_id=eq.${userId}&select=user_id&limit=1`,
-      { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` } }
-    )
-    if (!res.ok) return false
-    const rows = await res.json()
-    return Array.isArray(rows) && rows.length > 0
-  } catch {
-    return false
-  }
 }
 
 async function callClaude(messages, maxTokens, useWebSearch, extraTools) {
@@ -350,6 +313,23 @@ async function handleRequest(req) {
       delete scorecardOnly.hazardsByHole
       scorecardOnly._source = 'yardage_book'
       scorecardOnly._sourcePdf = pdfUrl
+
+      // Read current edit_version so we can bump it (clients use this to
+      // lazily refresh stale localStorage entries after admin-driven changes).
+      let nextVersion = 1
+      try {
+        const cur = await supabaseRest(
+          `course_cache?cache_key=eq.${encodeURIComponent(course_key)}&select=edit_version`,
+          { method: 'GET' }
+        )
+        if (cur.ok) {
+          const rows = await cur.json()
+          if (Array.isArray(rows) && rows[0]?.edit_version != null) {
+            nextVersion = Number(rows[0].edit_version) + 1
+          }
+        }
+      } catch {}
+
       await supabaseRest('course_cache?on_conflict=cache_key', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates' },
@@ -358,6 +338,9 @@ async function handleRequest(req) {
           course_data: scorecardOnly,
           source: 'yardage_book',
           cached_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          updated_by: userId === 'dev-user' ? null : userId,
+          edit_version: nextVersion,
         }),
       }).catch(() => {})
 
@@ -453,6 +436,19 @@ If you cannot extract a verifiable scorecard: {"error":"…"}`,
 
       if (persist !== false && course_key && supabaseUrl && supabaseServiceKey) {
         const scorecardOnly = { ...htmlParsed, _source: 'yardage_book' }
+        let nextVersion = 1
+        try {
+          const cur = await supabaseRest(
+            `course_cache?cache_key=eq.${encodeURIComponent(course_key)}&select=edit_version`,
+            { method: 'GET' }
+          )
+          if (cur.ok) {
+            const rows = await cur.json()
+            if (Array.isArray(rows) && rows[0]?.edit_version != null) {
+              nextVersion = Number(rows[0].edit_version) + 1
+            }
+          }
+        } catch {}
         await supabaseRest('course_cache?on_conflict=cache_key', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates' },
@@ -461,6 +457,9 @@ If you cannot extract a verifiable scorecard: {"error":"…"}`,
             course_data: scorecardOnly,
             source: 'yardage_book',
             cached_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+            updated_by: userId === 'dev-user' ? null : userId,
+            edit_version: nextVersion,
           }),
         }).catch(() => {})
       }
