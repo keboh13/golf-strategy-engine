@@ -220,3 +220,121 @@ drop trigger if exists user_settings_updated_at on public.user_settings;
 create trigger user_settings_updated_at
   before update on public.user_settings
   for each row execute function public.set_updated_at();
+
+-- ─── course_cache: admin-edit metadata columns ────────────────────────────────
+-- edit_version is bumped on every admin save (manual edit or PDF re-parse).
+-- Clients use it for lazy local-cache invalidation: if the DB row has a higher
+-- edit_version than what's in localStorage, the local entry is refreshed.
+alter table public.course_cache
+  add column if not exists updated_at   timestamptz not null default now(),
+  add column if not exists updated_by   uuid references auth.users(id) on delete set null,
+  add column if not exists edit_version integer not null default 0;
+
+-- ─── course_aliases ───────────────────────────────────────────────────────────
+-- When an admin renames a course, the old cache_key is recorded here so that
+-- search-by-old-name still resolves to the canonical row. One row per old key.
+create table if not exists public.course_aliases (
+  alias_key      text primary key,
+  canonical_key  text not null references public.course_cache(cache_key) on delete cascade,
+  created_at     timestamptz not null default now(),
+  created_by     uuid references auth.users(id) on delete set null
+);
+
+alter table public.course_aliases enable row level security;
+
+drop policy if exists "anyone can read course aliases" on public.course_aliases;
+create policy "anyone can read course aliases"
+  on public.course_aliases for select using (true);
+
+create index if not exists course_aliases_canonical_idx
+  on public.course_aliases(canonical_key);
+
+-- ─── is_admin() helper ────────────────────────────────────────────────────────
+-- Cheap SQL check against the admins table. Used by RPC + RLS policies on
+-- admin-only paths. Returns false for unauthenticated callers.
+create or replace function public.is_admin()
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1 from public.admins where user_id = auth.uid()
+  );
+$$;
+
+-- ─── admin_rename_course RPC ──────────────────────────────────────────────────
+-- Atomically migrate a course from old_key → new_key across course_cache,
+-- course_hole_hazards, course_geo, and course_hole_contrib. Inserts an alias
+-- row so old-name searches still resolve. new_course_data should already have
+-- name/location updated to the new values.
+create or replace function public.admin_rename_course(
+  old_key         text,
+  new_key         text,
+  new_course_data jsonb
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  caller_id uuid := auth.uid();
+begin
+  if not public.is_admin() then
+    raise exception 'not authorized';
+  end if;
+
+  if old_key is null or new_key is null or old_key = '' or new_key = '' then
+    raise exception 'old_key and new_key are required';
+  end if;
+
+  if old_key = new_key then
+    -- nothing to migrate; just update the row
+    update public.course_cache
+       set course_data  = new_course_data,
+           updated_at   = now(),
+           updated_by   = caller_id,
+           edit_version = edit_version + 1
+     where cache_key = old_key;
+    return;
+  end if;
+
+  if exists (select 1 from public.course_cache where cache_key = new_key) then
+    raise exception 'a course already exists at the new key: %', new_key;
+  end if;
+
+  -- 1. Copy course_cache row to new_key
+  insert into public.course_cache (cache_key, course_data, source, cached_at, hit_count, updated_at, updated_by, edit_version)
+  select new_key,
+         new_course_data,
+         source,
+         cached_at,
+         hit_count,
+         now(),
+         caller_id,
+         edit_version + 1
+    from public.course_cache
+   where cache_key = old_key;
+
+  -- 2. Re-key dependent rows
+  update public.course_hole_hazards  set course_key = new_key where course_key = old_key;
+  update public.course_geo           set course_key = new_key where course_key = old_key;
+  update public.course_hole_contrib  set course_key = new_key where course_key = old_key;
+
+  -- 3. Insert alias row so old-name search still resolves
+  insert into public.course_aliases (alias_key, canonical_key, created_by)
+  values (old_key, new_key, caller_id)
+  on conflict (alias_key) do update set canonical_key = excluded.canonical_key;
+
+  -- 4. If new_key was previously aliased to something else, repoint
+  update public.course_aliases set canonical_key = new_key where canonical_key = old_key;
+
+  -- 5. Delete the old course_cache row LAST (FK from aliases prevents earlier delete)
+  delete from public.course_cache where cache_key = old_key;
+end;
+$$;
+
+grant execute on function public.admin_rename_course(text, text, jsonb) to authenticated;
+grant execute on function public.is_admin() to authenticated;

@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef, useMemo, Component } from 'react'
-import { supabase, loadUserProfiles, saveUserProfile, deleteUserProfile, loadUserHistory, saveUserHistory, loadUserSettings, saveUserSettings, getCachedCourseDB, setCachedCourseDB, getAllCachedCoursesDB, deleteCachedCourseDB, loadSavedPlans, savePlan, deleteSavedPlan, loadCourseHazards, listCoursePdfs, uploadCoursePdfToBucket, deleteAllCoursePdfs, deleteCourseHazards, clearCachedScorecardPdfRef } from './lib/supabase.js'
+import { supabase, loadUserProfiles, saveUserProfile, deleteUserProfile, loadUserHistory, saveUserHistory, loadUserSettings, saveUserSettings, getCachedCourseDB, setCachedCourseDB, getAllCachedCoursesDB, deleteCachedCourseDB, loadSavedPlans, savePlan, deleteSavedPlan, loadCourseHazards, listCoursePdfs, uploadCoursePdfToBucket, deleteAllCoursePdfs, deleteCourseHazards, clearCachedScorecardPdfRef, listCanonicalCacheKeys, listAliasKeys } from './lib/supabase.js'
 import { buildBagSection } from './lib/promptSections.js'
 import { fetchOSMCourseData, enrichHolesWithOSM, exportCourseGeoJSON, classifyTier, computeCoverage } from './lib/osmCourseData.js'
 import { computeHoleDistances, formatDistancesLine, simplifyAndTrimGeoJSON } from './lib/courseGeometry.js'
@@ -15,10 +15,11 @@ import ScorecardPreview from './components/ScorecardPreview.jsx'
 import WeatherPanel from './components/WeatherPanel.jsx'
 import { computeHoleTimes, getWeatherAtHour, toParStr, windDir } from './lib/weather.js'
 import { fetchHoleDesignViaSearch, mergeDesignDataIntoHoles, searchGolfCourseAPI, normalizeGolfCourseAPICourse, adminUploadScorecardPdf } from './lib/courseApi.js'
-import { loadCourseCache, getCachedCourse, setCachedCourse, cacheKey, saveCourseCache } from './lib/courseCache.js'
+import { loadCourseCache, getCachedCourse, setCachedCourse, cacheKey, saveCourseCache, removeCachedCourseByKey, purgeOrphanedLocalEntries } from './lib/courseCache.js'
 import { mergeUploadedScorecard, isSameCourseKey } from './lib/scorecardMerge.js'
 import AuthScreen from './screens/AuthScreen.jsx'
 import ImportTab from './components/ImportTab.jsx'
+import AdminCourseEditor from './components/AdminCourseEditor.jsx'
 import OnboardingScreen from './screens/OnboardingScreen.jsx'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -179,6 +180,9 @@ function AppInner({ user, session, onSignOut }) {
   const [sharedCacheError,   setSharedCacheError]   = useState('')
   const [scorecardBusyKey,   setScorecardBusyKey]   = useState('')    // cache_key currently uploading/removing
   const [scorecardMsg,       setScorecardMsg]       = useState('')
+
+  // ── Admin course metadata editor ─────────────────────────────────────────
+  const [editorCourse, setEditorCourse] = useState(null)  // course object being edited (null = closed)
 
   // Persist all keys together whenever any changes
   const setApiKey = (v) => { setApiKeyRaw(v);       saveKeys({ ...loadSavedKeys(), anthropic:  v }) }
@@ -344,6 +348,24 @@ function AppInner({ user, session, onSignOut }) {
       .then(d => setIsAdmin(!!d.isAdmin))
       .catch(() => setIsAdmin(false))
   }, [tab, isAdmin, session])
+
+  // Boot-time purge of orphaned localStorage course entries. Any cached entry
+  // whose key no longer exists in course_cache (and isn't aliased) is dead —
+  // an admin renamed or deleted the course on the shared DB. Runs once per
+  // sign-in so users see canonical names in search after a rename.
+  useEffect(() => {
+    if (!session?.user?.id) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const [keys, aliases] = await Promise.all([listCanonicalCacheKeys(), listAliasKeys()])
+        if (cancelled || !keys) return
+        const removed = purgeOrphanedLocalEntries(keys, aliases || [])
+        if (removed) console.log(`[course cache] purged ${removed} orphaned local entr${removed === 1 ? 'y' : 'ies'}`)
+      } catch {}
+    })()
+    return () => { cancelled = true }
+  }, [session?.user?.id])
 
   const holeTimes   = computeHoleTimes(teeTime, pace)
   const holeWeather = holeTimes.map(dt => weather ? getWeatherAtHour(weather, dt) : null)
@@ -771,6 +793,11 @@ COURSE: ${course.name}${course.selectedTee ? ` (${course.selectedTee} tees)` : '
 Course Handicap: ${courseHandicap} | Data: ${sourceNote}
 ${course.roundType} | Target: ${course.targetScore || 'under par'} | Conditions: ${course.conditions}
 ${course.elevation ? `Course elevation: ${course.elevation}ft — factor into club selection (higher altitude = more carry)` : ''}
+${course.architect ? `Architect: ${course.architect}` : ''}
+${course.greensType ? `Greens: ${course.greensType}` : ''}
+${course.region ? `Region: ${course.region}` : ''}
+${Array.isArray(course.tags) && course.tags.length ? `Style tags: ${course.tags.join(', ')}` : ''}
+${course.defaultConditions && !course.conditions ? `Typical conditions: ${course.defaultConditions}` : ''}
 ${isPractice ? 'Practice round — frame around learning, not score.' : ''}${isMatchPlay ? 'Match play — adjust risk for hole-by-hole context.' : ''}
 ${course.notes ? `Notes: ${course.notes}` : ''}
 Tee: ${teeTime} (${teeDate}), ${pace} min/hole
@@ -2490,6 +2517,10 @@ Be direct. No filler. ALL 18 HOLES.`
                                   )}
                                 </div>
                                 <div style={{ display: 'flex', gap: 8, flexShrink: 0, flexWrap: 'wrap' }}>
+                                  <button style={{ ...btnG, padding: '6px 10px' }} disabled={busy}
+                                    onClick={() => setEditorCourse(c)}>
+                                    ✎ Edit metadata
+                                  </button>
                                   <label style={{ ...btnG, padding: '6px 10px', cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.5 : 1, pointerEvents: busy ? 'none' : 'auto', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                                     {busy ? 'Working…' : '📄 Upload PDF'}
                                     <input
@@ -2607,6 +2638,39 @@ Be direct. No filler. ALL 18 HOLES.`
         })()}
 
       </div>
+
+      {editorCourse && (
+        <AdminCourseEditor
+          course={editorCourse}
+          authToken={session?.access_token || ''}
+          onClose={() => setEditorCourse(null)}
+          onSaved={async (result) => {
+            // Drop local cache for the old key (if rename, it's now dead;
+            // if just an edit, force a fresh DB read next lookup).
+            removeCachedCourseByKey(editorCourse._cacheKey)
+            // If editor renamed, the currently-loaded course's name in
+            // App state needs updating too if it matched.
+            if (result?.new_key && isSameCourseKey(course, { name: editorCourse.name, location: editorCourse.location })) {
+              const merged = { ...course, ...(result.course_data || {}) }
+              setCourse(merged)
+              setCachedCourse(merged)
+            } else if (result?.course_data && isSameCourseKey(course, editorCourse)) {
+              setCourse(prev => ({ ...prev, ...result.course_data }))
+            }
+            setCacheVersion(v => v + 1)
+            setEditorCourse(null)
+            // Refresh the shared-cache admin list
+            try {
+              const rows = await getAllCachedCoursesDB()
+              const withPdfs = await Promise.all(rows.map(async (c) => {
+                const pdfs = await listCoursePdfs(c.name, c.location).catch(() => [])
+                return { ...c, _pdfs: pdfs }
+              }))
+              setSharedCache(withPdfs)
+            } catch {}
+          }}
+        />
+      )}
     </div>
   )
 }
