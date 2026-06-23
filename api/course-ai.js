@@ -65,6 +65,30 @@ async function callClaude(messages, maxTokens, useWebSearch, extraTools, modelOv
   return text
 }
 
+// Confirm a URL actually serves a PDF. Many "official" yardage-book links
+// have rotted and 302-redirect to an HTML homepage; handing those to
+// Anthropic's document fetcher produces an opaque base64/format error.
+async function urlServesPdf(url) {
+  try {
+    // Range-GET the first few bytes — HEAD lies on a lot of CDNs (returns
+    // 200 + text/html for the redirect target instead of the asset).
+    const res = await fetch(url, {
+      method: 'GET',
+      redirect: 'follow',
+      headers: { Range: 'bytes=0-7' },
+    })
+    if (!res.ok && res.status !== 206) return false
+    const ct = (res.headers.get('content-type') || '').toLowerCase()
+    if (ct.includes('application/pdf')) return true
+    if (ct.includes('text/html')) return false
+    // Content-type missing/ambiguous — sniff the magic bytes.
+    const buf = new Uint8Array(await res.arrayBuffer())
+    return buf[0] === 0x25 && buf[1] === 0x50 && buf[2] === 0x44 && buf[3] === 0x46 // %PDF
+  } catch {
+    return false
+  }
+}
+
 function buildGeocodeMessages(courseName, location) {
   return [{
     role: 'user',
@@ -125,22 +149,25 @@ If you cannot find any hole design info: {"error": "No hole design data found"}`
   }]
 }
 
-function buildPdfDiscoveryMessages(courseName, location) {
+function buildPdfDiscoveryMessages(courseName, location, exclude = []) {
+  const excludeBlock = exclude.length
+    ? `\nDO NOT return any of these URLs — they were already tried and failed:\n${exclude.map(u => `- ${u}`).join('\n')}\n`
+    : ''
   return [{
     role: 'user',
     content: `Find the most authoritative PDF link for "${courseName}"${location ? ` in ${location}` : ''}.
 
 Use web_search to locate ONE of (in priority order):
-1. The course's official yardage book PDF.
+1. The course's official yardage book PDF (often hosted on the course's own site or on a CDN like cdn.sanity.io, cloudfront, contentful).
 2. The course's official scorecard PDF.
 3. A PGA / USGA / state-association tournament packet PDF that covers this course.
-4. A reputable third-party PDF scorecard (greenskeeper.org, ncrdb, swingu) — only if nothing official exists.
+4. A reputable third-party scorecard — prefer course.bluegolf.com (very reliable, structured per-tee scorecards), then greenskeeper.org, ncrdb, swingu.
 
 CRITICAL:
-- Return a DIRECT URL to a .pdf file. Do NOT return a regular webpage.
-- If the only available scorecard is an HTML page (not a PDF), say so by returning the HTML URL and setting "kind": "html".
+- Prefer a DIRECT URL to a .pdf file. Verify the link actually serves a PDF (CDN-hosted PDFs on cdn.sanity.io, *.cloudfront.net, contentful, etc. are usually reliable; older pages on course websites have often been moved or deleted).
+- If the only available scorecard is an HTML page (not a PDF), return the HTML URL and set "kind": "html". course.bluegolf.com detailedscorecard.htm pages are excellent HTML sources.
 - If nothing usable exists, return {"error": "..."}.
-
+${excludeBlock}
 Return ONLY this JSON (no markdown):
 {"url": "https://…/course.pdf", "kind": "pdf|html", "title": "short description of the source"}`,
   }]
@@ -444,18 +471,36 @@ async function handleRequest(req) {
     if (action === 'yardage-book') {
       if (!courseName) return jsonResponse({ error: 'Missing courseName.' }, 400)
 
-      // Step 1: web-search for the official PDF URL.
-      const discoverText = await callClaude(buildPdfDiscoveryMessages(courseName, location || ''), 800, true)
-      const dRes = parseJsonFromText(discoverText)
-      if (!dRes.ok) return jsonResponse({ error: `PDF discovery returned no JSON (${dRes.error}).` }, 502)
-      const discovery = dRes.value
-      if (discovery.error || !discovery.url) {
-        return jsonResponse({ error: discovery.error || 'No PDF URL found via web search.' }, 422)
+      // Step 1: web-search for the official PDF URL. Retry up to twice if the
+      // returned URL turns out to be dead (HTML masquerading as a PDF), so the
+      // model can try a different source instead of failing the whole request.
+      const tried = []
+      let discovery = null
+      let confirmedPdf = false
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const discoverText = await callClaude(
+          buildPdfDiscoveryMessages(courseName, location || '', tried),
+          800,
+          true,
+        )
+        const dRes = parseJsonFromText(discoverText)
+        if (!dRes.ok) return jsonResponse({ error: `PDF discovery returned no JSON (${dRes.error}).` }, 502)
+        const d = dRes.value
+        if (d.error || !d.url) {
+          if (!discovery) return jsonResponse({ error: d.error || 'No PDF URL found via web search.' }, 422)
+          break
+        }
+        discovery = d
+        const looksPdf = d.kind === 'pdf' || /\.pdf(\?|$)/i.test(d.url)
+        if (!looksPdf) break // HTML hit — let the HTML fallback handle it
+        confirmedPdf = await urlServesPdf(d.url)
+        if (confirmedPdf) break
+        tried.push(d.url)
       }
 
-      // Step 2: if the discovered link is a PDF, feed it to the document-block parser.
-      const isPdf = discovery.kind === 'pdf' || /\.pdf(\?|$)/i.test(discovery.url)
-      if (isPdf) {
+      // Step 2: if the discovered link is a confirmed PDF, feed it to the
+      // document-block parser. Otherwise fall through to the HTML fallback.
+      if (confirmedPdf) {
         try {
           const parsed = await parsePdfAndPersist(discovery.url)
           parsed._discoveredVia = 'web_search'
