@@ -2,6 +2,12 @@ import { useRef, useState } from 'react'
 import { parsers, detectParser } from '../lib/importers/registry.js'
 import { normalizeClubName, computeClubStats } from '../lib/golfdata/stats.js'
 
+// Mirrors the matchedRows .length in the body; needed by applyDisabled.
+function matchedRowsCount(result) {
+  if (!result) return 0
+  return result.stats.length
+}
+
 // Import surface: paste or upload a launch-monitor export (or a manual
 // club/carry list), preview per-club stats, then apply them to the bag.
 // Design tokens + shared styles are passed in from App.jsx as props.
@@ -12,9 +18,15 @@ export default function ImportTab({ clubs, setClubs, C, card, inp, lbl, btnP, bt
   const [result, setResult] = useState(null)  // { parser, session, stats }
   const [error, setError] = useState('')
   const [appliedMsg, setAppliedMsg] = useState('')
+  // User-confirmed unit when the importer couldn't detect one. Required
+  // before applying to bag — prevents silently treating a metric export as
+  // yards.
+  const [confirmedUnit, setConfirmedUnit] = useState(null)  // 'yards' | 'meters' | null
   const fileRef = useRef(null)
 
-  const resetOutput = () => { setResult(null); setError(''); setAppliedMsg('') }
+  const resetOutput = () => { setResult(null); setError(''); setAppliedMsg(''); setConfirmedUnit(null) }
+  const needsUnitConfirm = result?.session?.unitsDetected === 'unknown' && !confirmedUnit
+  const applyDisabled = matchedRowsCount(result) === 0 || needsUnitConfirm
 
   const handleFile = (e) => {
     const file = e.target.files && e.target.files[0]
@@ -55,6 +67,18 @@ export default function ImportTab({ clubs, setClubs, C, card, inp, lbl, btnP, bt
 
   const applyToBag = () => {
     if (!result || matchedRows.length === 0) return
+    if (result.session.unitsDetected === 'unknown' && !confirmedUnit) return
+    // If user confirmed unit and source was meters, scale carry-related fields
+    // through here BEFORE applying. (The parser already had a chance to
+    // convert; this only runs when the parser punted with 'unknown'.)
+    if (confirmedUnit === 'meters') {
+      const M_TO_Y = 1.09361
+      for (const row of matchedRows) {
+        for (const k of ['carryP50', 'carryP80', 'carryAvg', 'totalP50', 'totalAvg', 'dispLeftP80', 'dispRightP80']) {
+          if (Number.isFinite(row[k])) row[k] = Math.round(row[k] * M_TO_Y * 10) / 10
+        }
+      }
+    }
     const byKey = {}
     for (const row of matchedRows) byKey[row.clubKey] = row
     setClubs(prev => prev.map(club => {
@@ -141,6 +165,21 @@ export default function ImportTab({ clubs, setClubs, C, card, inp, lbl, btnP, bt
             </div>
           )}
 
+          {needsUnitConfirm && (
+            <div style={{ background: C.redMuted || '#3a1515', border: `1px solid ${C.red}`, borderRadius: 8, padding: '10px 14px', margin: '8px 0' }}>
+              <p style={{ fontSize: 12, color: C.red, margin: '0 0 8px', fontWeight: 600 }}>
+                ⚠ Units could not be detected for this file. Confirm below before applying — picking the wrong unit would shift every distance by ~9%.
+              </p>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button style={{ ...btnG, padding: '4px 12px', fontSize: 12 }} onClick={() => setConfirmedUnit('yards')}>Carry numbers are YARDS</button>
+                <button style={{ ...btnG, padding: '4px 12px', fontSize: 12 }} onClick={() => setConfirmedUnit('meters')}>Carry numbers are METERS — convert to yards</button>
+              </div>
+            </div>
+          )}
+          {confirmedUnit && (
+            <p style={{ fontSize: 11, color: C.green, margin: '4px 0' }}>✓ Unit confirmed: {confirmedUnit}</p>
+          )}
+
           {result.stats.length === 0 ? (
             <p style={{ fontSize: 12, color: C.textFaint, fontStyle: 'italic', margin: '10px 0 0' }}>
               No clubs with carry data found in this session.
@@ -176,8 +215,8 @@ export default function ImportTab({ clubs, setClubs, C, card, inp, lbl, btnP, bt
 
               <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 14, flexWrap: 'wrap' }}>
                 <button
-                  style={{ ...btnP, opacity: matchedRows.length === 0 ? 0.5 : 1, cursor: matchedRows.length === 0 ? 'default' : 'pointer' }}
-                  onClick={applyToBag} disabled={matchedRows.length === 0}>
+                  style={{ ...btnP, opacity: applyDisabled ? 0.5 : 1, cursor: applyDisabled ? 'default' : 'pointer' }}
+                  onClick={applyToBag} disabled={applyDisabled}>
                   Apply to bag ({matchedRows.length} club{matchedRows.length === 1 ? '' : 's'})
                 </button>
                 {appliedMsg && <span style={{ fontSize: 12, color: C.green }}>✓ {appliedMsg}</span>}

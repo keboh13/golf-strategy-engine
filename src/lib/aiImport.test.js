@@ -266,6 +266,38 @@ describe('validateNormalizedSession', () => {
     expect(result.ok).toBe(false)
     expect(result.error).toMatch(/shots\[1\]\.launchDeg/)
   })
+
+  it('rejects unparseable timestamps', () => {
+    const result = validateNormalizedSession(makeSession({ shots: [makeShot({ timestamp: 'not-a-date' })] }))
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/timestamp/)
+  })
+
+  it('drops shots with too many out-of-range fields', () => {
+    const insane = makeShot({ carryYds: 1500, ballSpeedMph: 500 })
+    const sane = makeShot()
+    const result = validateNormalizedSession(makeSession({ shots: [insane, sane, sane, sane, sane] }))
+    expect(result.ok).toBe(true)
+    expect(result.session.shots.length).toBe(4)        // insane shot dropped
+    expect(result.session.warnings.some(w => /Rejected/.test(w))).toBe(true)
+  })
+
+  it('warns but keeps a shot with one out-of-range field', () => {
+    const result = validateNormalizedSession(makeSession({
+      shots: [makeShot({ apexFt: 999 })],            // only apex bad
+    }))
+    expect(result.ok).toBe(true)
+    expect(result.session.shots.length).toBe(1)
+    expect(result.session.warnings.some(w => /out of range/.test(w))).toBe(true)
+  })
+
+  it('rejects the whole session when >25% of shots fail semantic checks', () => {
+    const insane = makeShot({ carryYds: 1500, ballSpeedMph: 500 })
+    const sane = makeShot()
+    const result = validateNormalizedSession(makeSession({ shots: [insane, insane, sane] }))
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/out-of-range/)
+  })
 })
 
 // ── parseImportWithAI (network mocked) ────────────────────────────────────────

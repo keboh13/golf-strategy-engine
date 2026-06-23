@@ -154,6 +154,25 @@ export default async function handler(req) {
   try {
     const body = await req.json()
 
+    // ── 3.5. Capture the prompt for audit logging (rec_log) ─────────────────
+    let promptText = ''
+    try {
+      for (const m of (Array.isArray(body.messages) ? body.messages : [])) {
+        if (m.role !== 'user') continue
+        if (typeof m.content === 'string') promptText += m.content
+        else if (Array.isArray(m.content)) {
+          for (const b of m.content) if (b?.type === 'text' && typeof b.text === 'string') promptText += b.text
+        }
+      }
+    } catch { /* non-fatal */ }
+    const courseKey = typeof body.course_key === 'string' ? body.course_key : null
+    // sha256 of prompt — used for dedupe/replays. Use Web Crypto (edge supports it).
+    let promptHash = ''
+    try {
+      const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(promptText))
+      promptHash = Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('')
+    } catch { /* non-fatal */ }
+
     const ALLOWED_MODELS = ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250514', 'claude-haiku-4-5-20251001']
     const sanitized = {
       model: ALLOWED_MODELS.includes(body.model) ? body.model : ALLOWED_MODELS[0],
@@ -205,6 +224,7 @@ export default async function handler(req) {
 
     ;(async () => {
       let buf = ''
+      let responseText = ''
       let inputTokens = 0, outputTokens = 0, cacheReadTokens = 0, cacheCreationTokens = 0
       const reader = upstream.body.getReader()
       try {
@@ -223,6 +243,9 @@ export default async function handler(req) {
                 inputTokens        = j.message.usage.input_tokens                   || 0
                 cacheReadTokens    = j.message.usage.cache_read_input_tokens         || 0
                 cacheCreationTokens = j.message.usage.cache_creation_input_tokens    || 0
+              }
+              if (j.type === 'content_block_delta' && j.delta?.text) {
+                responseText += j.delta.text
               }
               if (j.type === 'message_delta' && j.usage) {
                 outputTokens = j.usage.output_tokens || 0
@@ -247,6 +270,27 @@ export default async function handler(req) {
               cache_creation_tokens: cacheCreationTokens,
             }),
           }).catch(() => { /* non-fatal */ })
+        }
+        // ── Log full prompt + response to rec_log for replay/audit ────────
+        if (supabaseUrl && supabaseServiceKey && promptText) {
+          await fetch(`${supabaseUrl}/rest/v1/rec_log`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'apikey': supabaseServiceKey,
+              'Authorization': `Bearer ${supabaseServiceKey}`,
+            },
+            body: JSON.stringify({
+              user_id: userId === 'dev-user' ? null : userId,
+              course_key: courseKey,
+              model: sanitized.model,
+              prompt: promptText,
+              prompt_hash: promptHash,
+              response: responseText,
+              input_tokens: inputTokens,
+              output_tokens: outputTokens,
+            }),
+          }).catch((e) => { console.warn('[rec_log] insert failed:', e?.message) })
         }
         writer.close()
       }

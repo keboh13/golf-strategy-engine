@@ -5,6 +5,7 @@
 // Required env vars: ANTHROPIC_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 
 import { validateAuth, isAdminUser } from './_lib/admin.js'
+import { parseJsonFromText } from './_lib/extractJson.js'
 
 export const config = { maxDuration: 300 }
 
@@ -234,15 +235,59 @@ If the PDF doesn't contain a usable scorecard: {"error":"PDF did not contain a p
 function validateScorecardJson(parsed) {
   const issues = []
   if (!parsed || typeof parsed !== 'object') { issues.push('not_object'); return issues }
-  if (!Array.isArray(parsed.holes) || parsed.holes.length !== 18) issues.push('hole_count')
-  const parTotal = (parsed.holes || []).reduce((s, h) => s + (parseInt(h?.par) || 0), 0)
-  if (parTotal < 68 || parTotal > 74) issues.push('par_total_out_of_range')
-  const yardTotal = (parsed.holes || []).reduce((s, h) => s + (parseInt(h?.yardage) || 0), 0)
-  if (yardTotal < 4500 || yardTotal > 8200) issues.push('yardage_total_out_of_range')
-  for (const h of (parsed.holes || [])) {
+  const holes = Array.isArray(parsed.holes) ? parsed.holes : []
+  if (holes.length !== 18) issues.push(`hole_count:${holes.length}`)
+
+  const parTotal = holes.reduce((s, h) => s + (parseInt(h?.par) || 0), 0)
+  if (parTotal && (parTotal < 68 || parTotal > 74)) issues.push(`par_total_out_of_range:${parTotal}`)
+
+  const yardTotal = holes.reduce((s, h) => s + (parseInt(h?.yardage) || 0), 0)
+  if (yardTotal && (yardTotal < 4500 || yardTotal > 8200)) issues.push(`yardage_total_out_of_range:${yardTotal}`)
+
+  // Per-hole: par ∈ {3,4,5}, yardage ∈ [80,700]
+  let badYardage = 0, badPar = 0
+  for (const h of holes) {
     const y = parseInt(h?.yardage) || 0
-    if (y && (y < 80 || y > 700)) { issues.push('hole_yardage_out_of_range'); break }
+    if (y && (y < 80 || y > 700)) badYardage++
+    const p = parseInt(h?.par) || 0
+    if (p && (p < 3 || p > 6)) badPar++
   }
+  if (badYardage) issues.push(`hole_yardage_out_of_range:${badYardage}`)
+  if (badPar) issues.push(`hole_par_out_of_range:${badPar}`)
+
+  // Handicap set 1..18
+  const hcps = holes.map(h => parseInt(h?.handicap)).filter(n => Number.isFinite(n))
+  if (hcps.length === 18) {
+    const set = new Set(hcps)
+    if (set.size !== 18) issues.push('handicap_duplicates')
+    for (let i = 1; i <= 18; i++) if (!set.has(i)) { issues.push('handicap_set_incomplete'); break }
+  }
+
+  // Hazard array structure if present
+  const hazardsByHole = Array.isArray(parsed.hazardsByHole) ? parsed.hazardsByHole : []
+  for (const hz of hazardsByHole) {
+    if (!hz || !Number.isFinite(parseInt(hz.hole))) continue
+    if (hz.greenDepth != null && (hz.greenDepth < 15 || hz.greenDepth > 50)) {
+      issues.push('green_depth_out_of_range'); break
+    }
+    if (Array.isArray(hz.hazards)) {
+      for (const z of hz.hazards) {
+        if (!z || typeof z !== 'object') continue
+        if (z.type && !/^(bunker|water|creek|native|OB|trees)$/i.test(z.type)) {
+          issues.push('hazard_bad_type'); break
+        }
+        if (z.side && !/^(L|R|C|front|back)$/i.test(z.side)) {
+          issues.push('hazard_bad_side'); break
+        }
+        const cy = Number(z.carry_yards)
+        const holeY = parseInt(holes[parseInt(hz.hole) - 1]?.yardage) || 0
+        if (Number.isFinite(cy) && holeY && cy > holeY) {
+          issues.push('hazard_carry_past_hole'); break
+        }
+      }
+    }
+  }
+
   return issues
 }
 
@@ -312,10 +357,9 @@ async function handleRequest(req) {
     // 10000 tokens budget: scorecard (~1.5k) + 18 verbatim descriptions (~3–5k) +
     // hazards + per-hole visual analysis from the diagrams (~2k).
     const text = await callClaude(messages, 10000, false, undefined, MODEL_FAST)
-    const clean = text.replace(/```json|```/g, '').trim()
-    const m = clean.match(/\{[\s\S]*\}/)
-    if (!m) throw new Error('No JSON in PDF parse response.')
-    const parsed = JSON.parse(m[0])
+    const r = parseJsonFromText(text)
+    if (!r.ok) throw new Error(`No JSON in PDF parse response (${r.error}).`)
+    const parsed = r.value
     if (parsed.error) throw new Error(parsed.error)
 
     const issues = validateScorecardJson(parsed)
@@ -371,11 +415,16 @@ async function handleRequest(req) {
           updated_at: new Date().toISOString(),
         }))
       if (rows.length) {
-        await supabaseRest('course_hole_hazards?on_conflict=course_key,hole_ref', {
+        const hzRes = await supabaseRest('course_hole_hazards?on_conflict=course_key,hole_ref', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates' },
           body: JSON.stringify(rows),
-        }).catch(() => {})
+        }).catch(e => ({ ok: false, status: 0, _err: e?.message }))
+        if (!hzRes.ok) {
+          const detail = hzRes._err || (await hzRes.text?.().catch(() => '')) || ''
+          console.error(`[course_hole_hazards] persist failed (${hzRes.status}): ${detail}`)
+          parsed._hazardPersistError = `course_hole_hazards persist failed (${hzRes.status}). ${detail}`
+        }
       }
     }
 
@@ -397,9 +446,9 @@ async function handleRequest(req) {
 
       // Step 1: web-search for the official PDF URL.
       const discoverText = await callClaude(buildPdfDiscoveryMessages(courseName, location || ''), 800, true)
-      const dm = discoverText.replace(/```json|```/g, '').trim().match(/\{[\s\S]*?\}/)
-      if (!dm) return jsonResponse({ error: 'PDF discovery returned no JSON.' }, 502)
-      const discovery = JSON.parse(dm[0])
+      const dRes = parseJsonFromText(discoverText)
+      if (!dRes.ok) return jsonResponse({ error: `PDF discovery returned no JSON (${dRes.error}).` }, 502)
+      const discovery = dRes.value
       if (discovery.error || !discovery.url) {
         return jsonResponse({ error: discovery.error || 'No PDF URL found via web search.' }, 422)
       }
@@ -438,9 +487,9 @@ Return ONLY this JSON (no markdown):
 
 If you cannot extract a verifiable scorecard: {"error":"…"}`,
       }], 3500, true)
-      const hm = htmlText.replace(/```json|```/g, '').trim().match(/\{[\s\S]*\}/)
-      if (!hm) return jsonResponse({ error: 'No JSON in HTML scorecard response.' }, 502)
-      const htmlParsed = JSON.parse(hm[0])
+      const hRes = parseJsonFromText(htmlText)
+      if (!hRes.ok) return jsonResponse({ error: `No JSON in HTML scorecard response (${hRes.error}).` }, 502)
+      const htmlParsed = hRes.value
       if (htmlParsed.error) return jsonResponse({ error: htmlParsed.error }, 422)
 
       const issues = validateScorecardJson(htmlParsed)
@@ -491,13 +540,13 @@ If you cannot extract a verifiable scorecard: {"error":"…"}`,
         : { kind: 'base64', value: image_base64, media_type: image_media_type }
       const messages = buildHazardExtractMessages(hole, imageRef)
       const text = await callClaude(messages, 2000, false, undefined, MODEL_FAST)
-      const m = text.replace(/```json|```/g, '').trim().match(/\{[\s\S]*\}/)
-      if (!m) return jsonResponse({ error: 'No JSON in vision response.' }, 502)
-      const parsed = JSON.parse(m[0])
+      const vRes = parseJsonFromText(text)
+      if (!vRes.ok) return jsonResponse({ error: `No JSON in vision response (${vRes.error}).` }, 502)
+      const parsed = vRes.value
       if (parsed.error) return jsonResponse({ error: parsed.error }, 422)
 
       if (persist && course_key && supabaseUrl && supabaseServiceKey) {
-        await supabaseRest('course_hole_hazards?on_conflict=course_key,hole_ref', {
+        const hzRes = await supabaseRest('course_hole_hazards?on_conflict=course_key,hole_ref', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates' },
           body: JSON.stringify({
@@ -508,7 +557,12 @@ If you cannot extract a verifiable scorecard: {"error":"…"}`,
             image_path: image_url || null,
             updated_at: new Date().toISOString(),
           }),
-        }).catch(() => {})
+        }).catch(e => ({ ok: false, status: 0, _err: e?.message }))
+        if (!hzRes.ok) {
+          const detail = hzRes._err || (await hzRes.text?.().catch(() => '')) || ''
+          console.error(`[course_hole_hazards] persist failed (${hzRes.status}): ${detail}`)
+          parsed._hazardPersistError = `course_hole_hazards persist failed (${hzRes.status}). ${detail}`
+        }
       }
       return jsonResponse({ result: parsed }, 200)
     }
@@ -527,11 +581,9 @@ If you cannot extract a verifiable scorecard: {"error":"…"}`,
     const messages = spec.build(courseName, location || '')
     const text = await callClaude(messages, spec.maxTokens, true)
 
-    const clean = text.replace(/```json|```/g, '').trim()
-    const m = clean.match(/\{[\s\S]*\}/)
-    if (!m) return jsonResponse({ error: 'No JSON in AI response.' }, 502)
-
-    const parsed = JSON.parse(m[0])
+    const aRes = parseJsonFromText(text)
+    if (!aRes.ok) return jsonResponse({ error: `No JSON in AI response (${aRes.error}).` }, 502)
+    const parsed = aRes.value
     if (parsed.error) return jsonResponse({ error: parsed.error }, 422)
 
     if (spec.validate) {
