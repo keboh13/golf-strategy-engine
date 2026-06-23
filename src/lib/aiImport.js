@@ -87,6 +87,42 @@ const SHOT_NUMBER_FIELDS = [
 ]
 const UNITS = ['yards', 'meters', 'unknown']
 
+// Semantic ranges — what's physically plausible for a human golfer. A shot
+// whose values fall outside enough of these is rejected (saves the
+// recommendation engine from garbage like 1500-yard carries).
+const SHOT_RANGES = {
+  carryYds:     [40, 400],
+  totalYds:     [40, 450],
+  offlineYds:   [-150, 150],
+  ballSpeedMph: [60, 200],
+  clubSpeedMph: [40, 150],
+  launchDeg:    [-5, 50],
+  spinRpm:      [500, 12000],
+  apexFt:       [5, 200],
+}
+
+// How many out-of-range fields trigger shot rejection. We keep this loose
+// because some entry fields (apex, spin, launch) may legitimately be missing
+// on cheap launch monitors.
+const MAX_OUT_OF_RANGE = 2
+
+export function shotOutOfRangeFields(shot) {
+  const bad = []
+  for (const [field, [lo, hi]] of Object.entries(SHOT_RANGES)) {
+    const v = shot?.[field]
+    if (v == null) continue
+    if (!Number.isFinite(v) || v < lo || v > hi) bad.push(field)
+  }
+  return bad
+}
+
+function timestampParses(ts) {
+  if (ts == null) return true
+  if (typeof ts !== 'string') return false
+  const t = Date.parse(ts)
+  return Number.isFinite(t)
+}
+
 function isNullableFiniteNumber(v) {
   return v === null || (typeof v === 'number' && Number.isFinite(v))
 }
@@ -125,6 +161,8 @@ export function validateNormalizedSession(raw) {
   }
 
   const shots = []
+  const rejected = []
+  const semanticWarnings = []
   for (let i = 0; i < raw.shots.length; i++) {
     const s = raw.shots[i]
     if (!s || typeof s !== 'object' || Array.isArray(s)) {
@@ -140,6 +178,9 @@ export function validateNormalizedSession(raw) {
     if (!isNullableString(timestamp)) {
       return { ok: false, error: `shots[${i}].timestamp must be a string or null` }
     }
+    if (!timestampParses(timestamp)) {
+      return { ok: false, error: `shots[${i}].timestamp must parse as a date string` }
+    }
     const shot = { clubKey: s.clubKey, clubLabel: s.clubLabel, timestamp }
     for (const field of SHOT_NUMBER_FIELDS) {
       const v = s[field] ?? null
@@ -148,7 +189,21 @@ export function validateNormalizedSession(raw) {
       }
       shot[field] = v
     }
+    const bad = shotOutOfRangeFields(shot)
+    if (bad.length >= MAX_OUT_OF_RANGE) {
+      rejected.push({ index: i, club: shot.clubKey, badFields: bad })
+      continue
+    }
+    if (bad.length) {
+      semanticWarnings.push(`shots[${i}] (${shot.clubKey}) values out of range: ${bad.join(', ')}`)
+    }
     shots.push(shot)
+  }
+
+  // Reject the whole session if too many shots failed semantic checks — that's
+  // a signal the LLM hallucinated or the source was misinterpreted.
+  if (rejected.length > 0 && rejected.length / raw.shots.length > 0.25) {
+    return { ok: false, error: `session has too many out-of-range shots (${rejected.length}/${raw.shots.length}) — re-import` }
   }
 
   return {
@@ -158,7 +213,8 @@ export function validateNormalizedSession(raw) {
       sessionDate: raw.sessionDate,
       unitsDetected: raw.unitsDetected,
       shots,
-      warnings: raw.warnings.slice(),
+      warnings: raw.warnings.slice().concat(semanticWarnings)
+        .concat(rejected.length ? [`Rejected ${rejected.length} shot(s) with values out of plausible range`] : []),
     },
   }
 }

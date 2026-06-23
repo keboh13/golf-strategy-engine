@@ -165,6 +165,35 @@ drop policy if exists "authenticated users can update course geo" on public.cour
 create policy "authenticated users can update course geo"
   on public.course_geo for update using (auth.role() = 'authenticated');
 
+-- ─── course_hole_hazards ─────────────────────────────────────────────────────
+-- Per-hole hazards / design / nickname / prose / visual notes extracted from
+-- yardage-book PDFs (api/course-ai.js: parsePdfAndPersist) or from per-hole
+-- vision calls (api/course-ai.js: hazard-extract action). One row per
+-- (course, hole). Globally readable; writes are gated to admins via the
+-- service-role REST calls in api/course-ai.js (no direct client writes).
+create table if not exists public.course_hole_hazards (
+  course_key  text not null,
+  hole_ref    integer not null check (hole_ref between 1 and 18),
+  hazards     jsonb not null default '{}',
+  source      text not null default 'pdf_vision',  -- 'pdf_vision' | 'vision' | 'manual'
+  image_path  text,
+  confidence  text,                                 -- 'high' | 'medium' | 'low'
+  updated_at  timestamptz not null default now(),
+  primary key (course_key, hole_ref)
+);
+
+alter table public.course_hole_hazards enable row level security;
+
+drop policy if exists "anyone can read hole hazards" on public.course_hole_hazards;
+create policy "anyone can read hole hazards"
+  on public.course_hole_hazards for select using (true);
+
+-- No insert/update/delete policies for `authenticated` — the API writes via
+-- service role only (admin-gated in api/course-ai.js).
+
+create index if not exists course_hole_hazards_key_idx
+  on public.course_hole_hazards(course_key);
+
 -- ─── course_hole_contrib ─────────────────────────────────────────────────────
 -- User-contributed tee/pin pairs for individual holes. Used when OSM has no
 -- centerline for a hole. One row per (course, hole). The frontend merges
@@ -338,3 +367,63 @@ $$;
 
 grant execute on function public.admin_rename_course(text, text, jsonb) to authenticated;
 grant execute on function public.is_admin() to authenticated;
+
+-- ─── rec_log ─────────────────────────────────────────────────────────────────
+-- Audit log of every recommendation request: full prompt + full response.
+-- Lets us replay/diff plans, debug bad outputs, and build evals.
+-- Service role writes; users read only their own rows; admins read all.
+create table if not exists public.rec_log (
+  id              uuid primary key default uuid_generate_v4(),
+  user_id         uuid references auth.users(id) on delete set null,
+  course_key      text,
+  model           text not null,
+  prompt          text not null,
+  prompt_hash     text not null,                  -- sha256 hex of prompt; lets us dedupe replays
+  response        text,
+  validation      jsonb,                          -- output of validatePlanContract() at completion
+  input_tokens    integer,
+  output_tokens   integer,
+  created_at      timestamptz not null default now()
+);
+
+create index if not exists rec_log_user_time_idx on public.rec_log(user_id, created_at desc);
+create index if not exists rec_log_course_idx    on public.rec_log(course_key, created_at desc);
+
+alter table public.rec_log enable row level security;
+
+drop policy if exists "users can read own rec_log" on public.rec_log;
+create policy "users can read own rec_log"
+  on public.rec_log for select using (auth.uid() = user_id);
+
+drop policy if exists "admins can read all rec_log" on public.rec_log;
+create policy "admins can read all rec_log"
+  on public.rec_log for select using (public.is_admin());
+
+-- ─── rec_quality ─────────────────────────────────────────────────────────────
+-- Human ratings of recommendations. One row per rating per rec_log entry.
+-- Powers the eval harness (which prompt versions perform).
+create table if not exists public.rec_quality (
+  id          uuid primary key default uuid_generate_v4(),
+  rec_log_id  uuid not null references public.rec_log(id) on delete cascade,
+  rater_id    uuid references auth.users(id) on delete set null,
+  rating      integer not null check (rating between 1 and 5),
+  dimension   text,                               -- 'accuracy' | 'strategy' | 'clarity' | 'overall'
+  notes       text,
+  created_at  timestamptz not null default now()
+);
+
+create index if not exists rec_quality_log_idx on public.rec_quality(rec_log_id);
+
+alter table public.rec_quality enable row level security;
+
+drop policy if exists "users can write own ratings" on public.rec_quality;
+create policy "users can write own ratings"
+  on public.rec_quality for insert with check (auth.uid() = rater_id);
+
+drop policy if exists "users can read own ratings" on public.rec_quality;
+create policy "users can read own ratings"
+  on public.rec_quality for select using (auth.uid() = rater_id);
+
+drop policy if exists "admins can read all ratings" on public.rec_quality;
+create policy "admins can read all ratings"
+  on public.rec_quality for select using (public.is_admin());
