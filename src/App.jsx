@@ -1,6 +1,10 @@
 import { useState, useCallback, useEffect, useRef, useMemo, Component } from 'react'
 import { supabase, loadUserProfiles, saveUserProfile, deleteUserProfile, loadUserHistory, saveUserHistory, loadUserSettings, saveUserSettings, getCachedCourseDB, setCachedCourseDB, getAllCachedCoursesDB, deleteCachedCourseDB, loadSavedPlans, savePlan, deleteSavedPlan, loadCourseHazards, listCoursePdfs, uploadCoursePdfToBucket, deleteAllCoursePdfs, deleteCourseHazards, clearCachedScorecardPdfRef, listCanonicalCacheKeys, listAliasKeys } from './lib/supabase.js'
 import { buildBagSection } from './lib/promptSections.js'
+import { buildRecommendationPrompt } from './lib/recommendation/prompt.js'
+import { validatePlanContract } from './lib/recommendation/planContract.js'
+import { rollupConfidence } from './lib/recommendation/confidence.js'
+import { validateCourseTotals } from './lib/recommendation/courseValidation.js'
 import { fetchOSMCourseData, enrichHolesWithOSM, exportCourseGeoJSON, classifyTier, computeCoverage } from './lib/osmCourseData.js'
 import { computeHoleDistances, formatDistancesLine, simplifyAndTrimGeoJSON } from './lib/courseGeometry.js'
 import { getCachedGeo, setCachedGeo } from './lib/courseGeoCache.js'
@@ -244,6 +248,8 @@ function AppInner({ user, session, onSignOut }) {
   const [planLoading, setPlanLoading] = useState(false)
   const [planPhase,   setPlanPhase]   = useState('')
   const [planError,   setPlanError]   = useState('')
+  const [planValidationBanner, setPlanValidationBanner] = useState('')
+  const [planStyle,   setPlanStyle]   = useState('balanced')  // 'balanced' | 'conservative' | 'aggressive'
   const abortRef = useRef(null)
   const [planView,    setPlanView]    = useState('companion')
   const [currentHole, setCurrentHole] = useState(0)
@@ -598,7 +604,26 @@ function AppInner({ user, session, onSignOut }) {
     }))
   }, [course?.name, course?.location])
 
+  // ── New recommendation prompt builder ─────────────────────────────────
+  // Delegates to src/lib/recommendation/prompt.js — pure module, snapshot-
+  // tested, pre-computes wind/elevation/dispersion math so the LLM doesn't
+  // have to guess at it. Original buildPrompt kept below as buildPromptLegacy
+  // for fallback comparison (unused).
   const buildPrompt = useCallback(() => {
+    const { prompt } = buildRecommendationPrompt({
+      playerInfo, clubs, course, holeTimes, holeWeather,
+      teeTime, teeDate, pace,
+      scoringHistory,
+      style: planStyle,
+      nowMs: Date.now(),
+    })
+    return prompt
+  }, [clubs, course, playerInfo, holeWeather, holeTimes, teeTime, teeDate, pace, scoringHistory, planStyle])
+
+  // Legacy inline builder — preserved (unused) for diffing against the new
+  // module-based path during rollout. Safe to delete after a few releases.
+  // eslint-disable-next-line no-unused-vars
+  const buildPromptLegacy = useCallback(() => {
     // ── Shared: club list ──
     const clubList = buildBagSection(clubs)
 
@@ -880,7 +905,7 @@ Be direct. No filler. ALL 18 HOLES.`
     if (abortRef.current) abortRef.current.abort()
     const ctrl = new AbortController()
     abortRef.current = ctrl
-    setPlanLoading(true); setPlanPhase('Analyzing scoring history'); setPlanError(''); setPlan(''); setTab('prep'); setPrepStep(4)
+    setPlanLoading(true); setPlanPhase('Analyzing scoring history'); setPlanError(''); setPlanValidationBanner(''); setPlan(''); setTab('prep'); setPrepStep(4)
     const payload = {
       model: selectedModel,
       max_tokens: 16000,
@@ -940,6 +965,16 @@ Be direct. No filler. ALL 18 HOLES.`
     abortRef.current = null
     setPlan(p => {
       if (p) {
+        // Validate plan against the output contract — surfaces silent
+        // truncation, missing sections, malformed green-json.
+        if (course.name) {
+          const v = validatePlanContract(p)
+          if (!v.ok) {
+            setPlanValidationBanner(v.banner || 'Plan validation failed.')
+          } else {
+            setPlanValidationBanner('')
+          }
+        }
         const entry = { course: course.name || 'Profile brief', date: new Date().toISOString().slice(0, 10), plan: p, tee: course.selectedTee || '' }
         setSavedBriefs(prev => {
           const updated = [entry, ...prev].slice(0, 10)
@@ -1800,6 +1835,52 @@ Be direct. No filler. ALL 18 HOLES.`
                       </div>
                     </div>
 
+                    {/* Plan style selector — balanced / conservative / aggressive */}
+                    {course.name && (
+                      <div style={{ marginBottom: 20, textAlign: 'left', maxWidth: 500, margin: '0 auto 20px' }}>
+                        <p style={{ ...lbl, marginBottom: 8 }}>Strategy style</p>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+                          {[
+                            { id: 'conservative', label: 'Conservative', desc: 'Safe pars' },
+                            { id: 'balanced',     label: 'Balanced',     desc: 'Risk vs dispersion' },
+                            { id: 'aggressive',   label: 'Aggressive',   desc: 'Attack birdies' },
+                          ].map(s => {
+                            const active = planStyle === s.id
+                            return (
+                              <button key={s.id} onClick={() => setPlanStyle(s.id)} style={{
+                                background: active ? C.accentMuted : C.bgInput,
+                                border: `1px solid ${active ? C.accent : C.border}`,
+                                borderRadius: 8, padding: '8px 10px', cursor: 'pointer', textAlign: 'left',
+                                fontFamily: F,
+                              }}>
+                                <div style={{ fontSize: 12, fontWeight: 600, color: active ? C.accent : C.text }}>{s.label}</div>
+                                <div style={{ fontSize: 10, color: C.textFaint }}>{s.desc}</div>
+                              </button>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Course data quality preview */}
+                    {course.name && (() => {
+                      const issues = validateCourseTotals(course)
+                      const conf = rollupConfidence(course)
+                      const breakdown = Object.entries(conf.breakdown).map(([k, v]) => `${v} ${k.replace(/_/g, ' ')}`).join(', ')
+                      return (
+                        <div style={{ background: issues.length ? '#3a2a1c' : C.bgInput, border: `1px solid ${issues.length ? C.amber : C.border}`, borderRadius: 8, padding: '8px 12px', marginBottom: 16, textAlign: 'left' }}>
+                          <p style={{ fontSize: 11, color: C.textMuted, margin: 0 }}>
+                            <strong style={{ color: issues.length ? C.amber : C.green }}>Data:</strong> {breakdown || 'no holes'}
+                          </p>
+                          {issues.length > 0 && (
+                            <p style={{ fontSize: 11, color: C.amber, margin: '4px 0 0' }}>
+                              {issues.length} validation issue{issues.length === 1 ? '' : 's'}: {issues.slice(0, 3).join(', ')}{issues.length > 3 ? '…' : ''}
+                            </p>
+                          )}
+                        </div>
+                      )
+                    })()}
+
                     {enriching && (
                       <div role="status" aria-live="polite" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 16, padding: '8px 14px', background: C.blueMuted, border: `1px solid ${C.blue}33`, borderRadius: 8 }}>
                         <Spin /><span style={{ fontSize: 12, color: C.blue }}>{enrichStatus || 'Loading course data...'}</span>
@@ -1976,6 +2057,15 @@ Be direct. No filler. ALL 18 HOLES.`
                 {planError && (
                   <div style={{ ...card, borderColor: C.red, marginTop: 12 }}>
                     <p style={{ color: C.red, fontSize: 13, margin: 0 }}>⚠ {planError}</p>
+                  </div>
+                )}
+
+                {planValidationBanner && (
+                  <div style={{ ...card, borderColor: C.amber, marginTop: 12 }}>
+                    <p style={{ color: C.amber, fontSize: 13, margin: '0 0 8px', fontWeight: 600 }}>⚠ {planValidationBanner}</p>
+                    <button style={{ ...btnP, padding: '6px 14px', fontSize: 12 }} onClick={generate}>
+                      Regenerate
+                    </button>
                   </div>
                 )}
 
