@@ -11,7 +11,9 @@ import { C, F, card, inp, lbl, btnP, btnG } from './theme.js'
 import { useIsMobile, Badge, Spin, SectionHead, InfoBox, computeDataTier } from './components/ui.jsx'
 import UserMenu from './components/UserMenu.jsx'
 import { computeHoleTimes, getWeatherAtHour, windDir } from './lib/weather.js'
-import { fetchHoleDesignViaSearch, mergeDesignDataIntoHoles, searchGolfCourseAPI, normalizeGolfCourseAPICourse } from './lib/courseApi.js'
+import { fetchHoleDesignViaSearch, mergeDesignDataIntoHoles, searchGolfCourseAPI, normalizeGolfCourseAPICourse, geocodeViaClaudeSearch } from './lib/courseApi.js'
+import { ENRICH_STEP_IDS } from './lib/enrichSteps.js'
+import { STEP_STATES } from './lib/progress.js'
 import { loadCourseCache, getCachedCourse, setCachedCourse, cacheKey, saveCourseCache, removeCachedCourseByKey, purgeOrphanedLocalEntries } from './lib/courseCache.js'
 import { mergeUploadedScorecard, isSameCourseKey } from './lib/scorecardMerge.js'
 import AuthScreen from './screens/AuthScreen.jsx'
@@ -158,9 +160,12 @@ function AppInner({ user, session, onSignOut }) {
   const [coords,         setCoords]         = useState(null)
   const [cacheVersion,   setCacheVersion]   = useState(0)
 
-  // Enrichment loading state
+  // Enrichment loading state. `enriching` is the legacy boolean kept for the
+  // existing render sites; `enrichProgress` is the structured state consumed
+  // by the new ProgressTracker (Part 0.2 + 0.3 of the optimization plan).
   const [enriching,      setEnriching]      = useState(false)
   const [enrichStatus,   setEnrichStatus]   = useState('')
+  const [enrichProgress, setEnrichProgress] = useState({ states: {}, startsAt: {}, endsAt: {}, errors: {} })
 
   // Game plan
   const [plan,        setPlan]        = useState('')
@@ -346,19 +351,86 @@ function AppInner({ user, session, onSignOut }) {
     else setCoords(null)
   }, [])
 
+  // Auto-geocode at pick-time so OSM enrichment can start without waiting for
+  // the user to reach the Weather step. Part 0.2 of the optimization plan —
+  // shaves the geocode round-trip off the perceived enrichment latency for
+  // every Tier-3-feeling course whose scorecard came without coords.
+  const geocodeRef = useRef(null)
+  useEffect(() => {
+    if (!course.name || coords?.lat || coords?.lng) return
+    const authToken = session?.access_token || ''
+    if (!authToken) return
+    // Don't re-fire for the same (name, location) — Claude geocoding costs
+    // tokens and the user may have already declined a result.
+    const key = `${course.name}|${course.location || ''}`
+    if (geocodeRef.current === key) return
+    geocodeRef.current = key
+    const startedAt = Date.now()
+    setEnrichProgress(prev => ({
+      ...prev,
+      states:   { ...prev.states,   [ENRICH_STEP_IDS.GEOCODE]: STEP_STATES.RUNNING },
+      startsAt: { ...prev.startsAt, [ENRICH_STEP_IDS.GEOCODE]: startedAt },
+    }))
+    let cancelled = false
+    ;(async () => {
+      try {
+        const c = await geocodeViaClaudeSearch(authToken, course.name, course.location || '')
+        if (cancelled) return
+        if (c?.lat && c?.lng) {
+          setCoords({ lat: c.lat, lng: c.lng })
+          setEnrichProgress(prev => ({
+            ...prev,
+            states: { ...prev.states, [ENRICH_STEP_IDS.GEOCODE]: STEP_STATES.DONE },
+            endsAt: { ...prev.endsAt, [ENRICH_STEP_IDS.GEOCODE]: Date.now() },
+          }))
+        }
+      } catch (e) {
+        if (cancelled) return
+        setEnrichProgress(prev => ({
+          ...prev,
+          states: { ...prev.states, [ENRICH_STEP_IDS.GEOCODE]: STEP_STATES.ERROR },
+          endsAt: { ...prev.endsAt, [ENRICH_STEP_IDS.GEOCODE]: Date.now() },
+          errors: { ...prev.errors, [ENRICH_STEP_IDS.GEOCODE]: e.message },
+        }))
+      }
+    })()
+    return () => { cancelled = true }
+  }, [course.name, course.location, coords?.lat, coords?.lng, session])
+
   // Enrich course with OSM/web design data (parallelized with retry + UI feedback)
   const enrichLoadIdRef = useRef(0)
+  // Helper: record per-step state for the ProgressTracker. Pure-ish — only
+  // affects enrichProgress; the rest of the enrichment effect stays unchanged.
+  const markStep = useCallback((id, state, patch = {}) => {
+    setEnrichProgress(prev => ({
+      states:   { ...prev.states,   [id]: state },
+      startsAt: patch.startedAt != null ? { ...prev.startsAt, [id]: patch.startedAt } : prev.startsAt,
+      endsAt:   patch.endedAt   != null ? { ...prev.endsAt,   [id]: patch.endedAt }   : prev.endsAt,
+      errors:   patch.error     != null ? { ...prev.errors,   [id]: patch.error }     : prev.errors,
+    }))
+  }, [])
+
   useEffect(() => {
     if (!course.name || !coords?.lat || !coords?.lng || course.osmEnriched) return
     const myId = ++enrichLoadIdRef.current
     const ctrl = new AbortController()
     setEnriching(true)
     setEnrichStatus('Loading course design data...')
+    // Reset the tracker. Whatever happened on the prior course is no longer
+    // interesting; the geocode step is marked DONE here because by the time
+    // this effect fires we already have coords (either supplied or geocoded).
+    setEnrichProgress({
+      states:   { [ENRICH_STEP_IDS.GEOCODE]: STEP_STATES.DONE },
+      startsAt: {},
+      endsAt:   {},
+      errors:   {},
+    })
     ;(async () => {
       let osmWorked = false
 
       // Phase 1: OSM enrichment + geometry export (Tier 1/2/3 classifier)
       setEnrichStatus('Fetching hazard data from OpenStreetMap...')
+      markStep(ENRICH_STEP_IDS.OSM, STEP_STATES.RUNNING, { startedAt: Date.now() })
       // Cached geometry first — avoid a second Overpass hit on the same course.
       let cachedGeo = null
       try { cachedGeo = await getCachedGeo(course.name, course.location) } catch {}
@@ -371,6 +443,7 @@ function AppInner({ user, session, onSignOut }) {
           tier: cachedGeo.tier,
         }))
       }
+      let osmLastError = null
       for (let attempt = 0; attempt < 2; attempt++) {
         if (ctrl.signal.aborted || myId !== enrichLoadIdRef.current) return
         try {
@@ -412,6 +485,11 @@ function AppInner({ user, session, onSignOut }) {
               })
               const updated = { ...prev, holes: merged, osmEnriched: true, geojson: geojson.features?.length ? geojson : null, bboxByHole, coverage, tier }
               setCachedCourse(updated)
+              // Write-through: persist the enriched course shape to Supabase
+              // so the next client (or session) hits this row instantly rather
+              // than re-running the OSM ladder. Part 0.2 of the optimization
+              // plan. Fire-and-forget; local cache already succeeded.
+              setCachedCourseDB(updated).catch(() => {})
               return updated
             })
             // Persist geometry separately (course_cache stores the AI-facing
@@ -427,16 +505,24 @@ function AppInner({ user, session, onSignOut }) {
             } catch {}
           }
           break
-        } catch {
+        } catch (e) {
+          osmLastError = e
           if (attempt === 0) setEnrichStatus('Retrying OSM data...')
         }
       }
+      markStep(
+        ENRICH_STEP_IDS.OSM,
+        osmWorked ? STEP_STATES.DONE : (osmLastError ? STEP_STATES.ERROR : STEP_STATES.SKIPPED),
+        { endedAt: Date.now(), error: osmLastError ? osmLastError.message : undefined },
+      )
 
       // Phase 2: Web search enrichment (if OSM coverage is sparse)
       const authToken = session?.access_token || ''
       const holesWithDesign = course.holes.filter(h => h.osmDesign?.hazards?.length > 0 || h.notes).length
       if (holesWithDesign < 9 && authToken) {
         setEnrichStatus('Searching for hole design details...')
+        markStep(ENRICH_STEP_IDS.DESIGN, STEP_STATES.RUNNING, { startedAt: Date.now() })
+        let designDone = false, designErr = null
         for (let attempt = 0; attempt < 2; attempt++) {
           if (ctrl.signal.aborted || myId !== enrichLoadIdRef.current) return
           try {
@@ -447,14 +533,26 @@ function AppInner({ user, session, onSignOut }) {
                 const mergedHoles = mergeDesignDataIntoHoles(prev.holes, designData)
                 const updated = { ...prev, holes: mergedHoles, webDesignSource: designData.source || 'web search', osmEnriched: true }
                 setCachedCourse(updated)
+                // Write-through to Supabase so the next user skips this
+                // 5–6 s Claude call entirely. Part 0.2.
+                setCachedCourseDB(updated).catch(() => {})
                 return updated
               })
+              designDone = true
             }
             break
-          } catch {
+          } catch (e) {
+            designErr = e
             if (attempt === 0) setEnrichStatus('Retrying design search...')
           }
         }
+        markStep(
+          ENRICH_STEP_IDS.DESIGN,
+          designDone ? STEP_STATES.DONE : (designErr ? STEP_STATES.ERROR : STEP_STATES.SKIPPED),
+          { endedAt: Date.now(), error: designErr ? designErr.message : undefined },
+        )
+      } else {
+        markStep(ENRICH_STEP_IDS.DESIGN, STEP_STATES.SKIPPED)
       }
 
       if (!osmWorked && myId === enrichLoadIdRef.current) {
@@ -465,15 +563,20 @@ function AppInner({ user, session, onSignOut }) {
       // only data source for many Tier 3 courses, and a cheap LS/Supabase
       // lookup. Contributions flow into the rendered geojson via the memo
       // below; nothing else needs to know about them.
+      markStep(ENRICH_STEP_IDS.CONTRIB, STEP_STATES.RUNNING, { startedAt: Date.now() })
       try {
         const contrib = await getContrib(course.name, course.location)
         if (myId === enrichLoadIdRef.current && contrib && Object.keys(contrib).length) {
           setCourse(prev => ({ ...prev, contribByRef: contrib }))
         }
-      } catch {}
+        markStep(ENRICH_STEP_IDS.CONTRIB, STEP_STATES.DONE, { endedAt: Date.now() })
+      } catch (e) {
+        markStep(ENRICH_STEP_IDS.CONTRIB, STEP_STATES.ERROR, { endedAt: Date.now(), error: e.message })
+      }
 
       // Phase 4: Per-hole hazard intelligence (yardage-book vision pass).
       // Cheap structured lookup — vision was paid once per course upstream.
+      markStep(ENRICH_STEP_IDS.HAZARDS, STEP_STATES.RUNNING, { startedAt: Date.now() })
       try {
         const hazardsByRef = await loadCourseHazards(course.name, course.location)
         if (myId === enrichLoadIdRef.current && hazardsByRef && Object.keys(hazardsByRef).length) {
@@ -486,7 +589,10 @@ function AppInner({ user, session, onSignOut }) {
             hazardsLoaded: true,
           }))
         }
-      } catch {}
+        markStep(ENRICH_STEP_IDS.HAZARDS, STEP_STATES.DONE, { endedAt: Date.now() })
+      } catch (e) {
+        markStep(ENRICH_STEP_IDS.HAZARDS, STEP_STATES.ERROR, { endedAt: Date.now(), error: e.message })
+      }
 
       if (myId === enrichLoadIdRef.current) {
         setEnriching(false)
@@ -1198,6 +1304,7 @@ Be direct. No filler. ALL 18 HOLES.`
             setPlanView={setPlanView}
             enriching={enriching}
             enrichStatus={enrichStatus}
+            enrichProgress={enrichProgress}
             selectedModel={selectedModel}
             setSelectedModel={setSelectedModel}
             copied={copied}
