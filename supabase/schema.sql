@@ -120,7 +120,11 @@ alter table public.api_usage
   add column if not exists input_tokens          integer,
   add column if not exists output_tokens         integer,
   add column if not exists cache_read_tokens     integer,
-  add column if not exists cache_creation_tokens integer;
+  add column if not exists cache_creation_tokens integer,
+  -- Per-phase wall-clock durations (Part 0.4 of the optimization plan).
+  -- jsonb of { [stepId]: durationMs } captured server-side when a request
+  -- finishes; the admin Usage tab charts p50/p95 off this column.
+  add column if not exists phase_durations       jsonb;
 
 alter table public.api_usage enable row level security;
 
@@ -385,6 +389,13 @@ create table if not exists public.rec_log (
   output_tokens   integer,
   created_at      timestamptz not null default now()
 );
+
+-- Migration (idempotent): per-phase wall-clock durations for the generation
+-- pipeline (rate-limit check, prompt build, model stream, audit write).
+-- Part 0.4 of the optimization plan — feeds the loading-UI expected-time bands
+-- and the admin Usage dashboard.
+alter table public.rec_log
+  add column if not exists phase_durations jsonb;
 
 create index if not exists rec_log_user_time_idx on public.rec_log(user_id, created_at desc);
 create index if not exists rec_log_course_idx    on public.rec_log(course_key, created_at desc);
