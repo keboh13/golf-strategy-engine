@@ -6,6 +6,7 @@ import { C, F, card, inp, lbl, btnP, btnG } from '../theme.js'
 import { Badge, Spin, SectionHead, DataAccuracyTier } from '../components/ui.jsx'
 import ProgressTracker from '../components/ProgressTracker.jsx'
 import { ENRICH_STEPS } from '../lib/enrichSteps.js'
+import { GENERATION_STEPS } from '../lib/generationPhases.js'
 import GreenView from '../components/GreenView.jsx'
 import CourseHoleMap from '../components/CourseHoleMap.jsx'
 import CourseSearch from '../components/CourseSearch.jsx'
@@ -36,6 +37,7 @@ export default function PrepTab({
   planView, setPlanView,
   enriching, enrichStatus,
   enrichProgress = { states: {}, startsAt: {}, endsAt: {}, errors: {} },
+  genProgress    = { states: {}, startsAt: {}, endsAt: {}, errors: {} },
   selectedModel, setSelectedModel,
   copied,
   currentHole, setCurrentHole,
@@ -315,10 +317,17 @@ export default function PrepTab({
 
           {/* Loading / streaming state */}
           {planLoading && (
-            <div style={{ ...card, padding: '2rem', textAlign: 'center' }}>
-              <div role="status" aria-live="polite" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, marginBottom: 16 }}>
-                <Spin /><span style={{ fontSize: 14, color: C.textMuted }}>{planPhase || 'Generating'}...</span>
-                <button onClick={cancelGenerate} style={{ ...btnG, padding: '4px 12px', fontSize: 11, minHeight: 44, minWidth: 44 }} aria-label="Cancel generation">Cancel</button>
+            <div style={{ ...card, padding: '2rem' }}>
+              <div style={{ marginBottom: 16 }}>
+                <ProgressTracker
+                  steps={GENERATION_STEPS}
+                  states={genProgress.states}
+                  startsAt={genProgress.startsAt}
+                  endsAt={genProgress.endsAt}
+                  errors={genProgress.errors}
+                  onCancel={cancelGenerate}
+                  cancelLabel="Cancel generation"
+                />
               </div>
               {plan && (
                 <div style={{ textAlign: 'left' }}>

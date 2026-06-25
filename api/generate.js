@@ -5,6 +5,8 @@
 //   SUPABASE_SERVICE_ROLE_KEY — from Supabase project settings (secret, never expose to browser)
 //   RATE_LIMIT_PER_DAY       — optional, defaults to 20
 
+import { findPhaseMarkers, recordPhaseDurations } from '../src/lib/generationPhases.js'
+
 export const config = { runtime: 'edge' }
 
 const CORS_HEADERS = {
@@ -226,6 +228,12 @@ export default async function handler(req) {
       let buf = ''
       let responseText = ''
       let inputTokens = 0, outputTokens = 0, cacheReadTokens = 0, cacheCreationTokens = 0
+      // Phase tracker (Part 0.2 + 0.4 of the optimization plan). We watch the
+      // assembled responseText for `[[PHASE: id]]` markers and stamp first-
+      // appearance wall-clock for each; phase_durations lands on rec_log.
+      const streamStartedAt = Date.now()
+      const seenMarkers = new Set()
+      const markerTimestamps = []
       const reader = upstream.body.getReader()
       try {
         while (true) {
@@ -246,6 +254,13 @@ export default async function handler(req) {
               }
               if (j.type === 'content_block_delta' && j.delta?.text) {
                 responseText += j.delta.text
+                // Cheap incremental check — only inspect the marker ids we've
+                // accumulated so far; the per-marker Set dedupes.
+                for (const id of findPhaseMarkers(responseText)) {
+                  if (seenMarkers.has(id)) continue
+                  seenMarkers.add(id)
+                  markerTimestamps.push({ id, ts: Date.now() })
+                }
               }
               if (j.type === 'message_delta' && j.usage) {
                 outputTokens = j.usage.output_tokens || 0
@@ -254,6 +269,14 @@ export default async function handler(req) {
           }
         }
       } finally {
+        // Roll up per-phase wall-clock now that the stream has closed (or
+        // errored). Both api_usage and rec_log receive the same object so the
+        // admin Usage tab can pivot on either table later.
+        const phaseDurations = recordPhaseDurations({
+          startedAt: streamStartedAt,
+          endedAt: Date.now(),
+          markers: markerTimestamps,
+        })
         // Persist token counts before closing so the admin panel can surface them
         if (recordId && supabaseUrl && supabaseServiceKey) {
           await fetch(`${supabaseUrl}/rest/v1/api_usage?id=eq.${recordId}`, {
@@ -268,6 +291,7 @@ export default async function handler(req) {
               output_tokens: outputTokens,
               cache_read_tokens: cacheReadTokens,
               cache_creation_tokens: cacheCreationTokens,
+              phase_durations: phaseDurations,
             }),
           }).catch(() => { /* non-fatal */ })
         }
@@ -289,6 +313,7 @@ export default async function handler(req) {
               response: responseText,
               input_tokens: inputTokens,
               output_tokens: outputTokens,
+              phase_durations: phaseDurations,
             }),
           }).catch((e) => { console.warn('[rec_log] insert failed:', e?.message) })
         }
