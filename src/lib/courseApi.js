@@ -14,14 +14,14 @@ export async function geocodeViaClaudeSearch(authToken, courseName, location) {
   throw new Error('Could not parse coordinates from response')
 }
 
-export async function searchOpenGolfAPI(query) {
-  const res = await fetch(`https://api.opengolfapi.org/v1/courses/search?q=${encodeURIComponent(query)}&limit=5`)
+export async function searchOpenGolfAPI(query, { signal } = {}) {
+  const res = await fetch(`https://api.opengolfapi.org/v1/courses/search?q=${encodeURIComponent(query)}&limit=5`, { signal })
   if (!res.ok) throw new Error(`OpenGolfAPI search error: ${res.status}`)
   return res.json()
 }
 
-export async function fetchOpenGolfAPICourse(id) {
-  const res = await fetch(`https://api.opengolfapi.org/v1/courses/${id}`)
+export async function fetchOpenGolfAPICourse(id, { signal } = {}) {
+  const res = await fetch(`https://api.opengolfapi.org/v1/courses/${id}`, { signal })
   if (!res.ok) throw new Error(`OpenGolfAPI course fetch error: ${res.status}`)
   return res.json()
 }
@@ -73,7 +73,7 @@ export function normalizeOpenGolfCourse(raw) {
   }
 }
 
-export async function searchGolfCourseAPI(query, authToken) {
+export async function searchGolfCourseAPI(query, authToken, { signal } = {}) {
   const res = await fetch('/api/course-search', {
     method: 'POST',
     headers: {
@@ -81,6 +81,7 @@ export async function searchGolfCourseAPI(query, authToken) {
       ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
     },
     body: JSON.stringify({ query }),
+    signal,
   })
   if (!res.ok) {
     const data = await res.json().catch(() => ({}))
@@ -128,7 +129,7 @@ export function normalizeGolfCourseAPICourse(raw, selectedTee) {
   }
 }
 
-export async function fetchScorecardViaClaudeSearch(authToken, courseName, location) {
+export async function fetchScorecardViaClaudeSearch(authToken, courseName, location, { signal } = {}) {
   const res = await fetch('/api/course-ai', {
     method: 'POST',
     headers: {
@@ -136,13 +137,14 @@ export async function fetchScorecardViaClaudeSearch(authToken, courseName, locat
       ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
     },
     body: JSON.stringify({ action: 'scorecard-search', courseName, location: location || '' }),
+    signal,
   })
   const data = await res.json()
   if (!res.ok || data.error) throw new Error(data.error || 'Scorecard search failed')
   return { ...data.result, source: data.result.source || 'web search' }
 }
 
-export async function fetchYardageBookViaClaudeSearch(authToken, courseName, location) {
+export async function fetchYardageBookViaClaudeSearch(authToken, courseName, location, { signal } = {}) {
   const res = await fetch('/api/course-ai', {
     method: 'POST',
     headers: {
@@ -150,6 +152,7 @@ export async function fetchYardageBookViaClaudeSearch(authToken, courseName, loc
       ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
     },
     body: JSON.stringify({ action: 'yardage-book', courseName, location: location || '' }),
+    signal,
   })
   const data = await res.json()
   if (!res.ok || data.error) throw new Error(data.error || 'Yardage-book search failed')
