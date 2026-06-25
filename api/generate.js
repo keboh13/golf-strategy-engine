@@ -5,9 +5,35 @@
 //   SUPABASE_SERVICE_ROLE_KEY — from Supabase project settings (secret, never expose to browser)
 //   RATE_LIMIT_PER_DAY       — optional, defaults to 20
 
-import { findPhaseMarkers, recordPhaseDurations } from '../src/lib/generationPhases.js'
-
 export const config = { runtime: 'edge' }
+
+// Phase marker helpers — duplicated here (rather than imported from src/lib)
+// because Vercel's edge bundler is finicky about cross-directory imports and
+// these are <20 LOC. Kept in sync with src/lib/generationPhases.js, which has
+// the unit tests.
+const PHASE_MARKER_RE = /\[\[\s*PHASE\s*:\s*([a-zA-Z_-]+)\s*\]\]\s*\n?/g
+function findPhaseMarkers(text) {
+  if (!text) return []
+  const out = []
+  PHASE_MARKER_RE.lastIndex = 0
+  let m
+  while ((m = PHASE_MARKER_RE.exec(text)) !== null) out.push(m[1])
+  return out
+}
+function recordPhaseDurations({ startedAt, endedAt, markers = [] }) {
+  if (typeof startedAt !== 'number' || typeof endedAt !== 'number' || endedAt < startedAt) return {}
+  const out = {}
+  let prevTs = startedAt
+  let prevId = 'strategy'
+  for (const m of markers) {
+    if (!m || typeof m.ts !== 'number' || m.ts < prevTs) continue
+    out[prevId] = m.ts - prevTs
+    prevTs = m.ts
+    prevId = m.id
+  }
+  out[prevId] = Math.max(0, endedAt - prevTs)
+  return out
+}
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin':  process.env.ALLOWED_ORIGIN || '*',
