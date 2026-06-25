@@ -24,7 +24,13 @@ async function validateAuth(req) {
 
   const supabaseUrl = process.env.SUPABASE_URL
   const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-  if (!supabaseUrl || !supabaseServiceKey) return 'dev-user'
+  if (!supabaseUrl || !supabaseServiceKey) {
+    // Only allow the no-Supabase dev shortcut outside production. In prod
+    // a missing env var must fail closed — otherwise any non-empty Bearer
+    // token bypasses auth and bills the paid GolfCourseAPI proxy.
+    if (process.env.NODE_ENV === 'production' || process.env.VERCEL_ENV === 'production') return null
+    return 'dev-user'
+  }
 
   try {
     const res = await fetch(`${supabaseUrl}/auth/v1/user`, {
