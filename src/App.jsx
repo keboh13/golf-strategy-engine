@@ -28,6 +28,14 @@ import AdminCourseEditor from './components/AdminCourseEditor.jsx'
 import OnboardingScreen from './screens/OnboardingScreen.jsx'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import {
+  ENV_MAPS_KEY,
+  LS_PLAYER, LS_HISTORY, LS_KEYS, LS_PROFILES, LS_CURRENT_PROFILE, LS_COURSE_CACHE, LS_MODEL,
+  AVAILABLE_MODELS,
+  DEFAULT_CLUBS, DEFAULT_PLAYER,
+  loadProfiles, saveProfiles, loadSavedKeys, saveKeys,
+  clubsFromProfile, stripClubs,
+} from './lib/appConstants.js'
 
 // ─── Error boundary ───────────────────────────────────────────────────────────
 class ErrorBoundary extends Component {
@@ -58,91 +66,6 @@ class ErrorBoundary extends Component {
       </div>
     )
   }
-}
-
-// ─── Env keys (set in .env) ───────────────────────────────────────────────────
-// ─── Env keys (set in .env) ───────────────────────────────────────────────────
-const ENV_MAPS_KEY = import.meta.env.VITE_GOOGLE_MAPS_KEY || ''
-
-// ─── Model ────────────────────────────────────────────────────────────────────
-const MODEL = 'claude-sonnet-4-6'
-
-// ─── localStorage keys ────────────────────────────────────────────────────────
-const LS_PLAYER   = 'gse_player'
-const LS_HISTORY  = 'gse_history'
-const LS_KEYS     = 'gse_keys'
-const LS_PROFILES = 'gse_profiles'
-const LS_CURRENT_PROFILE = 'gse_current_profile'
-const LS_COURSE_CACHE    = 'gse_course_cache'
-const LS_MODEL           = 'gse_model'
-
-// ─── AI models available for plan generation ──────────────────────────────────
-const AVAILABLE_MODELS = [
-  { id: 'claude-haiku-4-5-20251001', name: 'Haiku',   desc: 'Fastest · Good for quick briefs',          tier: 'Free',     speed: '~8s',  cost: '$' },
-  { id: 'claude-sonnet-4-6',         name: 'Sonnet',  desc: 'Balanced · Recommended (default)',          tier: 'Standard', speed: '~15s', cost: '$$' },
-  { id: 'claude-opus-4-8',           name: 'Opus',    desc: 'Most capable · Deeper analysis',            tier: 'Premium',  speed: '~30s', cost: '$$$' },
-  { id: 'claude-fable-5',            name: 'Fable 5', desc: 'Flagship · Best strategy & reasoning',      tier: 'Premium',  speed: '~25s', cost: '$$$' },
-]
-
-function loadProfiles() {
-  try { return JSON.parse(localStorage.getItem(LS_PROFILES)) || {} } catch { return {} }
-}
-function saveProfiles(obj) {
-  try { localStorage.setItem(LS_PROFILES, JSON.stringify(obj)) } catch {}
-}
-
-// Migrate legacy single-player data into profiles on first run
-;(function migrateLegacy() {
-  const profiles = loadProfiles()
-  if (Object.keys(profiles).length === 0) {
-    try {
-      const legacy = JSON.parse(localStorage.getItem(LS_PLAYER))
-      if (legacy) { profiles['Default'] = legacy; saveProfiles(profiles) }
-    } catch {}
-  }
-})()
-
-function loadSavedKeys() {
-  try { return JSON.parse(localStorage.getItem(LS_KEYS)) || {} } catch { return {} }
-}
-function saveKeys(obj) {
-  try { localStorage.setItem(LS_KEYS, JSON.stringify(obj)) } catch {}
-}
-
-// ─── Default club distances (starting point for new profiles — saved with the profile) ──
-const DEFAULT_CLUBS = [
-  { club: 'Driver',          carry: 275, shape: 'Slight fade' },
-  { club: '3-wood',          carry: 245, shape: 'Fade'        },
-  { club: '5-wood',          carry: 230, shape: 'Fade'        },
-  { club: '4-iron / hybrid', carry: 210, shape: 'Straight'    },
-  { club: '5-iron',          carry: 195, shape: 'Straight'    },
-  { club: '6-iron',          carry: 180, shape: 'Straight'    },
-  { club: '7-iron',          carry: 165, shape: 'Draw'        },
-  { club: '8-iron',          carry: 150, shape: 'Draw'        },
-  { club: '9-iron',          carry: 135, shape: 'Draw'        },
-  { club: 'PW',              carry: 120, shape: 'Draw'        },
-  { club: 'GW (50°)',        carry: 105, shape: 'Straight'    },
-  { club: 'SW (56°)',        carry:  85, shape: 'Straight'    },
-  { club: 'LW (60°)',        carry:  65, shape: 'Straight'    },
-]
-
-// Clubs ride inside the persisted profile blob (localStorage + Supabase player_data).
-// These helpers split that blob back into clubs and clubs-free player info.
-function clubsFromProfile(data) {
-  return (data && Array.isArray(data.clubs) && data.clubs.length > 0) ? data.clubs : DEFAULT_CLUBS
-}
-function stripClubs(data) {
-  if (!data || typeof data !== 'object') return data
-  const { clubs: _ignored, ...info } = data
-  return info
-}
-
-const DEFAULT_PLAYER = {
-  name: '', handicap: '4.2', ghin: '',
-  handedness: 'Right',
-  miss: 'Both (fade misses right under pressure)',
-  ballFlight: 'Fade', swingNotes: '',
-  goals: '', strengths: '',
 }
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
