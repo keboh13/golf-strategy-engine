@@ -9,6 +9,7 @@ import { fetchOSMCourseData, enrichHolesWithOSM, exportCourseGeoJSON, classifyTi
 import { computeHoleDistances, formatDistancesLine, simplifyAndTrimGeoJSON } from './lib/courseGeometry.js'
 import { getCachedGeo, setCachedGeo } from './lib/courseGeoCache.js'
 import { getContrib, saveContrib, mergeContribIntoGeojson } from './lib/holeContributions.js'
+import { extractGreenForHole, mergeGreen } from './lib/greenGeometry.js'
 import { C, F, card, inp, lbl, btnP, btnG } from './theme.js'
 import { useIsMobile, Badge, Spin, SectionHead, InfoBox, computeDataTier, DataAccuracyTier } from './components/ui.jsx'
 import GreenView from './components/GreenView.jsx'
@@ -2002,6 +2003,13 @@ Be direct. No filler. ALL 18 HOLES.`
                               coverage={course?.coverage}
                               tier={course?.tier}
                               holes={parsedHoles.holes}
+                              extraHazardsByHole={(() => {
+                                const out = {}
+                                for (const h of (course?.holes || [])) {
+                                  if (h?.hzDesign?.hazards?.length) out[h.ref || h.num] = h.hzDesign
+                                }
+                                return out
+                              })()}
                               selectedHole={num}
                               onSelectHole={(n) => {
                                 const idx = parsedHoles.holes.findIndex(h => h.num === n)
@@ -2012,7 +2020,12 @@ Be direct. No filler. ALL 18 HOLES.`
                             />
                           )
                         })()}
-                        <GreenView green={parsedHoles.holes[currentHole]?.green} holeNum={parsedHoles.holes[currentHole]?.num} />
+                        {(() => {
+                          const h = parsedHoles.holes[currentHole]
+                          if (!h?.num) return null
+                          const osmGreen = extractGreenForHole(displayGeo.geojson, h.num)
+                          return <GreenView green={mergeGreen(h.green, osmGreen)} holeNum={h.num} />
+                        })()}
                         {(() => {
                           const hNum = parsedHoles.holes[currentHole]?.num; if (!hNum) return null
                           const parMatch = (parsedHoles.holes[currentHole]?.content || '').match(/Par\s+(\d)/i)
@@ -2039,12 +2052,15 @@ Be direct. No filler. ALL 18 HOLES.`
                   ) : parsedHoles.holes.length > 0 ? (
                     <div>
                       {parsedHoles.preamble.trim() && <div style={{ ...card, marginBottom: 12 }}>{renderPlan(parsedHoles.preamble)}</div>}
-                      {parsedHoles.holes.map((h) => (
-                        <div key={h.num} style={{ ...card, marginBottom: 12 }}>
-                          {renderPlan(h.content)}
-                          <GreenView green={h.green} holeNum={h.num} />
-                        </div>
-                      ))}
+                      {parsedHoles.holes.map((h) => {
+                        const osmGreen = extractGreenForHole(displayGeo.geojson, h.num)
+                        return (
+                          <div key={h.num} style={{ ...card, marginBottom: 12 }}>
+                            {renderPlan(h.content)}
+                            <GreenView green={mergeGreen(h.green, osmGreen)} holeNum={h.num} />
+                          </div>
+                        )
+                      })}
                       {parsedHoles.postamble.trim() && <div style={{ ...card, marginTop: 0 }}>{renderPlan(parsedHoles.postamble)}</div>}
                     </div>
                   ) : (
@@ -2828,10 +2844,6 @@ function AuthGate() {
         console.warn('[onboarding] save error:', e.message)
       }
     }
-    setPlayerInfo(stripClubs({ ...player, clubs: onboardClubs }))
-    setClubs(onboardClubs)
-    if (golfApiKey) setGolfKey(golfApiKey)
-    setDbLoaded(true)
     setNeedsOnboarding(false)
   }
 

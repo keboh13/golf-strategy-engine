@@ -78,6 +78,9 @@ export default function CourseHoleMap({
   onSelectHole,     // (ref) => void
   onContribute,     // async ({ ref, teeLng, teeLat, pinLng, pinLat }) => void
   contributedHoles, // Set<number> | undefined — which holes have a contribution
+  extraHazardsByHole, // optional { [ref]: hzDesign } — vision-extracted hazards
+                      // surfaced as a chip-list when OSM doesn't cover this hole.
+                      // (No lat/lng → can't render as map markers.)
 }) {
   const containerRef = useRef(null)
   const mapRef = useRef(null)
@@ -465,6 +468,41 @@ export default function CourseHoleMap({
           ))}
         </div>
       )}
+
+      {/* Vision-extracted hazards from the yardage-book PDF — shown only when
+          OSM doesn't already cover bunkers/water for this hole (i.e. the map
+          shows no hazard polygons). hzDesign hazards have no lat/lng, so we
+          render them as a chip-list under the map rather than as markers. */}
+      {(() => {
+        if (selectedHole == null) return null
+        const extra = extraHazardsByHole?.[selectedHole]
+        const hazards = extra?.hazards
+        if (!Array.isArray(hazards) || !hazards.length) return null
+        const osmHasHazards = !!(cov?.bunker || cov?.water)
+        if (osmHasHazards) return null
+        return (
+          <div style={{ marginTop: 10, padding: '8px 12px', borderRadius: 8, background: C.bgInput, border: `1px dashed ${C.amber}` }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+              <span style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: C.textMuted }}>Hazards (yardage book)</span>
+              <span style={{ fontSize: 9, color: C.amber, fontStyle: 'italic' }}>approx — not mapped to satellite</span>
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {hazards.map((hz, i) => {
+                const carry = hz.carry_yards ? ` · ${hz.carry_yards}y carry` : ''
+                const tone = hz.type === 'water' ? 'water' : hz.type === 'bunker' ? 'sand' : null
+                return (
+                  <DistChip
+                    key={i}
+                    label={`${hz.type}${hz.side ? ' ' + hz.side : ''}`}
+                    value={hz.carry_yards ? `${hz.carry_yards}y` : (hz.notes || '—')}
+                    tone={tone}
+                  />
+                )
+              })}
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }
