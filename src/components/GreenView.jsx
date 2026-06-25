@@ -1,33 +1,60 @@
 import { C, F } from '../theme.js'
+import { polygonToSvgPath } from '../lib/greenGeometry.js'
 
 export default function GreenView({ green, holeNum }) {
   if (!green) return null
   const FIXED_W = 320, FIXED_H = 290
   const cx = FIXED_W / 2, cy = 135
 
-  const greenW = 140
-  const greenH = 100
+  // Compute the rendered green's bounding box in pixels. When a real polygon
+  // is available (OSM-derived via mergeGreen → greenGeometry.extractGreenForHole),
+  // use its exact outline. Otherwise fall back to a schematic shape scaled by
+  // green.width_y / green.depth_y (yards).
+  let greenPath
+  let greenW, greenH
+  const usingRealPolygon = Array.isArray(green.polygonRingM) && green.polygonRingM.length >= 3
 
-  const shapes = {
-    kidney: (cx, cy, w, h) => {
-      const hw = w / 2, hh = h / 2
-      return `M${cx - hw},${cy} C${cx - hw},${cy - hh * 1.1} ${cx - hw * 0.3},${cy - hh} ${cx},${cy - hh} C${cx + hw * 0.5},${cy - hh} ${cx + hw},${cy - hh * 0.7} ${cx + hw},${cy - hh * 0.2} C${cx + hw},${cy + hh * 0.3} ${cx + hw * 0.6},${cy + hh} ${cx},${cy + hh} C${cx - hw * 0.4},${cy + hh} ${cx - hw},${cy + hh * 0.6} ${cx - hw},${cy} Z`
-    },
-    oval: (cx, cy, w, h) => {
-      const hw = w / 2, hh = h / 2
-      return `M${cx},${cy - hh} C${cx + hw},${cy - hh} ${cx + hw},${cy + hh} ${cx},${cy + hh} C${cx - hw},${cy + hh} ${cx - hw},${cy - hh} ${cx},${cy - hh} Z`
-    },
-    round: (cx, cy, w, h) => {
-      const r = Math.min(w, h) / 2
-      return `M${cx},${cy - r} A${r},${r} 0 1,1 ${cx},${cy + r} A${r},${r} 0 1,1 ${cx},${cy - r} Z`
-    },
-    oblong: (cx, cy, w, h) => {
-      const hw = w / 2, hh = h / 2, r = Math.min(hw, hh * 0.5)
-      return `M${cx - hw + r},${cy - hh} L${cx + hw - r},${cy - hh} A${r},${r} 0 0,1 ${cx + hw},${cy - hh + r} L${cx + hw},${cy + hh - r} A${r},${r} 0 0,1 ${cx + hw - r},${cy + hh} L${cx - hw + r},${cy + hh} A${r},${r} 0 0,1 ${cx - hw},${cy + hh - r} L${cx - hw},${cy - hh + r} A${r},${r} 0 0,1 ${cx - hw + r},${cy - hh} Z`
-    },
+  if (usingRealPolygon) {
+    // Path is centred around (FIXED_W/2, FIXED_H/2). Re-anchor at our cy.
+    const path = polygonToSvgPath(green.polygonRingM, FIXED_W, 220, 14)
+    greenPath = shiftPathY(path, cy - FIXED_H / 2)
+    // Approximate width/depth in pixels for hazard/pin positioning. Same uniform
+    // scale used in polygonToSvgPath (preserves aspect).
+    const dims = ringPixelDims(green.polygonRingM, FIXED_W, 220, 14)
+    greenW = dims.w
+    greenH = dims.h
+  } else {
+    // Schematic mode: scale a template shape by the AI-supplied yardages so
+    // the green at least reflects the dimensions we do know (the old code
+    // hardcoded greenW=140, greenH=100 regardless).
+    const wY = clampNum(green.width_y, 12, 60, 24)
+    const dY = clampNum(green.depth_y, 12, 60, 28)
+    const maxW = 220, maxH = 150
+    const pxPerY = Math.min(maxW / wY, maxH / dY)
+    greenW = Math.round(wY * pxPerY)
+    greenH = Math.round(dY * pxPerY)
+
+    const shapes = {
+      kidney: (cx, cy, w, h) => {
+        const hw = w / 2, hh = h / 2
+        return `M${cx - hw},${cy} C${cx - hw},${cy - hh * 1.1} ${cx - hw * 0.3},${cy - hh} ${cx},${cy - hh} C${cx + hw * 0.5},${cy - hh} ${cx + hw},${cy - hh * 0.7} ${cx + hw},${cy - hh * 0.2} C${cx + hw},${cy + hh * 0.3} ${cx + hw * 0.6},${cy + hh} ${cx},${cy + hh} C${cx - hw * 0.4},${cy + hh} ${cx - hw},${cy + hh * 0.6} ${cx - hw},${cy} Z`
+      },
+      oval: (cx, cy, w, h) => {
+        const hw = w / 2, hh = h / 2
+        return `M${cx},${cy - hh} C${cx + hw},${cy - hh} ${cx + hw},${cy + hh} ${cx},${cy + hh} C${cx - hw},${cy + hh} ${cx - hw},${cy - hh} ${cx},${cy - hh} Z`
+      },
+      round: (cx, cy, w, h) => {
+        const r = Math.min(w, h) / 2
+        return `M${cx},${cy - r} A${r},${r} 0 1,1 ${cx},${cy + r} A${r},${r} 0 1,1 ${cx},${cy - r} Z`
+      },
+      oblong: (cx, cy, w, h) => {
+        const hw = w / 2, hh = h / 2, r = Math.min(hw, hh * 0.5)
+        return `M${cx - hw + r},${cy - hh} L${cx + hw - r},${cy - hh} A${r},${r} 0 0,1 ${cx + hw},${cy - hh + r} L${cx + hw},${cy + hh - r} A${r},${r} 0 0,1 ${cx + hw - r},${cy + hh} L${cx - hw + r},${cy + hh} A${r},${r} 0 0,1 ${cx - hw},${cy + hh - r} L${cx - hw},${cy - hh + r} A${r},${r} 0 0,1 ${cx - hw + r},${cy - hh} Z`
+      },
+    }
+    const shapeFn = shapes[green.shape] || shapes.oval
+    greenPath = shapeFn(cx, cy, greenW, greenH)
   }
-  const shapeFn = shapes[green.shape] || shapes.oval
-  const greenPath = shapeFn(cx, cy, greenW, greenH)
 
   const pinPositions = {
     'front-right': { x: cx + greenW * 0.2, y: cy + greenH * 0.3 },
@@ -65,12 +92,18 @@ export default function GreenView({ green, holeNum }) {
   })
 
   const tierCount = green.tiers || 0
+  const sourceTag = green._source === 'osm+ai' ? 'real shape'
+    : green._source === 'osm' ? 'real shape'
+    : null
 
   return (
     <div style={{ background: C.bgInput, borderRadius: 10, padding: '12px 8px', marginTop: 10 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, padding: '0 8px' }}>
         <span style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Green — Hole {holeNum}</span>
-        {tierCount > 0 && <span style={{ fontSize: 10, fontWeight: 600, color: C.amber, background: C.amberMuted, padding: '1px 6px', borderRadius: 4 }}>{tierCount}-tier</span>}
+        <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          {sourceTag && <span style={{ fontSize: 9, fontWeight: 600, color: C.green, background: '#1a4d2e55', padding: '1px 6px', borderRadius: 4 }}>{sourceTag}</span>}
+          {tierCount > 0 && <span style={{ fontSize: 10, fontWeight: 600, color: C.amber, background: C.amberMuted, padding: '1px 6px', borderRadius: 4 }}>{tierCount}-tier</span>}
+        </span>
       </div>
       <svg viewBox={`0 0 ${FIXED_W} ${FIXED_H}`} width="100%" style={{ display: 'block' }}>
         <path d={greenPath} fill="#1a4d2e" stroke={C.green} strokeWidth={1.5} />
@@ -117,7 +150,7 @@ export default function GreenView({ green, holeNum }) {
         <text x={cx} y={FIXED_H - 2} textAnchor="middle" fill={C.textFaint} fontSize={8} fontFamily={F}>approach</text>
       </svg>
       <div style={{ padding: '4px 8px 0', display: 'flex', flexDirection: 'column', gap: 2 }}>
-        {green.confidence && green.confidence !== 'verified' && (
+        {green.confidence && green.confidence !== 'verified' && !sourceTag && (
           <p style={{ fontSize: 9, color: C.amber, margin: 0, fontStyle: 'italic' }}>
             Green data is estimated — verify with course knowledge
           </p>
@@ -128,4 +161,29 @@ export default function GreenView({ green, holeNum }) {
       </div>
     </div>
   )
+}
+
+function clampNum(v, min, max, fallback) {
+  const n = Number(v)
+  if (!Number.isFinite(n)) return fallback
+  return Math.max(min, Math.min(max, n))
+}
+
+// Re-anchor a path generated around viewport-centre Y onto our cy.
+function shiftPathY(path, dy) {
+  if (!path) return path
+  return path.replace(/([ML])\s*(-?\d+\.?\d*),(-?\d+\.?\d*)/g,
+    (_, cmd, x, y) => `${cmd}${x},${(Number(y) + dy).toFixed(2)}`)
+}
+
+function ringPixelDims(ring, viewW, viewH, margin) {
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+  for (const [x, y] of ring) {
+    if (x < minX) minX = x; if (x > maxX) maxX = x
+    if (y < minY) minY = y; if (y > maxY) maxY = y
+  }
+  const wM = Math.max(maxX - minX, 0.01)
+  const hM = Math.max(maxY - minY, 0.01)
+  const scale = Math.min((viewW - 2 * margin) / wM, (viewH - 2 * margin) / hM)
+  return { w: wM * scale, h: hM * scale }
 }

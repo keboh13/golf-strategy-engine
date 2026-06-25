@@ -28,6 +28,31 @@ function jsonResponse(body, status) {
   })
 }
 
+function makeCacheKey(name, location) {
+  return `${(name || '').toLowerCase().trim()}|${(location || '').toLowerCase().trim()}`
+}
+
+// Hazard-only schema gate. Mirrors the relevant subset of validateScorecardJson
+// so vision/PDF hazard outputs cannot smuggle bogus shapes or out-of-range
+// values into course_hole_hazards.
+function validateHazardsJson(h) {
+  const issues = []
+  if (!h || typeof h !== 'object' || Array.isArray(h)) {
+    issues.push('hazards must be an object')
+    return issues
+  }
+  const arrFields = ['water', 'bunkers', 'oob', 'trees', 'hazards']
+  for (const k of arrFields) {
+    if (h[k] != null && !Array.isArray(h[k]) && typeof h[k] !== 'string') {
+      issues.push(`${k} must be array or string`)
+    }
+  }
+  if (h.hole != null && !(Number.isFinite(Number(h.hole)) && Number(h.hole) >= 1 && Number(h.hole) <= 18)) {
+    issues.push('hole must be 1..18')
+  }
+  return issues
+}
+
 async function callClaude(messages, maxTokens, useWebSearch, extraTools, modelOverride) {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not configured on server.')
@@ -365,8 +390,14 @@ async function handleRequest(req) {
   let body
   try { body = await req.json() } catch { return jsonResponse({ error: 'Invalid JSON.' }, 400) }
 
-  const { action, courseName, location, hole, image_url, image_base64, image_media_type, course_key, persist, pdf_url } = body
+  const { action, courseName, location, hole, image_url, image_base64, image_media_type, persist, pdf_url } = body
   if (!action) return jsonResponse({ error: 'Missing action.' }, 400)
+
+  // Always derive course_key server-side from courseName + location. The
+  // client previously passed it through, which let any authed user clobber
+  // another course's row in the shared course_cache / course_hole_hazards
+  // tables.
+  const course_key = courseName ? makeCacheKey(courseName, location || '') : null
 
   const supabaseUrl = process.env.SUPABASE_URL
   const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -394,7 +425,14 @@ async function handleRequest(req) {
     if (issues.length > 1) parsed._confidence = 'low'
     else if (issues.length === 1 && parsed._confidence === 'high') parsed._confidence = 'medium'
 
-    if (persist !== false && course_key && supabaseUrl && supabaseServiceKey) {
+    // Quality gate — refuse to persist obviously broken parses to the shared
+    // cache (hole_count != 18 or too many validation issues). Otherwise a
+    // single low-confidence parse poisons the row for every user.
+    const holeCount = Array.isArray(parsed.holes) ? parsed.holes.length : 0
+    const tooBroken = holeCount !== 18 || issues.length > 2
+    if (tooBroken) parsed._persistSkipped = `quality gate: hole_count=${holeCount}, issues=${issues.length}`
+
+    if (persist !== false && !tooBroken && course_key && supabaseUrl && supabaseServiceKey) {
       const scorecardOnly = { ...parsed }
       delete scorecardOnly.hazardsByHole
       scorecardOnly._source = 'yardage_book'
@@ -416,7 +454,7 @@ async function handleRequest(req) {
         }
       } catch {}
 
-      await supabaseRest('course_cache?on_conflict=cache_key', {
+      const upsertRes = await supabaseRest('course_cache?on_conflict=cache_key', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates' },
         body: JSON.stringify({
@@ -428,7 +466,12 @@ async function handleRequest(req) {
           updated_by: userId === 'dev-user' ? null : userId,
           edit_version: nextVersion,
         }),
-      }).catch(() => {})
+      }).catch(e => ({ ok: false, status: 0, _err: e?.message }))
+      if (!upsertRes.ok) {
+        const detail = upsertRes._err || (await upsertRes.text?.().catch(() => '')) || ''
+        console.error(`[course_cache] persist failed (${upsertRes.status}): ${detail}`)
+        parsed._cachePersistError = `course_cache persist failed (${upsertRes.status}). ${detail}`
+      }
 
       const rows = (parsed.hazardsByHole || [])
         .filter(h => h && h.hole)
@@ -464,6 +507,24 @@ async function handleRequest(req) {
       if (!pdf_url || !courseName) return jsonResponse({ error: 'parse-yardage-book-pdf needs `pdf_url` and `courseName`.' }, 400)
       const admin = await isAdminUser(userId)
       if (!admin) return jsonResponse({ error: 'Admin access required to upload a yardage book PDF.' }, 403)
+      // Cache precheck — same (course_key, pdf_url) → return cached parse
+      // rather than re-billing the 10k-token Haiku vision call.
+      if (course_key && supabaseUrl && supabaseServiceKey) {
+        try {
+          const cur = await supabaseRest(
+            `course_cache?cache_key=eq.${encodeURIComponent(course_key)}&select=course_data,source`,
+            { method: 'GET' }
+          )
+          if (cur.ok) {
+            const rows = await cur.json()
+            const cached = Array.isArray(rows) && rows[0]?.course_data
+            if (cached && cached._sourcePdf === pdf_url && rows[0].source === 'yardage_book') {
+              cached._cacheHit = true
+              return jsonResponse({ result: cached }, 200)
+            }
+          }
+        } catch {}
+      }
       const parsed = await parsePdfAndPersist(pdf_url)
       return jsonResponse({ result: parsed }, 200)
     }
@@ -543,34 +604,61 @@ If you cannot extract a verifiable scorecard: {"error":"…"}`,
       htmlParsed._discoveredVia = 'web_search'
       if (issues.length > 1) htmlParsed._confidence = 'low'
 
-      if (persist !== false && course_key && supabaseUrl && supabaseServiceKey) {
+      // HTML scrape is the lowest-quality source. Refuse to persist when
+      // (a) too many validation issues, or (b) an existing row was derived
+      // from a confirmed PDF / higher-confidence source — otherwise a single
+      // bad HTML fallback can overwrite a known-good yardage-book parse.
+      const htmlTooBroken = issues.length > 2 || (Array.isArray(htmlParsed.holes) ? htmlParsed.holes.length : 0) !== 18
+      let blockedByExisting = false
+      if (persist !== false && !htmlTooBroken && course_key && supabaseUrl && supabaseServiceKey) {
         const scorecardOnly = { ...htmlParsed, _source: 'yardage_book' }
         let nextVersion = 1
+        let existingConfidence = null
+        let existingSourcePdf = null
         try {
           const cur = await supabaseRest(
-            `course_cache?cache_key=eq.${encodeURIComponent(course_key)}&select=edit_version`,
+            `course_cache?cache_key=eq.${encodeURIComponent(course_key)}&select=edit_version,course_data`,
             { method: 'GET' }
           )
           if (cur.ok) {
             const rows = await cur.json()
-            if (Array.isArray(rows) && rows[0]?.edit_version != null) {
-              nextVersion = Number(rows[0].edit_version) + 1
+            if (Array.isArray(rows) && rows[0]) {
+              if (rows[0].edit_version != null) nextVersion = Number(rows[0].edit_version) + 1
+              existingConfidence = rows[0].course_data?._confidence || null
+              existingSourcePdf = rows[0].course_data?._sourcePdf || null
             }
           }
         } catch {}
-        await supabaseRest('course_cache?on_conflict=cache_key', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates' },
-          body: JSON.stringify({
-            cache_key: course_key,
-            course_data: scorecardOnly,
-            source: 'yardage_book',
-            cached_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-            updated_by: userId === 'dev-user' ? null : userId,
-            edit_version: nextVersion,
-          }),
-        }).catch(() => {})
+        // Block if existing row came from a confirmed PDF, or has higher
+        // confidence than this scrape.
+        const incomingConf = htmlParsed._confidence || 'low'
+        const rank = { high: 3, medium: 2, low: 1 }
+        if (existingSourcePdf || (rank[existingConfidence] || 0) > (rank[incomingConf] || 0)) {
+          blockedByExisting = true
+          htmlParsed._persistSkipped = `existing row has higher-confidence source (${existingSourcePdf ? 'pdf' : existingConfidence})`
+        }
+        if (!blockedByExisting) {
+          const upsertRes = await supabaseRest('course_cache?on_conflict=cache_key', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates' },
+            body: JSON.stringify({
+              cache_key: course_key,
+              course_data: scorecardOnly,
+              source: 'yardage_book',
+              cached_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+              updated_by: userId === 'dev-user' ? null : userId,
+              edit_version: nextVersion,
+            }),
+          }).catch(e => ({ ok: false, status: 0, _err: e?.message }))
+          if (!upsertRes.ok) {
+            const detail = upsertRes._err || (await upsertRes.text?.().catch(() => '')) || ''
+            console.error(`[course_cache] HTML fallback persist failed (${upsertRes.status}): ${detail}`)
+            htmlParsed._cachePersistError = `course_cache persist failed (${upsertRes.status}). ${detail}`
+          }
+        }
+      } else if (htmlTooBroken) {
+        htmlParsed._persistSkipped = `quality gate: issues=${issues.length}`
       }
 
       return jsonResponse({ result: htmlParsed }, 200)
@@ -590,7 +678,12 @@ If you cannot extract a verifiable scorecard: {"error":"…"}`,
       const parsed = vRes.value
       if (parsed.error) return jsonResponse({ error: parsed.error }, 422)
 
-      if (persist && course_key && supabaseUrl && supabaseServiceKey) {
+      // Schema-gate hazards before persisting. Vision output is hallucination-
+      // prone and lands in a shared row visible to all users for that hole.
+      const hazardIssues = validateHazardsJson(parsed)
+      parsed._validationIssues = hazardIssues
+
+      if (persist && hazardIssues.length === 0 && course_key && supabaseUrl && supabaseServiceKey) {
         const hzRes = await supabaseRest('course_hole_hazards?on_conflict=course_key,hole_ref', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates' },
