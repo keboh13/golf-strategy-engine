@@ -4,6 +4,8 @@ import { extractGreenForHole, mergeGreen } from '../lib/greenGeometry.js'
 import { AVAILABLE_MODELS } from '../lib/appConstants.js'
 import { C, F, card, inp, lbl, btnP, btnG } from '../theme.js'
 import { Badge, Spin, SectionHead, DataAccuracyTier } from '../components/ui.jsx'
+import ProgressTracker from '../components/ProgressTracker.jsx'
+import { ENRICH_STEPS } from '../lib/enrichSteps.js'
 import GreenView from '../components/GreenView.jsx'
 import CourseHoleMap from '../components/CourseHoleMap.jsx'
 import CourseSearch from '../components/CourseSearch.jsx'
@@ -33,6 +35,7 @@ export default function PrepTab({
   planStyle, setPlanStyle,
   planView, setPlanView,
   enriching, enrichStatus,
+  enrichProgress = { states: {}, startsAt: {}, endsAt: {}, errors: {} },
   selectedModel, setSelectedModel,
   copied,
   currentHole, setCurrentHole,
@@ -109,9 +112,16 @@ export default function PrepTab({
       {prepStep === 2 && (
         <div>
           {course.name && course.osmEnriched && <DataAccuracyTier course={course} style={{ marginBottom: 12 }} />}
-          {course.name && !course.osmEnriched && coords?.lat && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, padding: '10px 14px', background: C.bgInput, borderRadius: 10 }}>
-              <Spin /><span style={{ fontSize: 12, color: C.textMuted }}>Loading hole design data...</span>
+          {course.name && !course.osmEnriched && Object.keys(enrichProgress.states).length > 0 && (
+            <div style={{ marginBottom: 12 }}>
+              <ProgressTracker
+                steps={ENRICH_STEPS}
+                states={enrichProgress.states}
+                startsAt={enrichProgress.startsAt}
+                endsAt={enrichProgress.endsAt}
+                errors={enrichProgress.errors}
+                compact
+              />
             </div>
           )}
           {/* Tee selector — switch tees without going back */}
@@ -288,9 +298,15 @@ export default function PrepTab({
                 )
               })()}
 
-              {enriching && (
-                <div role="status" aria-live="polite" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 16, padding: '8px 14px', background: C.blueMuted, border: `1px solid ${C.blue}33`, borderRadius: 8 }}>
-                  <Spin /><span style={{ fontSize: 12, color: C.blue }}>{enrichStatus || 'Loading course data...'}</span>
+              {(enriching || Object.keys(enrichProgress.states).length > 0) && (
+                <div style={{ marginBottom: 16 }}>
+                  <ProgressTracker
+                    steps={ENRICH_STEPS}
+                    states={enrichProgress.states}
+                    startsAt={enrichProgress.startsAt}
+                    endsAt={enrichProgress.endsAt}
+                    errors={enrichProgress.errors}
+                  />
                 </div>
               )}
               <button style={{ ...btnP, padding: '12px 32px', fontSize: 15 }} onClick={generate} aria-label="Generate round prep report">Generate Round Prep Report →</button>
