@@ -303,13 +303,16 @@ IMPORTANT RULES:
 4. Keep caddy notes SHORT (1 sentence max).
 5. When confidence is "low" or "none" for hazards, say "standard approach" rather than invent obstacles.
 6. Use the pre-computed wind/elevation numbers verbatim. Don't re-estimate.
+7. Phase markers: emit "[[PHASE: roadmap]]", "[[PHASE: holes]]", and "[[PHASE: finalize]]" each on a line of their own, in the exact spots shown below. These drive the UI progress display — do not move them, paraphrase them, or add commentary on the same line.
 
 ## Round strategy
 2-3 sentences. Approach for today, factoring style "${style}".
 
+[[PHASE: roadmap]]
 ## Scoring roadmap
 One line per hole: "H[N] Par [X] [Yds]y — 🟢/🟡/🔴 — reason"
 
+[[PHASE: holes]]
 ## Hole-by-hole
 ### Hole [N] — Par [X] — [Yds]y — HCP [N]
 - **Tee**: Club, target, shape (specify ball flight direction for this ${isLefty ? 'lefty' : 'righty'})
@@ -320,6 +323,7 @@ One line per hole: "H[N] Par [X] [Yds]y — 🟢/🟡/🔴 — reason"
 \`\`\`
 Green-json: "hazards" must be [] unless a hole's hzDesign/osmDesign explicitly listed one. "confidence" must be "verified" only when the hole's conf:hazards tag is "high".
 
+[[PHASE: finalize]]
 ## Weather
 Club adjustments where pre-computed wind/elevation matters most.
 

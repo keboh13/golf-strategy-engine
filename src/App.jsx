@@ -14,6 +14,7 @@ import { computeHoleTimes, getWeatherAtHour, windDir } from './lib/weather.js'
 import { fetchHoleDesignViaSearch, mergeDesignDataIntoHoles, searchGolfCourseAPI, normalizeGolfCourseAPICourse, geocodeViaClaudeSearch } from './lib/courseApi.js'
 import { ENRICH_STEP_IDS } from './lib/enrichSteps.js'
 import { STEP_STATES } from './lib/progress.js'
+import { GENERATION_PHASE_IDS, stripPhaseMarkers, findPhaseMarkers } from './lib/generationPhases.js'
 import { loadCourseCache, getCachedCourse, setCachedCourse, cacheKey, saveCourseCache, removeCachedCourseByKey, purgeOrphanedLocalEntries } from './lib/courseCache.js'
 import { mergeUploadedScorecard, isSameCourseKey } from './lib/scorecardMerge.js'
 import AuthScreen from './screens/AuthScreen.jsx'
@@ -173,6 +174,10 @@ function AppInner({ user, session, onSignOut }) {
   const [planPhase,   setPlanPhase]   = useState('')
   const [planError,   setPlanError]   = useState('')
   const [planValidationBanner, setPlanValidationBanner] = useState('')
+  // Structured generation progress driven by [[PHASE: id]] markers in the
+  // streamed response (Part 0.2 + 0.3 of the optimization plan). Replaces the
+  // brittle heading-substring detection that used to set `planPhase`.
+  const [genProgress, setGenProgress] = useState({ states: {}, startsAt: {}, endsAt: {}, errors: {} })
   const [planStyle,   setPlanStyle]   = useState('balanced')  // 'balanced' | 'conservative' | 'aggressive'
   const abortRef = useRef(null)
   const [planView,    setPlanView]    = useState('companion')
@@ -931,6 +936,30 @@ Be direct. No filler. ALL 18 HOLES.`
     const ctrl = new AbortController()
     abortRef.current = ctrl
     setPlanLoading(true); setPlanPhase('Analyzing scoring history'); setPlanError(''); setPlanValidationBanner(''); setPlan(''); setTab('prep'); setPrepStep(4)
+    // Reset + start the generation tracker. The implicit 'strategy' phase is
+    // running from the first byte; markers advance the machine from there.
+    const genStartedAt = Date.now()
+    const seenPhases = new Set()
+    setGenProgress({
+      states:   { strategy: STEP_STATES.RUNNING },
+      startsAt: { strategy: genStartedAt },
+      endsAt:   {},
+      errors:   {},
+    })
+    const advancePhase = (id, ts) => {
+      if (seenPhases.has(id)) return
+      seenPhases.add(id)
+      const ids = GENERATION_PHASE_IDS
+      const idx = ids.indexOf(id)
+      if (idx < 1) return
+      const prev = ids[idx - 1]
+      setGenProgress(p => ({
+        ...p,
+        states:   { ...p.states, [prev]: STEP_STATES.DONE, [id]: STEP_STATES.RUNNING },
+        startsAt: { ...p.startsAt, [id]: ts },
+        endsAt:   { ...p.endsAt, [prev]: ts },
+      }))
+    }
     const payload = {
       model: selectedModel,
       max_tokens: 16000,
@@ -973,10 +1002,14 @@ Be direct. No filler. ALL 18 HOLES.`
             if (j.type === 'content_block_delta' && j.delta?.text) {
               setPlan(p => {
                 const next = p + j.delta.text
-                if (next.includes('## Scoring roadmap') || next.includes('## scoring roadmap')) setPlanPhase('Drafting round strategy')
-                else if (next.includes('## Hole-by-hole') || next.includes('## hole-by-hole')) setPlanPhase('Writing hole-by-hole strategy')
-                else if (next.includes('## Weather') || next.includes('## Pressure')) setPlanPhase('Finalizing adjustments')
-                return next
+                // Advance the structured tracker on every newly-seen phase
+                // marker. Done inside setPlan so we read the freshest text.
+                const ts = Date.now()
+                for (const id of findPhaseMarkers(next)) advancePhase(id, ts)
+                // Strip markers from the rendered text so the user never sees
+                // them, but keep them in the stream-builder above so the
+                // marker can fire even if it's split across two chunks.
+                return stripPhaseMarkers(next)
               })
             }
           } catch {}
@@ -988,6 +1021,18 @@ Be direct. No filler. ALL 18 HOLES.`
     }
     setPlanLoading(false)
     abortRef.current = null
+    // Stream is done — mark any still-running step as DONE and stamp every
+    // missing endsAt so the tracker shows final durations.
+    setGenProgress(p => {
+      const endTs = Date.now()
+      const states = { ...p.states }
+      const endsAt = { ...p.endsAt }
+      for (const id of GENERATION_PHASE_IDS) {
+        if (states[id] === STEP_STATES.RUNNING) states[id] = STEP_STATES.DONE
+        if (states[id] === STEP_STATES.DONE && endsAt[id] == null) endsAt[id] = endTs
+      }
+      return { ...p, states, endsAt }
+    })
     setPlan(p => {
       if (p) {
         // Validate plan against the output contract — surfaces silent
@@ -1296,6 +1341,7 @@ Be direct. No filler. ALL 18 HOLES.`
             plan={plan}
             planLoading={planLoading}
             planPhase={planPhase}
+            genProgress={genProgress}
             planError={planError}
             planValidationBanner={planValidationBanner}
             planStyle={planStyle}
