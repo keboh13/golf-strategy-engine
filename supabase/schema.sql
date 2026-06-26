@@ -305,9 +305,50 @@ create policy "anyone can read course aliases"
 create index if not exists course_aliases_canonical_idx
   on public.course_aliases(canonical_key);
 
+-- ─── user_roles ──────────────────────────────────────────────────────────────
+-- Replaces the binary `admins` table with a small role enum so non-admin
+-- admin-tier work (viewer dashboards, editor course CRUD) can be granted
+-- without giving full user-management power. Part 4 step 9 of the
+-- optimization plan. The legacy `admins` table is kept around for now so
+-- existing rows still gate the same access — a migration block below
+-- copies them into user_roles on first run.
+create table if not exists public.user_roles (
+  user_id     uuid primary key references auth.users(id) on delete cascade,
+  role        text not null default 'viewer'
+                 check (role in ('viewer','editor','admin','owner')),
+  created_at  timestamptz not null default now(),
+  created_by  uuid references auth.users(id) on delete set null
+);
+
+alter table public.user_roles enable row level security;
+
+-- Users can read their own role row (so the client can show role-aware UI).
+drop policy if exists "users can read own role" on public.user_roles;
+create policy "users can read own role"
+  on public.user_roles for select using (auth.uid() = user_id);
+
+-- Admins can read every row.
+drop policy if exists "admins can read all roles" on public.user_roles;
+create policy "admins can read all roles"
+  on public.user_roles for select using (public.is_admin());
+
+-- Only the service role writes to user_roles (api/admin-users.js issues the
+-- grant). No client-side insert/update policy on purpose — prevents a user
+-- from self-promoting.
+
+-- Migration (idempotent): seed user_roles from the legacy admins table on
+-- first run. Subsequent runs are no-ops because the upsert keeps the
+-- already-stored role.
+insert into public.user_roles (user_id, role, created_at)
+select a.user_id, 'admin', coalesce(a.created_at, now())
+from public.admins a
+on conflict (user_id) do nothing;
+
 -- ─── is_admin() helper ────────────────────────────────────────────────────────
--- Cheap SQL check against the admins table. Used by RPC + RLS policies on
--- admin-only paths. Returns false for unauthenticated callers.
+-- Cheap SQL check used by RPC + RLS policies on admin-only paths. Returns
+-- true when the caller is either present in the legacy admins table or has a
+-- user_roles row with role in ('admin', 'owner'). Returns false for
+-- unauthenticated callers.
 create or replace function public.is_admin()
 returns boolean
 language sql
@@ -316,9 +357,50 @@ security definer
 set search_path = public
 as $$
   select exists (
+    select 1
+    from public.user_roles
+    where user_id = auth.uid()
+      and role in ('admin', 'owner')
+  ) or exists (
     select 1 from public.admins where user_id = auth.uid()
   );
 $$;
+
+-- has_role(min) — hierarchy check for the four roles. Used by future RPC
+-- guards (e.g. an editor can mutate course data but not grant roles).
+--   viewer < editor < admin < owner
+create or replace function public.has_role(min text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with rank as (
+    select case lower(coalesce(min, ''))
+      when 'viewer' then 1
+      when 'editor' then 2
+      when 'admin'  then 3
+      when 'owner'  then 4
+      else 999  -- unknown min → deny
+    end as min_rank
+  ),
+  caller as (
+    select case role
+      when 'viewer' then 1
+      when 'editor' then 2
+      when 'admin'  then 3
+      when 'owner'  then 4
+      else 0
+    end as r
+    from public.user_roles
+    where user_id = auth.uid()
+  )
+  select coalesce(max(c.r), 0) >= (select min_rank from rank)
+  from caller c;
+$$;
+
+grant execute on function public.has_role(text) to authenticated;
 
 -- ─── admin_rename_course RPC ──────────────────────────────────────────────────
 -- Atomically migrate a course from old_key → new_key across course_cache,
