@@ -1571,7 +1571,11 @@ Be direct. No filler. ALL 18 HOLES.`
         {/* Top-level Admin tab (Part 4 step 9). Only rendered when isAdmin
             resolves true; the tab itself is conditionally added to TABS. */}
         {tab === 'admintab' && isAdmin === true && (
-          <AdminTab isMobile={isMobile} />
+          <AdminTab
+            isMobile={isMobile}
+            authToken={session?.access_token || ''}
+            currentUserId={user?.id}
+          />
         )}
 
       </div>

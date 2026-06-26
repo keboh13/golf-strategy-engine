@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { C, F, card, lbl } from '../theme.js'
 import { SectionHead } from '../components/ui.jsx'
+import AdminUsersPanel from '../components/AdminUsersPanel.jsx'
 
 // Top-level Admin area. Part 4 step 9 of the optimization plan — promotes
 // admin out of the Settings tab into its own first-class section with a
@@ -30,7 +31,7 @@ function PlaceholderCard({ title, sub, hint }) {
   )
 }
 
-export default function AdminTab({ isMobile }) {
+export default function AdminTab({ isMobile, authToken, currentUserId }) {
   const [sub, setSub] = useState('overview')
 
   return (
@@ -71,11 +72,7 @@ export default function AdminTab({ isMobile }) {
         />
       )}
       {sub === 'users' && (
-        <PlaceholderCard
-          title="Users"
-          sub="List every account, grant or revoke role (viewer / editor / admin / owner), impersonate for support, soft-delete with 30-day grace."
-          hint="The existing Settings → User Management panel migrates here in the next admin PR."
-        />
+        <AdminUsersPanel authToken={authToken} currentUserId={currentUserId} />
       )}
       {sub === 'courses' && (
         <PlaceholderCard
