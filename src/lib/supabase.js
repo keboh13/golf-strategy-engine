@@ -335,3 +335,29 @@ export async function deleteSavedPlan(planId) {
     .eq('id', planId)
   if (error) throw error
 }
+
+// ── prep_sessions ────────────────────────────────────────────────────────────
+// Cross-device resume for the Round Prep flow (Part 1.2 of the optimization
+// plan). One row per (user, profile). `state` is a minimal jsonb slice the
+// client knows how to rehydrate — see PrepTab / AppInner for the shape.
+
+export async function loadPrepSession(userId, profileName = 'Default') {
+  const { data, error } = await supabase
+    .from('prep_sessions')
+    .select('state, updated_at')
+    .eq('user_id', userId)
+    .eq('profile_name', profileName)
+    .maybeSingle()
+  if (error) throw error
+  return data || null
+}
+
+export async function savePrepSession(userId, profileName, state) {
+  const { error } = await supabase
+    .from('prep_sessions')
+    .upsert(
+      { user_id: userId, profile_name: profileName || 'Default', state, updated_at: new Date().toISOString() },
+      { onConflict: 'user_id,profile_name' }
+    )
+  if (error) throw error
+}

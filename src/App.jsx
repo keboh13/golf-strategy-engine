@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef, useMemo, Component } from 'react'
-import { supabase, loadUserProfiles, saveUserProfile, deleteUserProfile, loadUserHistory, saveUserHistory, loadUserSettings, saveUserSettings, getCachedCourseDB, setCachedCourseDB, getAllCachedCoursesDB, deleteCachedCourseDB, loadSavedPlans, savePlan, deleteSavedPlan, loadCourseHazards, listCoursePdfs, uploadCoursePdfToBucket, deleteAllCoursePdfs, deleteCourseHazards, clearCachedScorecardPdfRef, listCanonicalCacheKeys, listAliasKeys } from './lib/supabase.js'
+import { supabase, loadUserProfiles, saveUserProfile, deleteUserProfile, loadUserHistory, saveUserHistory, loadUserSettings, saveUserSettings, getCachedCourseDB, setCachedCourseDB, getAllCachedCoursesDB, deleteCachedCourseDB, loadSavedPlans, savePlan, deleteSavedPlan, loadCourseHazards, listCoursePdfs, uploadCoursePdfToBucket, deleteAllCoursePdfs, deleteCourseHazards, clearCachedScorecardPdfRef, listCanonicalCacheKeys, listAliasKeys, loadPrepSession, savePrepSession } from './lib/supabase.js'
 import { buildBagSection } from './lib/promptSections.js'
 import { buildRecommendationPrompt } from './lib/recommendation/prompt.js'
 import { validatePlanContract } from './lib/recommendation/planContract.js'
@@ -375,6 +375,73 @@ function AppInner({ user, session, onSignOut }) {
     if (r.lat && r.lng) setCoords({ lat: r.lat, lng: r.lng })
     else setCoords(null)
   }, [])
+
+  // Cross-device resume for Round Prep (Part 1.2 of the optimization plan).
+  // Loads the saved prep_sessions row once per (user, profile) and rehydrates
+  // the minimum slice the user expects to find waiting: their course, tee,
+  // tee time, pace, plan style, and which step they were on. The full course
+  // record is reloaded via getCachedCourseDB so we don't have to store the
+  // whole holes/geo blob in prep_sessions.
+  const prepRestoreRef = useRef(false)
+  useEffect(() => {
+    if (!user) return
+    // Don't trample a session in progress — if the user has already picked
+    // a course this session (manually or via the sample-course flow),
+    // resume is a no-op for the rest of this mount.
+    if (prepRestoreRef.current) return
+    if (course.name) { prepRestoreRef.current = true; return }
+    let cancelled = false
+    ;(async () => {
+      try {
+        const row = await loadPrepSession(user.id, currentProfile)
+        if (cancelled || !row?.state) return
+        const s = row.state
+        if (s.teeTime) setTeeTime(s.teeTime)
+        if (s.teeDate) setTeeDate(s.teeDate)
+        if (typeof s.pace === 'number') setPace(s.pace)
+        if (s.planStyle) setPlanStyle(s.planStyle)
+        if (s.courseName) {
+          try {
+            const cached = await getCachedCourseDB(s.courseName, s.courseLocation || '')
+            if (cached && !cancelled) {
+              applyScorecard(cached)
+              if (s.selectedTee) {
+                setCourse(prev => ({ ...prev, selectedTee: s.selectedTee }))
+              }
+            }
+          } catch {}
+        }
+        if (typeof s.prepStep === 'number' && s.prepStep >= 1 && s.prepStep <= 4) {
+          setPrepStep(s.prepStep)
+        }
+        prepRestoreRef.current = true
+      } catch (e) {
+        if (!cancelled) console.warn('[prep_sessions] load:', e.message)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [user?.id, currentProfile, applyScorecard])
+
+  // Debounced save of the prep slice we care about. Fires only when the user
+  // has actually picked a course (saving an empty session would clobber a
+  // real one across devices).
+  useEffect(() => {
+    if (!user || !course.name) return
+    const state = {
+      prepStep,
+      courseName: course.name,
+      courseLocation: course.location || '',
+      selectedTee: course.selectedTee || '',
+      teeTime, teeDate, pace,
+      planStyle,
+    }
+    const timer = setTimeout(() => {
+      savePrepSession(user.id, currentProfile, state).catch(e =>
+        console.warn('[prep_sessions] save:', e.message)
+      )
+    }, 1500)
+    return () => clearTimeout(timer)
+  }, [user, currentProfile, prepStep, course.name, course.location, course.selectedTee, teeTime, teeDate, pace, planStyle])
 
   // Post-onboarding hand-off (Part 1.1 of the optimization plan). When the
   // wizard finishes with the "Try it now" CTA it stamps a flag; we read it

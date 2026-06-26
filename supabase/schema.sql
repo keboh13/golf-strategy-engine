@@ -65,6 +65,29 @@ create policy "users can manage own settings"
   using  (auth.uid() = user_id)
   with check (auth.uid() = user_id);
 
+-- ─── prep_sessions ───────────────────────────────────────────────────────────
+-- One row per (user, profile). Holds the minimal slice of Round Prep state
+-- needed for cross-device resume: the picked course identity, tee box, tee
+-- time, pace, the active prep step, and the chosen plan style. Last-write-wins.
+-- Part 1.2 of the optimization plan — desktop-the-night-before, phone-the-
+-- morning-of.
+create table if not exists public.prep_sessions (
+  user_id      uuid not null references auth.users(id) on delete cascade,
+  profile_name text not null default 'Default',
+  state        jsonb not null default '{}',
+  updated_at   timestamptz not null default now(),
+  primary key (user_id, profile_name)
+);
+
+alter table public.prep_sessions enable row level security;
+
+drop policy if exists "users can manage own prep sessions" on public.prep_sessions;
+create policy "users can manage own prep sessions"
+  on public.prep_sessions
+  for all
+  using  (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
 -- ─── course_cache ─────────────────────────────────────────────────────────────
 -- GLOBAL: any authenticated user can read; authenticated users can write
 create table if not exists public.course_cache (
