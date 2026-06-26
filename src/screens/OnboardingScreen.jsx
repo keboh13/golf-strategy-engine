@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react'
+import { parseScorePaste } from '../lib/scoreImport.js'
 
 function useIsMobile() {
   const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 640)
@@ -11,6 +12,9 @@ function useIsMobile() {
   return isMobile
 }
 
+// Default 14-club bag the user can adjust on Step 2 (or skip). Carry blanks
+// are intentional — the user is supposed to fill in their own. The promptly-
+// imported plan still works with blanks; the AI just uses the club ladder.
 const DEFAULT_CLUBS = [
   { club: 'Driver',  carry: '', shape: 'Straight' },
   { club: '3-wood',  carry: '', shape: 'Straight' },
@@ -50,18 +54,10 @@ const S = {
     maxWidth: 560,
     boxShadow: '0 24px 64px rgba(0,0,0,.45)',
   },
-  header: {
-    textAlign: 'center',
-    marginBottom: 28,
-  },
+  header: { textAlign: 'center', marginBottom: 28 },
   title: { fontSize: 22, fontWeight: 700, color: '#f1f5f9', margin: '0 0 6px' },
   sub:   { fontSize: 13, color: '#64748b', margin: 0 },
-  progress: {
-    display: 'flex',
-    gap: 6,
-    marginBottom: 32,
-    justifyContent: 'center',
-  },
+  progress: { display: 'flex', gap: 6, marginBottom: 32, justifyContent: 'center' },
   dot: (active, done) => ({
     width: done ? 28 : active ? 28 : 8,
     height: 8,
@@ -69,135 +65,74 @@ const S = {
     background: done ? '#22c55e' : active ? '#3b82f6' : '#2a2f45',
     transition: 'all .25s',
   }),
-  stepTitle: {
-    fontSize: 17,
-    fontWeight: 700,
-    color: '#f1f5f9',
-    marginBottom: 4,
-  },
-  stepSub: {
-    fontSize: 13,
-    color: '#64748b',
-    marginBottom: 20,
-  },
+  stepTitle: { fontSize: 17, fontWeight: 700, color: '#f1f5f9', marginBottom: 4 },
+  stepSub:   { fontSize: 13, color: '#64748b', marginBottom: 20 },
   label: {
-    display: 'block',
-    fontSize: 12,
-    fontWeight: 600,
-    color: '#94a3b8',
-    textTransform: 'uppercase',
-    letterSpacing: '.06em',
+    display: 'block', fontSize: 12, fontWeight: 600,
+    color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '.06em',
     marginBottom: 6,
   },
   input: {
-    width: '100%',
-    padding: '10px 12px',
-    background: '#141720',
-    border: '1px solid #2a2f45',
-    borderRadius: 8,
-    color: '#f1f5f9',
-    fontSize: 14,
-    outline: 'none',
-    marginBottom: 16,
-    boxSizing: 'border-box',
+    width: '100%', padding: '10px 12px',
+    background: '#141720', border: '1px solid #2a2f45', borderRadius: 8,
+    color: '#f1f5f9', fontSize: 14, outline: 'none',
+    marginBottom: 16, boxSizing: 'border-box',
   },
   select: {
-    width: '100%',
-    padding: '10px 12px',
-    background: '#141720',
-    border: '1px solid #2a2f45',
-    borderRadius: 8,
-    color: '#f1f5f9',
-    fontSize: 14,
-    outline: 'none',
-    marginBottom: 16,
-    boxSizing: 'border-box',
+    width: '100%', padding: '10px 12px',
+    background: '#141720', border: '1px solid #2a2f45', borderRadius: 8,
+    color: '#f1f5f9', fontSize: 14, outline: 'none',
+    marginBottom: 16, boxSizing: 'border-box',
   },
   textarea: {
-    width: '100%',
-    padding: '10px 12px',
-    background: '#141720',
-    border: '1px solid #2a2f45',
-    borderRadius: 8,
-    color: '#f1f5f9',
-    fontSize: 14,
-    outline: 'none',
-    marginBottom: 16,
-    boxSizing: 'border-box',
-    resize: 'vertical',
-    minHeight: 72,
-    fontFamily: 'inherit',
+    width: '100%', padding: '10px 12px',
+    background: '#141720', border: '1px solid #2a2f45', borderRadius: 8,
+    color: '#f1f5f9', fontSize: 14, outline: 'none',
+    marginBottom: 16, boxSizing: 'border-box',
+    resize: 'vertical', minHeight: 72, fontFamily: 'inherit',
   },
   grid2: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
-    gap: 12,
-    marginBottom: 4,
+    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+    gap: 12, marginBottom: 4,
   },
   row: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 6,
-    padding: '6px 8px',
-    background: '#141720',
-    borderRadius: 8,
-    border: '1px solid #2a2f45',
+    display: 'flex', alignItems: 'center', gap: 8,
+    marginBottom: 6, padding: '6px 8px',
+    background: '#141720', borderRadius: 8, border: '1px solid #2a2f45',
   },
   clubInput: (width) => ({
-    background: 'transparent',
-    border: 'none',
-    color: '#f1f5f9',
-    fontSize: 13,
-    width,
-    outline: 'none',
-    padding: '2px 4px',
+    background: 'transparent', border: 'none',
+    color: '#f1f5f9', fontSize: 13, width, outline: 'none', padding: '2px 4px',
   }),
   clubSelect: {
-    background: 'transparent',
-    border: 'none',
-    color: '#94a3b8',
-    fontSize: 12,
-    outline: 'none',
-    cursor: 'pointer',
+    background: 'transparent', border: 'none',
+    color: '#94a3b8', fontSize: 12, outline: 'none', cursor: 'pointer',
   },
-  footer: {
-    display: 'flex',
-    gap: 10,
-    marginTop: 28,
-  },
+  footer: { display: 'flex', gap: 10, marginTop: 28 },
   btnP: {
-    flex: 1,
-    padding: '11px 0',
-    borderRadius: 8,
-    border: 'none',
-    cursor: 'pointer',
-    fontSize: 15,
-    fontWeight: 600,
-    background: '#3b82f6',
-    color: '#fff',
-    transition: 'opacity .15s',
+    flex: 1, padding: '11px 0', borderRadius: 8, border: 'none',
+    cursor: 'pointer', fontSize: 15, fontWeight: 600,
+    background: '#3b82f6', color: '#fff', transition: 'opacity .15s',
   },
   btnG: {
-    flex: 1,
-    padding: '11px 0',
-    borderRadius: 8,
-    cursor: 'pointer',
-    fontSize: 14,
-    fontWeight: 500,
-    background: 'transparent',
-    border: '1px solid #2a2f45',
-    color: '#94a3b8',
+    flex: 1, padding: '11px 0', borderRadius: 8, cursor: 'pointer',
+    fontSize: 14, fontWeight: 500,
+    background: 'transparent', border: '1px solid #2a2f45', color: '#94a3b8',
+  },
+  btnSkip: {
+    background: 'transparent', border: 'none',
+    color: '#475569', fontSize: 12, padding: '8px 0',
+    cursor: 'pointer', textDecoration: 'underline', textUnderlineOffset: 3,
   },
 }
 
-const TOTAL_STEPS = 3
+const TOTAL_STEPS = 4
 
 export default function OnboardingScreen({ onComplete }) {
   const isMobile = useIsMobile()
   const [step, setStep] = useState(0)
 
-  // Step 0 — Player profile
+  // Step 0 — Identity
   const [name,        setName]        = useState('')
   const [handicap,    setHandicap]    = useState('')
   const [ghin,        setGhin]        = useState('')
@@ -208,11 +143,26 @@ export default function OnboardingScreen({ onComplete }) {
   const [strengths,   setStrengths]   = useState('')
   const [swingNotes,  setSwingNotes]  = useState('')
 
-  // Step 1 — Bag setup
+  // Step 1 — Bag
   const [clubs, setClubs] = useState(DEFAULT_CLUBS.map(c => ({ ...c })))
 
-  // Step 2 — API keys (optional)
-  const [golfApiKey, setGolfApiKey] = useState('')
+  // Step 2 — Recent scoring (paste GHIN rows or freeform). Parsed on-the-fly
+  // so the user sees how many rounds we successfully extracted before moving
+  // on; we only push them to Supabase via onComplete.
+  const [scorePaste, setScorePaste] = useState('')
+  const [scoreError, setScoreError] = useState('')
+  const [scoreParsed, setScoreParsed] = useState({ rounds: [], warnings: [] })
+
+  useEffect(() => {
+    if (!scorePaste.trim()) { setScoreParsed({ rounds: [], warnings: [] }); setScoreError(''); return }
+    try {
+      const r = parseScorePaste(scorePaste)
+      setScoreParsed(r); setScoreError('')
+    } catch (e) {
+      setScoreParsed({ rounds: [], warnings: [] })
+      setScoreError(e?.message || 'Could not parse any rounds.')
+    }
+  }, [scorePaste])
 
   function updateClub(idx, field, val) {
     setClubs(prev => prev.map((c, i) => i === idx ? { ...c, [field]: val } : c))
@@ -224,7 +174,12 @@ export default function OnboardingScreen({ onComplete }) {
     setClubs(prev => [...prev, { club: 'New club', carry: '', shape: 'Straight' }])
   }
 
-  function handleFinish() {
+  // Finish — caller passes:
+  //   - player: identity blob
+  //   - clubs: bag (may be unchanged from defaults)
+  //   - rounds: scoring history rows parsed in Step 2 (possibly empty)
+  //   - trySampleCourse: jump straight into Round Prep with a sample course
+  function finish({ trySampleCourse = false } = {}) {
     const player = {
       name:        name.trim() || 'Player',
       handicap:    handicap || '',
@@ -236,12 +191,22 @@ export default function OnboardingScreen({ onComplete }) {
       strengths:   strengths.trim(),
       swingNotes:  swingNotes.trim(),
     }
-    onComplete({ player, clubs, golfApiKey: golfApiKey.trim() })
+    onComplete({
+      player,
+      clubs,
+      rounds: scoreParsed.rounds,
+      trySampleCourse,
+    })
   }
 
   const cardStyle = isMobile
     ? { ...S.card, padding: '24px 16px', borderRadius: 12 }
     : S.card
+
+  const isLast = step === TOTAL_STEPS - 1
+  // Identity is the only required step — the rest of the wizard can be
+  // skipped past with the Skip link in the footer.
+  const canSkip = step > 0 && !isLast
 
   return (
     <div style={S.wrap}>
@@ -252,14 +217,13 @@ export default function OnboardingScreen({ onComplete }) {
           <p style={S.sub}>Takes about 2 minutes. You can edit everything later.</p>
         </div>
 
-        {/* Progress indicator */}
         <div style={S.progress}>
           {Array.from({ length: TOTAL_STEPS }).map((_, i) => (
             <div key={i} style={S.dot(i === step, i < step)} />
           ))}
         </div>
 
-        {/* ── Step 0: Player info ── */}
+        {/* ── Step 0: Identity ── */}
         {step === 0 && (
           <div>
             <div style={S.stepTitle}>Your player profile</div>
@@ -316,7 +280,7 @@ export default function OnboardingScreen({ onComplete }) {
         {step === 1 && (
           <div>
             <div style={S.stepTitle}>Your bag</div>
-            <div style={S.stepSub}>Enter carry distances for best AI club recommendations</div>
+            <div style={S.stepSub}>Enter carry distances for better AI club recommendations. You can skip this and add them later.</div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 80px 100px 28px', gap: 4, padding: '0 8px 6px', borderBottom: '1px solid #2a2f45', marginBottom: 6 }}>
               <span style={{ fontSize: 11, color: '#475569', fontWeight: 600 }}>CLUB</span>
@@ -358,40 +322,85 @@ export default function OnboardingScreen({ onComplete }) {
           </div>
         )}
 
-        {/* ── Step 2: API key ── */}
+        {/* ── Step 2: Recent scoring ── */}
         {step === 2 && (
           <div>
-            <div style={S.stepTitle}>GolfCourse API key (optional)</div>
-            <div style={S.stepSub}>Enables real course lookup with tee distances, par, and hole data. Leave blank to use the app's shared key.</div>
+            <div style={S.stepTitle}>Recent rounds</div>
+            <div style={S.stepSub}>
+              Paste GHIN rows, a CSV/TSV, or one round per line ("2024-09-12 Pebble Beach 78 par 72"). Skip if you'd rather log them later.
+            </div>
 
-            <label style={S.label}>GolfCourseAPI key</label>
-            <input
-              style={S.input}
-              type="password"
-              placeholder="Paste your key or leave blank"
-              value={golfApiKey}
-              onChange={e => setGolfApiKey(e.target.value)}
+            <label style={S.label}>Paste rows</label>
+            <textarea
+              style={{ ...S.textarea, minHeight: 140 }}
+              placeholder={"2024-08-12  Pebble Beach Golf Links  78\n2024-08-19  Spyglass Hill  82  par 72"}
+              value={scorePaste}
+              onChange={e => setScorePaste(e.target.value)}
             />
-
-            <div style={{ fontSize: 13, color: '#475569', lineHeight: 1.6 }}>
-              Get a free key at <span style={{ color: '#60a5fa' }}>golfcourseapi.com</span>. Without it, course data falls back to AI search (less accurate).
-              <br /><br />
-              You can add or update this any time in the <strong style={{ color: '#94a3b8' }}>Admin</strong> tab.
+            {scoreError && (
+              <div style={{ fontSize: 12, color: '#fca5a5', marginBottom: 12 }}>{scoreError}</div>
+            )}
+            {scoreParsed.rounds.length > 0 && (
+              <div style={{ fontSize: 12, color: '#86efac', marginBottom: 12 }}>
+                ✓ Parsed {scoreParsed.rounds.length} round{scoreParsed.rounds.length === 1 ? '' : 's'}
+                {scoreParsed.warnings.length > 0 && (
+                  <span style={{ color: '#fde68a', marginLeft: 8 }}>· {scoreParsed.warnings.length} warning{scoreParsed.warnings.length === 1 ? '' : 's'}</span>
+                )}
+              </div>
+            )}
+            <div style={{ fontSize: 12, color: '#475569', lineHeight: 1.6 }}>
+              We use these rounds to spot scoring patterns and tailor the AI strategy. Adding even three or four sharpens the recommendations a lot.
             </div>
           </div>
         )}
 
-        {/* Footer navigation */}
-        <div style={S.footer}>
-          {step > 0 && (
-            <button style={S.btnG} onClick={() => setStep(s => s - 1)}>← Back</button>
-          )}
-          {step < TOTAL_STEPS - 1 ? (
-            <button style={S.btnP} onClick={() => setStep(s => s + 1)}>Next →</button>
-          ) : (
-            <button style={S.btnP} onClick={handleFinish}>Start using GSE ⛳</button>
-          )}
-        </div>
+        {/* ── Step 3: Try it now ── */}
+        {step === 3 && (
+          <div>
+            <div style={S.stepTitle}>Try it now</div>
+            <div style={S.stepSub}>
+              We'll drop you straight into Round Prep with a sample course pre-loaded so you can see a full caddie brief in under a minute. Or finish here and start when you're ready.
+            </div>
+
+            <div style={{ background: '#141720', border: '1px solid #2a2f45', borderRadius: 10, padding: '16px 18px', marginBottom: 18 }}>
+              <p style={{ margin: 0, fontSize: 13, color: '#e2e8f0', fontWeight: 600 }}>Sample course: Pebble Beach Golf Links</p>
+              <p style={{ margin: '4px 0 0', fontSize: 12, color: '#64748b' }}>
+                If we have it cached, the scorecard auto-loads. Otherwise we'll land you on Step 1 of Round Prep so you can pick any course.
+              </p>
+            </div>
+
+            <button
+              style={{ ...S.btnP, marginBottom: 10 }}
+              onClick={() => finish({ trySampleCourse: true })}
+            >
+              Generate a sample plan →
+            </button>
+            <button
+              style={{ ...S.btnG, width: '100%' }}
+              onClick={() => finish()}
+            >
+              Finish — I'll start later
+            </button>
+          </div>
+        )}
+
+        {/* Footer navigation. The "Try it now" step renders its own CTAs above
+            and skips this footer entirely. */}
+        {!isLast && (
+          <div>
+            <div style={S.footer}>
+              {step > 0 && (
+                <button style={S.btnG} onClick={() => setStep(s => s - 1)}>← Back</button>
+              )}
+              <button style={S.btnP} onClick={() => setStep(s => s + 1)}>Next →</button>
+            </div>
+            {canSkip && (
+              <div style={{ textAlign: 'center', marginTop: 10 }}>
+                <button style={S.btnSkip} onClick={() => setStep(s => s + 1)}>Skip this step</button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )

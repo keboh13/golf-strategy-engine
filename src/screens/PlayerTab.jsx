@@ -20,12 +20,58 @@ export default function PlayerTab({
   scoringHistory, setScoringHistory,
   historySearch, updateHS, historySearchCourse, attachCourseToRound,
 }) {
+  // First-run checklist (Part 1.1 of the optimization plan). The card hides
+  // as soon as every item is satisfied so it doesn't nag returning users.
+  const hasName    = !!(playerInfo?.name && playerInfo.name.trim() && playerInfo.name.trim() !== 'Player')
+  const hasCarries = Array.isArray(clubs) && clubs.some(c => c && parseInt(c.carry) > 0)
+  const hasRounds  = Array.isArray(scoringHistory) && scoringHistory.length > 0
+  const checklistItems = [
+    { id: 'name',    label: 'Add your name + handicap',     done: hasName,    target: 'details' },
+    { id: 'clubs',   label: 'Set carry distances',           done: hasCarries, target: 'clubs' },
+    { id: 'scoring', label: 'Log your recent rounds',        done: hasRounds,  target: 'scoring' },
+  ]
+  const showChecklist = checklistItems.some(item => !item.done)
+
   return (
     <div>
       <SectionHead
         title="My Player"
         sub="Your profile, bag, and scoring data — synced with your account."
       />
+
+      {showChecklist && (
+        <div style={{ ...card, marginBottom: 12, borderColor: C.accentMuted }}>
+          <p style={{ ...lbl, margin: '0 0 6px' }}>Get the most out of your briefs</p>
+          <p style={{ fontSize: 12, color: C.textMuted, margin: '0 0 10px' }}>
+            Each item sharpens the AI strategy. Skip anything that's not relevant — the card disappears once these are filled in.
+          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {checklistItems.map(item => (
+              <button
+                key={item.id}
+                onClick={() => setPlayerSubTab(item.target)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 10,
+                  background: 'transparent', border: `1px solid ${C.border}`,
+                  borderRadius: 8, padding: '8px 12px',
+                  fontFamily: F, fontSize: 13, color: item.done ? C.textMuted : C.text,
+                  textAlign: 'left', cursor: 'pointer',
+                }}
+              >
+                <span style={{
+                  width: 18, height: 18, borderRadius: '50%',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  background: item.done ? C.greenMuted : C.bgInput,
+                  color: item.done ? C.green : C.textFaint,
+                  fontSize: 11, fontWeight: 700,
+                }} aria-hidden>{item.done ? '✓' : ''}</span>
+                <span style={{ flex: 1, textDecoration: item.done ? 'line-through' : 'none' }}>{item.label}</span>
+                {!item.done && <span style={{ color: C.accent, fontSize: 12 }}>Open →</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Sub-tab navigation */}
       <div role="tablist" aria-label="Player sections" style={{ display: 'flex', gap: 4, marginBottom: 16, background: C.bgInput, borderRadius: 10, padding: 4, overflowX: 'auto' }}>
