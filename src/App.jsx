@@ -1575,6 +1575,7 @@ Be direct. No filler. ALL 18 HOLES.`
             isMobile={isMobile}
             authToken={session?.access_token || ''}
             currentUserId={user?.id}
+            onEditCourse={(c) => setEditorCourse(c)}
           />
         )}
 
