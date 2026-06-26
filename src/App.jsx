@@ -376,6 +376,27 @@ function AppInner({ user, session, onSignOut }) {
     else setCoords(null)
   }, [])
 
+  // Post-onboarding hand-off (Part 1.1 of the optimization plan). When the
+  // wizard finishes with the "Try it now" CTA it stamps a flag; we read it
+  // once on mount, try to load Pebble Beach from the shared cache, and drop
+  // the user into Round Prep so they see a real brief in under a minute.
+  const sampleCourseTriedRef = useRef(false)
+  useEffect(() => {
+    if (sampleCourseTriedRef.current) return
+    if (localStorage.getItem('gse_onboarding_sample_course') !== '1') return
+    sampleCourseTriedRef.current = true
+    localStorage.removeItem('gse_onboarding_sample_course')
+    ;(async () => {
+      try {
+        const sample = await getCachedCourseDB('Pebble Beach Golf Links', 'Pebble Beach, CA')
+        if (sample) { applyScorecard(sample); setTab('prep'); setPrepStep(2); return }
+      } catch {}
+      // No cached sample — still drop the user in Prep Step 1 so they can
+      // pick anything. Beats blanking back to My Player after onboarding.
+      setTab('prep'); setPrepStep(1)
+    })()
+  }, [applyScorecard])
+
   // Auto-geocode at pick-time so OSM enrichment can start without waiting for
   // the user to reach the Weather step. Part 0.2 of the optimization plan —
   // shaves the geocode round-trip off the perceived enrichment latency for
@@ -1547,18 +1568,27 @@ function AuthGate() {
     setNeedsOnboarding(false)
   }
 
-  // Handle onboarding completion — save initial profile + bag to Supabase
-  const handleOnboardingComplete = async ({ player, clubs: onboardClubs, golfApiKey }) => {
+  // Handle onboarding completion — save initial profile + bag (+ optional
+  // scoring history) to Supabase, optionally hand off a "load sample course"
+  // signal to AppInner via localStorage so it can pre-pick Pebble Beach on
+  // first render (Part 1.1 of the optimization plan).
+  const handleOnboardingComplete = async ({ player, clubs: onboardClubs, rounds, trySampleCourse }) => {
     const u = user
+    const profileName = player.name || 'Default'
     if (u) {
       const playerData = { ...player, clubs: onboardClubs }
       try {
-        await saveUserProfile(u.id, player.name || 'Default', playerData)
-        if (golfApiKey) await saveUserSettings(u.id, { golf_course_api_key: golfApiKey, current_profile: player.name || 'Default' })
-        else await saveUserSettings(u.id, { current_profile: player.name || 'Default' })
+        await saveUserProfile(u.id, profileName, playerData)
+        await saveUserSettings(u.id, { current_profile: profileName })
+        if (Array.isArray(rounds) && rounds.length > 0) {
+          await saveUserHistory(u.id, rounds)
+        }
       } catch (e) {
         console.warn('[onboarding] save error:', e.message)
       }
+    }
+    if (trySampleCourse) {
+      try { localStorage.setItem('gse_onboarding_sample_course', '1') } catch {}
     }
     setNeedsOnboarding(false)
   }
