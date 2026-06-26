@@ -3,6 +3,8 @@ import { C, F, card, lbl } from '../theme.js'
 import { SectionHead } from '../components/ui.jsx'
 import AdminUsersPanel from '../components/AdminUsersPanel.jsx'
 import AdminCoursesPanel from '../components/AdminCoursesPanel.jsx'
+import AdminUsagePanel from '../components/AdminUsagePanel.jsx'
+import AdminAuditPanel from '../components/AdminAuditPanel.jsx'
 
 // Top-level Admin area. Part 4 step 9 of the optimization plan — promotes
 // admin out of the Settings tab into its own first-class section with a
@@ -86,18 +88,10 @@ export default function AdminTab({ isMobile, authToken, currentUserId, onEditCou
         />
       )}
       {sub === 'usage' && (
-        <PlaceholderCard
-          title="Usage"
-          sub="Daily/weekly calls + tokens per user; rec_quality scores broken down by course / club / hole-type; phase_durations p50/p95 from rec_log; per-user rate-limit configuration."
-          hint="Reads api_usage + rec_log + rec_quality. phase_durations are already being populated server-side; the chart UI lands here."
-        />
+        <AdminUsagePanel authToken={authToken} />
       )}
       {sub === 'audit' && (
-        <PlaceholderCard
-          title="Audit"
-          sub="Reverse-chron log of every admin-side mutation (role change, course edit, contribution approval, impersonation start/stop). Filter by actor and target."
-          hint="Requires a new audit_log table — lands with the Users sub-tab."
-        />
+        <AdminAuditPanel authToken={authToken} />
       )}
     </div>
   )
