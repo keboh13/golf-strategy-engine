@@ -25,6 +25,7 @@ import HistoryTab from './screens/HistoryTab.jsx'
 import PlayerTab from './screens/PlayerTab.jsx'
 import SettingsTab from './screens/SettingsTab.jsx'
 import PrepTab from './screens/PrepTab.jsx'
+import AdminTab from './screens/AdminTab.jsx'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
@@ -293,16 +294,18 @@ function AppInner({ user, session, onSignOut }) {
     }
   }, [scoringHistory, dbLoaded])
 
-  // Check admin status once when the Settings tab is opened
+  // Check admin status as soon as we have a session (Part 4 step 9 of the
+  // optimization plan — the dedicated 🛡️ Admin top-level tab needs to know
+  // at boot whether to render itself, not on first Settings click).
   useEffect(() => {
-    if (tab !== 'admin' || isAdmin !== null) return
+    if (isAdmin !== null) return
     const authToken = session?.access_token || ''
     if (!authToken) { setIsAdmin(false); return }
     fetch('/api/check-admin', { headers: { Authorization: `Bearer ${authToken}` } })
       .then(r => r.json())
       .then(d => setIsAdmin(!!d.isAdmin))
       .catch(() => setIsAdmin(false))
-  }, [tab, isAdmin, session])
+  }, [isAdmin, session])
 
   // Boot-time purge of orphaned localStorage course entries. Any cached entry
   // whose key no longer exists in course_cache (and isn't aliased) is dead —
@@ -1326,11 +1329,15 @@ Be direct. No filler. ALL 18 HOLES.`
     if (which === 'golf')      setGolfKey('')
   }
 
+  // Top-level tabs. The Admin tab is appended only when the caller is admin
+  // (Part 4 step 9 of the optimization plan). Settings stays in the bar for
+  // everyone — it's purely personal now.
   const TABS = [
-    { id: 'player',  label: 'My Player',   short: 'Player',  icon: '🏌️' },
-    { id: 'prep',    label: 'Round Prep',   short: 'Prep',    icon: '⛳' },
-    { id: 'history', label: 'History',      short: 'History', icon: '📋' },
-    { id: 'admin',   label: 'Settings',     short: 'Settings',icon: '⚙️' },
+    { id: 'player',  label: 'My Player',  short: 'Player',  icon: '🏌️' },
+    { id: 'prep',    label: 'Round Prep', short: 'Prep',    icon: '⛳' },
+    { id: 'history', label: 'History',    short: 'History', icon: '📋' },
+    { id: 'admin',   label: 'Settings',   short: 'Settings',icon: '⚙️' },
+    ...(isAdmin === true ? [{ id: 'admintab', label: 'Admin', short: 'Admin', icon: '🛡️' }] : []),
   ]
 
   const [playerSubTab, setPlayerSubTab] = useState('details')
@@ -1559,6 +1566,12 @@ Be direct. No filler. ALL 18 HOLES.`
             setPrepStep={setPrepStep}
             applyScorecard={applyScorecard}
           />
+        )}
+
+        {/* Top-level Admin tab (Part 4 step 9). Only rendered when isAdmin
+            resolves true; the tab itself is conditionally added to TABS. */}
+        {tab === 'admintab' && isAdmin === true && (
+          <AdminTab isMobile={isMobile} />
         )}
 
       </div>
