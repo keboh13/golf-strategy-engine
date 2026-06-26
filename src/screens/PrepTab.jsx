@@ -5,6 +5,7 @@ import { AVAILABLE_MODELS } from '../lib/appConstants.js'
 import { C, F, card, inp, lbl, btnP, btnG } from '../theme.js'
 import { Badge, Spin, SectionHead, DataAccuracyTier } from '../components/ui.jsx'
 import ProgressTracker from '../components/ProgressTracker.jsx'
+import PrepContextStrip from '../components/PrepContextStrip.jsx'
 import { ENRICH_STEPS } from '../lib/enrichSteps.js'
 import { GENERATION_STEPS } from '../lib/generationPhases.js'
 import GreenView from '../components/GreenView.jsx'
@@ -517,6 +518,17 @@ export default function PrepTab({
           </div>
         </div>
       )}
+
+      {/* Persistent context strip (Part 1.2) — visible across every Prep step. */}
+      <PrepContextStrip
+        course={course}
+        coords={coords}
+        teeTime={teeTime}
+        teeDate={teeDate}
+        weather={weather}
+        prepStep={prepStep}
+        setPrepStep={setPrepStep}
+      />
     </div>
   )
 }
