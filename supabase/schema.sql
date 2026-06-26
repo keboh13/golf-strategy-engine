@@ -402,6 +402,64 @@ $$;
 
 grant execute on function public.has_role(text) to authenticated;
 
+-- ─── invites ─────────────────────────────────────────────────────────────────
+-- Signed signup links the admin hands out (Part 4 step 10 of the optimization
+-- plan). Each row carries the email the link is intended for, an optional
+-- pre-assigned role (consumed once the user signs up), and an optional profile
+-- name to seed for them. Tokens are uuid v4 so the join URL is unguessable.
+create table if not exists public.invites (
+  token         uuid primary key default uuid_generate_v4(),
+  email         text not null,
+  role          text not null default 'viewer'
+                   check (role in ('viewer','editor','admin','owner')),
+  profile_name  text,
+  created_by    uuid not null references auth.users(id) on delete cascade,
+  created_at    timestamptz not null default now(),
+  expires_at    timestamptz not null default (now() + interval '14 days'),
+  consumed_at   timestamptz,
+  consumed_by   uuid references auth.users(id) on delete set null
+);
+
+create index if not exists invites_email_idx        on public.invites(email);
+create index if not exists invites_created_at_idx   on public.invites(created_at desc);
+
+alter table public.invites enable row level security;
+
+-- Admins read every invite they themselves issued + everyone else's. No
+-- client-side insert/update — that goes through api/admin-invites.js so the
+-- service role can attribute created_by and stamp audit_log in lockstep.
+drop policy if exists "admins read invites" on public.invites;
+create policy "admins read invites"
+  on public.invites for select using (public.is_admin());
+
+-- ─── audit_log ───────────────────────────────────────────────────────────────
+-- Append-only record of every admin-side mutation (Part 4 step 10 of the
+-- optimization plan). Built up by api/admin-* endpoints whenever they grant a
+-- role, issue/revoke an invite, soft-delete a user, etc. payload holds the
+-- specifics (target email, prior role, etc.) so the future Audit sub-tab can
+-- render a rich row without separate lookups.
+create table if not exists public.audit_log (
+  id              bigserial primary key,
+  actor_user_id   uuid references auth.users(id) on delete set null,
+  action          text not null,                  -- 'invite.create' | 'invite.revoke' | 'role.grant' | 'user.delete' | ...
+  target_type     text,                           -- 'user' | 'invite' | 'course'
+  target_id       text,                           -- text so we can store uuids, cache_keys, emails, etc.
+  payload         jsonb not null default '{}',
+  created_at      timestamptz not null default now()
+);
+
+create index if not exists audit_log_created_at_idx on public.audit_log(created_at desc);
+create index if not exists audit_log_actor_idx      on public.audit_log(actor_user_id, created_at desc);
+create index if not exists audit_log_target_idx     on public.audit_log(target_type, target_id);
+
+alter table public.audit_log enable row level security;
+
+drop policy if exists "admins read audit log" on public.audit_log;
+create policy "admins read audit log"
+  on public.audit_log for select using (public.is_admin());
+
+-- No insert/update/delete policies — only the service role writes.
+
 -- ─── admin_rename_course RPC ──────────────────────────────────────────────────
 -- Atomically migrate a course from old_key → new_key across course_cache,
 -- course_hole_hazards, course_geo, and course_hole_contrib. Inserts an alias
