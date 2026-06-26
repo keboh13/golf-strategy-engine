@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { C, F, card, lbl } from '../theme.js'
 import { SectionHead } from '../components/ui.jsx'
 import AdminUsersPanel from '../components/AdminUsersPanel.jsx'
+import AdminCoursesPanel from '../components/AdminCoursesPanel.jsx'
 
 // Top-level Admin area. Part 4 step 9 of the optimization plan — promotes
 // admin out of the Settings tab into its own first-class section with a
@@ -31,7 +32,7 @@ function PlaceholderCard({ title, sub, hint }) {
   )
 }
 
-export default function AdminTab({ isMobile, authToken, currentUserId }) {
+export default function AdminTab({ isMobile, authToken, currentUserId, onEditCourse }) {
   const [sub, setSub] = useState('overview')
 
   return (
@@ -75,11 +76,7 @@ export default function AdminTab({ isMobile, authToken, currentUserId }) {
         <AdminUsersPanel authToken={authToken} currentUserId={currentUserId} />
       )}
       {sub === 'courses' && (
-        <PlaceholderCard
-          title="Courses"
-          sub="Course table with geometry tier / hazard coverage / last reparse date. Bulk PDF reparse queue, CSV/JSON bulk import, contributions moderation, manual geometry editor."
-          hint="The existing Settings → Shared Course Scorecards panel + AdminCourseEditor migrate here."
-        />
+        <AdminCoursesPanel authToken={authToken} onEditCourse={onEditCourse} />
       )}
       {sub === 'data' && (
         <PlaceholderCard
