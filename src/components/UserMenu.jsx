@@ -14,10 +14,25 @@ function initialsFor(email) {
   return (local[0] || '?').toUpperCase()
 }
 
-export default function UserMenu({ user, onSignOut, onOpenSettings, compact }) {
+export default function UserMenu({
+  user,
+  onSignOut,
+  onOpenSettings,
+  compact,
+  // Profile switcher props (Part 4 step 6). Optional — when absent the
+  // menu hides the profile section entirely, matching the pre-switcher UI.
+  currentProfile,
+  profileNames,
+  onSwitchProfile,
+  onCreateProfile,
+}) {
   const [open, setOpen] = useState(false)
   const [signingOut, setSigningOut] = useState(false)
+  const [creatingProfile, setCreatingProfile] = useState(false)
+  const [newProfileName, setNewProfileName] = useState('')
+  const [profileError, setProfileError] = useState('')
   const rootRef = useRef(null)
+  const showProfiles = Array.isArray(profileNames) && profileNames.length > 0 && typeof onSwitchProfile === 'function'
 
   useEffect(() => {
     if (!open) return
@@ -40,6 +55,26 @@ export default function UserMenu({ user, onSignOut, onOpenSettings, compact }) {
     setOpen(false)
     setSigningOut(false)
     onSignOut?.()
+  }
+
+  const handleSwitchProfile = (name) => {
+    if (!onSwitchProfile || name === currentProfile) return
+    onSwitchProfile(name)
+    setOpen(false)
+  }
+
+  const handleCreateProfile = async () => {
+    const name = newProfileName.trim()
+    if (!name) { setProfileError('Profile name is required.'); return }
+    try {
+      await onCreateProfile?.(name)
+      setNewProfileName('')
+      setCreatingProfile(false)
+      setProfileError('')
+      setOpen(false)
+    } catch (e) {
+      setProfileError(e?.message || 'Could not create profile.')
+    }
   }
 
   const email = user?.email || ''
@@ -80,6 +115,78 @@ export default function UserMenu({ user, onSignOut, onOpenSettings, compact }) {
             <p style={{ margin: 0, fontSize: 10, color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Signed in as</p>
             <p style={{ margin: '4px 0 0', fontSize: 13, fontWeight: 600, color: C.text, wordBreak: 'break-all' }}>{email || 'unknown'}</p>
           </div>
+
+          {showProfiles && (
+            <div style={{ padding: '4px 4px 6px', borderBottom: `1px solid ${C.border}`, marginBottom: 4 }}>
+              <p style={{ margin: '4px 10px 6px', fontSize: 10, color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Profile</p>
+              {profileNames.map(name => {
+                const active = name === currentProfile
+                return (
+                  <button
+                    key={name}
+                    role="menuitemradio"
+                    aria-checked={active}
+                    onClick={() => handleSwitchProfile(name)}
+                    style={{
+                      ...menuItemStyle(false),
+                      fontWeight: active ? 600 : 500,
+                      color: active ? C.accent : C.text,
+                    }}
+                  >
+                    <span style={{ width: 18 }}>{active ? '✓' : ' '}</span> {name}
+                  </button>
+                )
+              })}
+              {!creatingProfile ? (
+                <button
+                  role="menuitem"
+                  onClick={() => { setCreatingProfile(true); setProfileError('') }}
+                  style={{ ...menuItemStyle(false), color: C.textMuted }}
+                >
+                  <span style={{ width: 18 }}>＋</span> New profile…
+                </button>
+              ) : (
+                <div style={{ padding: '6px 10px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <input
+                    autoFocus
+                    type="text"
+                    placeholder="Profile name"
+                    value={newProfileName}
+                    onChange={e => { setNewProfileName(e.target.value); setProfileError('') }}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') handleCreateProfile()
+                      else if (e.key === 'Escape') { setCreatingProfile(false); setNewProfileName(''); setProfileError('') }
+                    }}
+                    style={{
+                      background: C.bgInput, border: `1px solid ${C.border}`, borderRadius: 6,
+                      padding: '6px 8px', fontFamily: F, fontSize: 13, color: C.text,
+                    }}
+                  />
+                  {profileError && (
+                    <span style={{ fontSize: 11, color: C.red }}>{profileError}</span>
+                  )}
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button
+                      onClick={handleCreateProfile}
+                      style={{
+                        flex: 1, padding: '6px 10px', borderRadius: 6, border: 'none',
+                        background: C.accent, color: '#0f1117',
+                        fontFamily: F, fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                      }}
+                    >Create</button>
+                    <button
+                      onClick={() => { setCreatingProfile(false); setNewProfileName(''); setProfileError('') }}
+                      style={{
+                        flex: 1, padding: '6px 10px', borderRadius: 6,
+                        background: 'transparent', border: `1px solid ${C.border}`, color: C.textMuted,
+                        fontFamily: F, fontSize: 12, cursor: 'pointer',
+                      }}
+                    >Cancel</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           {onOpenSettings && (
             <button

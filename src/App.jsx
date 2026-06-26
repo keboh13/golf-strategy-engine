@@ -15,6 +15,7 @@ import { fetchHoleDesignViaSearch, mergeDesignDataIntoHoles, searchGolfCourseAPI
 import { ENRICH_STEP_IDS } from './lib/enrichSteps.js'
 import { STEP_STATES } from './lib/progress.js'
 import { GENERATION_PHASE_IDS, stripPhaseMarkers, findPhaseMarkers } from './lib/generationPhases.js'
+import { useProfile } from './lib/useProfile.js'
 import { loadCourseCache, getCachedCourse, setCachedCourse, cacheKey, saveCourseCache, removeCachedCourseByKey, purgeOrphanedLocalEntries } from './lib/courseCache.js'
 import { mergeUploadedScorecard, isSameCourseKey } from './lib/scorecardMerge.js'
 import AuthScreen from './screens/AuthScreen.jsx'
@@ -123,8 +124,18 @@ function AppInner({ user, session, onSignOut }) {
     try { return stripClubs(JSON.parse(localStorage.getItem(LS_PLAYER))) || DEFAULT_PLAYER } catch { return DEFAULT_PLAYER }
   })
 
-  // Single profile per authenticated user (profile name = 'Default')
-  const currentProfile = 'Default'
+  // Multi-profile support (Part 4 step 6 of the optimization plan). The hook
+  // owns the active profile name + list + Supabase round-trips; AppInner
+  // reacts to activeProfileData changes the same way it used to react to the
+  // load effect's single dbProfiles['Default'] read.
+  const {
+    currentProfile,
+    profileNames,
+    activeProfileData,
+    setCurrentProfile,
+    createProfile,
+    cacheActiveProfileData,
+  } = useProfile({ user })
 
   // Club distances — persisted with the player profile (localStorage + Supabase)
   const [clubs, setClubs] = useState(() => {
@@ -227,18 +238,14 @@ function AppInner({ user, session, onSignOut }) {
   // Guard: suppress save-back while Supabase load is in progress
   const [dbLoaded, setDbLoaded] = useState(false)
 
-  // Load user data from Supabase on mount (when authenticated)
+  // Load user data from Supabase on mount (when authenticated). Profile data
+  // is now owned by useProfile() — we just consume `activeProfileData` from
+  // the hook. History, saved plans, and the GolfCourseAPI key still load here.
   useEffect(() => {
     if (!user) return
     setDbLoaded(false)
     ;(async () => {
       try {
-        const dbProfiles = await loadUserProfiles(user.id)
-        const profileData = dbProfiles['Default'] || dbProfiles[Object.keys(dbProfiles)[0]]
-        if (profileData) {
-          setPlayerInfo(stripClubs(profileData))
-          setClubs(clubsFromProfile(profileData))
-        }
         const dbHistory = await loadUserHistory(user.id)
         if (dbHistory.length > 0) setScoringHistory(dbHistory)
         const settings = await loadUserSettings(user.id)
@@ -253,16 +260,29 @@ function AppInner({ user, session, onSignOut }) {
     })()
   }, [user?.id])
 
+  // Mirror the active profile from the hook into playerInfo + clubs whenever
+  // either the user switches profiles or the first DB round-trip completes.
+  // No-op when the hook is still warming up (activeProfileData === null) so
+  // we don't blank the screen.
+  useEffect(() => {
+    if (!activeProfileData) return
+    setPlayerInfo(stripClubs(activeProfileData))
+    setClubs(clubsFromProfile(activeProfileData))
+  }, [activeProfileData])
+
   useEffect(() => {
     const profileData = { ...playerInfo, clubs }
     localStorage.setItem(LS_PLAYER, JSON.stringify(profileData))
+    // Keep the hook's in-memory profile cache in sync so a profile-switch
+    // doesn't reload stale data from Supabase.
+    cacheActiveProfileData(profileData)
     if (user && dbLoaded) {
       const timer = setTimeout(() => {
         saveUserProfile(user.id, currentProfile, profileData).catch(e => console.warn('[supabase] profile save:', e.message))
       }, 1200)
       return () => clearTimeout(timer)
     }
-  }, [playerInfo, clubs, dbLoaded])
+  }, [playerInfo, clubs, dbLoaded, currentProfile])
   useEffect(() => {
     localStorage.setItem(LS_HISTORY, JSON.stringify(scoringHistory))
     if (user && dbLoaded) {
@@ -1263,6 +1283,10 @@ Be direct. No filler. ALL 18 HOLES.`
             compact={isMobile}
             onSignOut={onSignOut}
             onOpenSettings={() => setTab('admin')}
+            currentProfile={currentProfile}
+            profileNames={profileNames}
+            onSwitchProfile={setCurrentProfile}
+            onCreateProfile={(name) => createProfile(name, { ...playerInfo, clubs })}
           />
         </div>
       </div>
