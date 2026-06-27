@@ -461,19 +461,34 @@ create policy "admins read audit log"
 -- No insert/update/delete policies — only the service role writes.
 
 -- ─── user_soft_deletes ────────────────────────────────────────────────────────
--- Soft-delete registry: an admin marks a user for deletion with a 30-day grace
--- period. The auth account is NOT deleted yet. After restore_before passes, the
--- admin can issue a hard DELETE /api/admin-users to permanently remove the
--- account. Row is deleted on restore or on permanent deletion.
 create table if not exists public.user_soft_deletes (
   user_id        uuid primary key references auth.users(id) on delete cascade,
   deleted_at     timestamptz not null default now(),
   deleted_by     uuid references auth.users(id) on delete set null,
   restore_before timestamptz not null
 );
-
 alter table public.user_soft_deletes enable row level security;
--- Only the service role reads/writes this table — no RLS policies needed for anon/user.
+
+-- ─── course_reparse_queue ────────────────────────────────────────────────────
+create table if not exists public.course_reparse_queue (
+  id            uuid primary key default uuid_generate_v4(),
+  course_key    text not null,
+  course_name   text not null,
+  location      text not null default '',
+  pdf_url       text not null,
+  status        text not null default 'pending'
+                  check (status in ('pending','running','pending_approval','approved','rejected','error')),
+  submitted_by  uuid references auth.users(id) on delete set null,
+  submitted_at  timestamptz not null default now(),
+  started_at    timestamptz,
+  finished_at   timestamptz,
+  result_data   jsonb,
+  error_msg     text,
+  approved_by   uuid references auth.users(id) on delete set null,
+  approved_at   timestamptz
+);
+create index if not exists course_reparse_queue_status_idx on public.course_reparse_queue(status, submitted_at desc);
+alter table public.course_reparse_queue enable row level security;
 
 -- ─── admin_rename_course RPC ──────────────────────────────────────────────────
 -- Atomically migrate a course from old_key → new_key across course_cache,

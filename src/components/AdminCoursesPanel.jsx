@@ -10,15 +10,18 @@ import {
   clearCachedScorecardPdfRef,
 } from '../lib/supabase.js'
 import { adminUploadScorecardPdf } from '../lib/courseApi.js'
+import AdminReparseQueue   from './AdminReparseQueue.jsx'
+import AdminBulkImport     from './AdminBulkImport.jsx'
+import AdminContributions  from './AdminContributions.jsx'
+import AdminGeometryEditor from './AdminGeometryEditor.jsx'
 
-// Courses sub-tab content (Part 4 step 11 of the optimization plan). Replaces
-// the placeholder card with a filterable table that scales past the ~50
-// courses where the legacy single-modal panel started to choke. The edit
-// pathway still opens AdminCourseEditor — the existing modal is good; what
-// was missing was a way to find a row fast.
-//
-// Bulk reparse queue, CSV/JSON bulk import, contributions moderation, and
-// the geometry editor are deferred to sibling PRs.
+const COURSE_SUBS = [
+  { id: 'browser',      label: 'Browser',      icon: '⛳' },
+  { id: 'reparse',      label: 'Reparse queue', icon: '🔄' },
+  { id: 'import',       label: 'Bulk import',   icon: '📥' },
+  { id: 'contribs',     label: 'Contributions', icon: '📍' },
+  { id: 'geometry',     label: 'Geometry',      icon: '🗺' },
+]
 
 const SOURCE_FILTERS = [
   { id: 'all',     label: 'All sources' },
@@ -46,6 +49,7 @@ function sourceBadge(c) {
 }
 
 export default function AdminCoursesPanel({ authToken, onEditCourse }) {
+  const [sub, setSub] = useState('browser')
   const [rows, setRows] = useState(null)        // null = not loaded yet
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -138,6 +142,33 @@ export default function AdminCoursesPanel({ authToken, onEditCourse }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* ── Sub-tab nav ──────────────────────────────────────────────── */}
+      <div role="tablist" style={{ display: 'flex', gap: 4, background: C.bgInput, borderRadius: 10, padding: 4, overflowX: 'auto' }}>
+        {COURSE_SUBS.map(s => (
+          <button
+            key={s.id}
+            role="tab"
+            aria-selected={sub === s.id}
+            onClick={() => setSub(s.id)}
+            style={{
+              flex: 1, padding: '8px 12px', fontSize: 12, fontWeight: 500, fontFamily: F,
+              border: 'none', borderRadius: 8, cursor: 'pointer', whiteSpace: 'nowrap',
+              background: sub === s.id ? C.accent : 'transparent',
+              color: sub === s.id ? C.bg : C.textMuted,
+              transition: 'all 0.15s', minHeight: 36,
+            }}
+          >
+            {s.icon} {s.label}
+          </button>
+        ))}
+      </div>
+
+      {sub === 'reparse'  && <AdminReparseQueue  authToken={authToken} />}
+      {sub === 'import'   && <AdminBulkImport />}
+      {sub === 'contribs' && <AdminContributions authToken={authToken} />}
+      {sub === 'geometry' && <AdminGeometryEditor />}
+
+      {sub === 'browser' && <>
       {/* ── Toolbar ──────────────────────────────────────────────────── */}
       <div style={{ ...card }}>
         <p style={{ ...lbl, margin: '0 0 6px' }}>Course browser</p>
@@ -263,6 +294,7 @@ export default function AdminCoursesPanel({ authToken, onEditCourse }) {
           </div>
         )}
       </div>
+      </>}
     </div>
   )
 }
