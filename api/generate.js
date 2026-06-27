@@ -322,26 +322,45 @@ export default async function handler(req) {
           }).catch(() => { /* non-fatal */ })
         }
         // ── Log full prompt + response to rec_log for replay/audit ────────
+        // Use Prefer: return=representation so Supabase echoes back the
+        // inserted row (including its generated id), which we relay to the
+        // client as a final metadata SSE event so the History tab can link
+        // ratings to this specific generation.
         if (supabaseUrl && supabaseServiceKey && promptText) {
-          await fetch(`${supabaseUrl}/rest/v1/rec_log`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'apikey': supabaseServiceKey,
-              'Authorization': `Bearer ${supabaseServiceKey}`,
-            },
-            body: JSON.stringify({
-              user_id: userId === 'dev-user' ? null : userId,
-              course_key: courseKey,
-              model: sanitized.model,
-              prompt: promptText,
-              prompt_hash: promptHash,
-              response: responseText,
-              input_tokens: inputTokens,
-              output_tokens: outputTokens,
-              phase_durations: phaseDurations,
-            }),
-          }).catch((e) => { console.warn('[rec_log] insert failed:', e?.message) })
+          try {
+            const recLogRes = await fetch(`${supabaseUrl}/rest/v1/rec_log`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'apikey': supabaseServiceKey,
+                'Authorization': `Bearer ${supabaseServiceKey}`,
+                'Prefer': 'return=representation',
+              },
+              body: JSON.stringify({
+                user_id: userId === 'dev-user' ? null : userId,
+                course_key: courseKey,
+                model: sanitized.model,
+                prompt: promptText,
+                prompt_hash: promptHash,
+                response: responseText,
+                input_tokens: inputTokens,
+                output_tokens: outputTokens,
+                phase_durations: phaseDurations,
+              }),
+            })
+            if (recLogRes.ok) {
+              const rows = await recLogRes.json()
+              const recLogId = Array.isArray(rows) && rows[0]?.id
+              if (recLogId) {
+                const enc = new TextEncoder()
+                await writer.write(enc.encode(
+                  `data: ${JSON.stringify({ type: 'metadata', rec_log_id: recLogId })}\n\n`
+                ))
+              }
+            }
+          } catch (e) {
+            console.warn('[rec_log] insert failed:', e?.message)
+          }
         }
         writer.close()
       }

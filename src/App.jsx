@@ -1053,6 +1053,7 @@ Be direct. No filler. ALL 18 HOLES.`
     const ctrl = new AbortController()
     abortRef.current = ctrl
     setPlanLoading(true); setPlanPhase('Analyzing scoring history'); setPlanError(''); setPlanValidationBanner(''); setPlan(''); setTab('prep'); setPrepStep(4)
+    let capturedRecLogId = null
     // Reset + start the generation tracker. The implicit 'strategy' phase is
     // running from the first byte; markers advance the machine from there.
     const genStartedAt = Date.now()
@@ -1129,6 +1130,10 @@ Be direct. No filler. ALL 18 HOLES.`
                 return stripPhaseMarkers(next)
               })
             }
+            // Final event emitted by the edge function after rec_log insert.
+            if (j.type === 'metadata' && j.rec_log_id) {
+              capturedRecLogId = j.rec_log_id
+            }
           } catch {}
         }
       }
@@ -1162,7 +1167,7 @@ Be direct. No filler. ALL 18 HOLES.`
             setPlanValidationBanner('')
           }
         }
-        const entry = { course: course.name || 'Profile brief', date: new Date().toISOString().slice(0, 10), plan: p, tee: course.selectedTee || '' }
+        const entry = { course: course.name || 'Profile brief', date: new Date().toISOString().slice(0, 10), plan: p, tee: course.selectedTee || '', rec_log_id: capturedRecLogId || null }
         setSavedBriefs(prev => {
           const updated = [entry, ...prev].slice(0, 10)
           try { localStorage.setItem('golf_saved_briefs', JSON.stringify(updated)) } catch {}
