@@ -286,6 +286,32 @@ alter table public.course_cache
   add column if not exists updated_by   uuid references auth.users(id) on delete set null,
   add column if not exists edit_version integer not null default 0;
 
+-- ─── course_cache: public library flag ───────────────────────────────────────
+-- V2 public course library: is_public = true means this row is curated and
+-- visible in the Library tab. owner_user_id is null for library-owned courses
+-- (shared) and set to the uploading user for privately-contributed courses.
+alter table public.course_cache
+  add column if not exists is_public      boolean not null default false,
+  add column if not exists owner_user_id  uuid references auth.users(id) on delete set null;
+
+-- ─── course_attributions ─────────────────────────────────────────────────────
+-- Credits per course per contributor. Written server-side when a contribution
+-- is approved or when a PDF is uploaded for a course.
+create table if not exists public.course_attributions (
+  id                  uuid primary key default uuid_generate_v4(),
+  course_key          text not null references public.course_cache(cache_key) on delete cascade,
+  user_id             uuid references auth.users(id) on delete set null,
+  contributor_display text,           -- shown on public detail page (email or nickname)
+  contribution_type   text not null,  -- 'geometry' | 'scorecard' | 'pdf' | 'hazards'
+  created_at          timestamptz not null default now()
+);
+create index if not exists course_attributions_course_idx on public.course_attributions(course_key);
+alter table public.course_attributions enable row level security;
+
+drop policy if exists "anyone can read attributions" on public.course_attributions;
+create policy "anyone can read attributions"
+  on public.course_attributions for select using (true);
+
 -- ─── course_aliases ───────────────────────────────────────────────────────────
 -- When an admin renames a course, the old cache_key is recorded here so that
 -- search-by-old-name still resolves to the canonical row. One row per old key.

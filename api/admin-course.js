@@ -252,6 +252,29 @@ async function handleRequest(req) {
       return jsonResponse({ course_data: merged, edit_version: nextVersion }, 200)
     }
 
+    // ── set-public ─────────────────────────────────────────────────────────
+    // Toggle is_public flag on a course_cache row. Admins use this to curate
+    // which courses appear in the public Library tab.
+    if (action === 'set-public') {
+      const { course_key, is_public } = body
+      if (!course_key) return jsonResponse({ error: 'Missing course_key.' }, 400)
+      if (typeof is_public !== 'boolean') return jsonResponse({ error: 'is_public must be boolean.' }, 400)
+
+      const upd = await supabaseRest(
+        `course_cache?cache_key=eq.${encodeURIComponent(course_key)}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', Prefer: 'return=representation' },
+          body: JSON.stringify({ is_public, updated_at: new Date().toISOString(), updated_by: ownerId }),
+        }
+      )
+      if (!upd.ok) {
+        const err = await upd.text().catch(() => '')
+        return jsonResponse({ error: `course_cache update failed: ${err}` }, 500)
+      }
+      return jsonResponse({ ok: true, is_public }, 200)
+    }
+
     // ── rename ─────────────────────────────────────────────────────────────
     // Calls admin_rename_course RPC to atomically re-key across four tables
     // + insert an alias row. Also moves any PDFs in the storage bucket to a

@@ -51,6 +51,10 @@ export default function AdminCoursesPanel({ authToken, onEditCourse }) {
   const [error, setError] = useState('')
   const [busyKey, setBusyKey] = useState('')    // cache_key currently uploading/removing
   const [msg, setMsg] = useState('')
+
+  const authHeaders = authToken
+    ? { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' }
+    : { 'Content-Type': 'application/json' }
   const [search, setSearch] = useState('')
   const [sourceFilter, setSourceFilter] = useState('all')
   const [onlyNeedsReview, setOnlyNeedsReview] = useState(false)
@@ -115,6 +119,24 @@ export default function AdminCoursesPanel({ authToken, onEditCourse }) {
       const conf = result?._confidence || 'medium'
       setMsg(`✓ Scorecard updated for ${c.name} (confidence: ${conf}). Visible to all users.`)
       await load()
+    } catch (e) {
+      setMsg(`Error: ${e.message}`)
+    }
+    setBusyKey('')
+  }
+
+  const handleTogglePublic = async (c) => {
+    const nextVal = !c.is_public
+    setBusyKey(c._cacheKey); setMsg('')
+    try {
+      const res = await fetch('/api/admin-course', {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({ action: 'set-public', course_key: c._cacheKey, is_public: nextVal }),
+      })
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.status)
+      setRows(prev => prev ? prev.map(r => r._cacheKey === c._cacheKey ? { ...r, is_public: nextVal } : r) : prev)
+      setMsg(`✓ ${c.name} is ${nextVal ? 'now in the Library' : 'removed from the Library'}.`)
     } catch (e) {
       setMsg(`Error: ${e.message}`)
     }
@@ -208,6 +230,7 @@ export default function AdminCoursesPanel({ authToken, onEditCourse }) {
                         <Badge label={sb.label} bg={sb.bg} fg={sb.fg} />
                         {hasPdf && <Badge label="PDF on file" bg={C.accentMuted} fg={C.accent} />}
                         {c._needs_review && <Badge label="needs review" bg={C.redMuted} fg={C.red} />}
+                        {c.is_public && <Badge label="📚 Library" bg={C.greenMuted} fg={C.green} />}
                       </div>
                       <p style={{ fontSize: 11, color: C.textMuted, margin: '2px 0 0' }}>
                         {c.location} · Par {c.par || '—'} · {c.yardage ? Number(c.yardage).toLocaleString() + 'y' : '—'}
@@ -229,6 +252,11 @@ export default function AdminCoursesPanel({ authToken, onEditCourse }) {
                         disabled={busy}
                         onClick={() => onEditCourse?.(c)}
                       >✎ Edit metadata</button>
+                      <button
+                        style={{ ...btnG, padding: '6px 10px', color: c.is_public ? C.green : C.textMuted }}
+                        disabled={busy}
+                        onClick={() => handleTogglePublic(c)}
+                      >{c.is_public ? '📚 In Library' : '+ Library'}</button>
                       <label
                         style={{
                           ...btnG, padding: '6px 10px',
