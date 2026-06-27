@@ -135,6 +135,21 @@ export default function LibraryTab({ isMobile, session, onUseForPrep }) {
   // Initial load
   useEffect(() => { load() /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [])
 
+  // When Round Prep sends the user here after a failed search, pre-fill the
+  // search box and run it automatically so they land on relevant results.
+  useEffect(() => {
+    const handler = (e) => {
+      const q = e.detail || ''
+      if (!q) return
+      setSearch(q)
+      setOffset(0)
+      load({ search: q, offset: 0 })
+    }
+    window.addEventListener('library:search', handler)
+    return () => window.removeEventListener('library:search', handler)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const handleSearch = (val) => {
     setSearch(val)
     clearTimeout(searchTimer.current)
