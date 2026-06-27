@@ -491,6 +491,21 @@ create policy "admins read audit log"
 
 -- No insert/update/delete policies — only the service role writes.
 
+-- ─── user_soft_deletes ────────────────────────────────────────────────────────
+-- Soft-delete registry: an admin marks a user for deletion with a 30-day grace
+-- period. The auth account is NOT deleted yet. After restore_before passes, the
+-- admin can issue a hard DELETE /api/admin-users to permanently remove the
+-- account. Row is deleted on restore or on permanent deletion.
+create table if not exists public.user_soft_deletes (
+  user_id        uuid primary key references auth.users(id) on delete cascade,
+  deleted_at     timestamptz not null default now(),
+  deleted_by     uuid references auth.users(id) on delete set null,
+  restore_before timestamptz not null
+);
+
+alter table public.user_soft_deletes enable row level security;
+-- Only the service role reads/writes this table — no RLS policies needed for anon/user.
+
 -- ─── admin_rename_course RPC ──────────────────────────────────────────────────
 -- Atomically migrate a course from old_key → new_key across course_cache,
 -- course_hole_hazards, course_geo, and course_hole_contrib. Inserts an alias
