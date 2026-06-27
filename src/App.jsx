@@ -1622,6 +1622,11 @@ function AuthGate() {
   const [session,     setSession]     = useState(undefined)   // undefined = loading, null = signed out
   const [user,        setUser]        = useState(null)
   const [needsOnboarding, setNeedsOnboarding] = useState(false)
+  // True when Supabase has fired a PASSWORD_RECOVERY event (user clicked the
+  // email link). Forces AuthScreen to render its reset-password view, even
+  // when a recovery session is technically valid — we don't want them dropped
+  // into the main app until they've set a new password.
+  const [recoveryMode, setRecoveryMode] = useState(false)
 
   // Check existing session on mount
   useEffect(() => {
@@ -1630,10 +1635,11 @@ function AuthGate() {
       setUser(session?.user ?? null)
     })
 
-    // Listen for auth changes (login, logout, token refresh)
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    // Listen for auth changes (login, logout, token refresh, password recovery)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       setSession(session)
       setUser(session?.user ?? null)
+      if (event === 'PASSWORD_RECOVERY') setRecoveryMode(true)
     })
     return () => subscription.unsubscribe()
   }, [])
@@ -1687,6 +1693,20 @@ function AuthGate() {
           <p style={{ fontSize: 14 }}>Loading…</p>
         </div>
       </div>
+    )
+  }
+
+  // Password recovery — the Supabase client picked up #access_token=...&type=recovery
+  // from the magic link. Render AuthScreen in reset mode regardless of whether
+  // a session is technically valid; the user shouldn't see the app until they
+  // set a new password.
+  if (recoveryMode) {
+    return (
+      <AuthScreen
+        onAuth={handleAuth}
+        recoveryMode
+        onRecoveryComplete={() => setRecoveryMode(false)}
+      />
     )
   }
 
