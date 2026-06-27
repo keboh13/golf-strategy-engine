@@ -314,8 +314,133 @@ function SignUpForm({ onComplete, isMobile }) {
   )
 }
 
+// ── Forgot-password flow ──────────────────────────────────────────────────────
+// First leg of the recovery flow: collect the user's email and ask Supabase to
+// send them a magic link back to this app. The second leg (setting a new
+// password) lives in ResetPasswordForm below, triggered when AuthGate detects
+// the PASSWORD_RECOVERY auth event.
+function ForgotPasswordForm({ onBack, isMobile }) {
+  const S = makeStyles(isMobile)
+  const [email, setEmail]     = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError]     = useState('')
+  const [sent, setSent]       = useState(false)
+
+  async function handleSubmit(e) {
+    e.preventDefault()
+    setError('')
+    setLoading(true)
+    try {
+      // redirectTo: the email link drops the user back at this app. The
+      // Supabase client picks up the recovery hash automatically (its config
+      // already has detectSessionInUrl: true) and fires PASSWORD_RECOVERY,
+      // which AuthGate consumes to render ResetPasswordForm.
+      const { error: resetErr } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: window.location.origin,
+      })
+      if (resetErr) throw resetErr
+      setSent(true)
+    } catch (err) {
+      setError(err.message || 'Could not send reset email.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  if (sent) {
+    return (
+      <div>
+        <div style={S.info}>
+          <strong>Check your email</strong><br />
+          If an account exists for <strong>{email}</strong>, we just sent a password reset link.<br />
+          Click it from the same device and you'll be able to set a new password.
+        </div>
+        <button type="button" style={S.btn('secondary')} onClick={onBack}>
+          ← Back to sign in
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <div style={S.info}>
+        Enter the email tied to your account. We'll send a reset link — click it from the same browser to set a new password.
+      </div>
+      {error && <div style={S.err}>{error}</div>}
+      <label style={S.label}>Email</label>
+      <input
+        style={S.input} type="email" required autoComplete="email"
+        placeholder="you@example.com"
+        value={email} onChange={e => setEmail(e.target.value)}
+        autoFocus
+      />
+      <button type="submit" style={S.btn()} disabled={loading}>
+        {loading ? 'Sending…' : 'Send reset link'}
+      </button>
+      <button type="button" style={{ ...S.btn('secondary'), marginTop: 8 }} onClick={onBack}>
+        ← Back to sign in
+      </button>
+    </form>
+  )
+}
+
+// ── Set-new-password flow ────────────────────────────────────────────────────
+// Rendered when AuthGate detects the PASSWORD_RECOVERY auth event. At this
+// point Supabase has put a recovery session in place — supabase.auth.updateUser
+// will succeed without any other challenge.
+function ResetPasswordForm({ onComplete, isMobile }) {
+  const S = makeStyles(isMobile)
+  const [pass, setPass]       = useState('')
+  const [pass2, setPass2]     = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError]     = useState('')
+
+  async function handleSubmit(e) {
+    e.preventDefault()
+    setError('')
+    if (pass.length < 8)  { setError('Password must be at least 8 characters.'); return }
+    if (pass !== pass2)   { setError('Passwords do not match.'); return }
+    setLoading(true)
+    try {
+      const { error: updErr } = await supabase.auth.updateUser({ password: pass })
+      if (updErr) throw updErr
+      onComplete()
+    } catch (err) {
+      setError(err.message || 'Could not update password.')
+      setLoading(false)
+    }
+  }
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <div style={S.info}>
+        <strong>Set a new password</strong><br />
+        Pick something at least 8 characters long. You'll stay signed in after this.
+      </div>
+      {error && <div style={S.err}>{error}</div>}
+      <label style={S.label}>New password</label>
+      <input
+        style={S.input} type="password" required autoComplete="new-password"
+        placeholder="8+ characters"
+        value={pass} onChange={e => setPass(e.target.value)}
+        autoFocus
+      />
+      <label style={S.label}>Confirm new password</label>
+      <input
+        style={S.input} type="password" required autoComplete="new-password"
+        placeholder="Repeat password"
+        value={pass2} onChange={e => setPass2(e.target.value)}
+      />
+      <button type="submit" style={S.btn()} disabled={loading}>
+        {loading ? 'Updating…' : 'Update password & continue'}
+      </button>
+    </form>
+  )
+}
+
 // ── Sign-in flow ──────────────────────────────────────────────────────────────
-function SignInForm({ onComplete, isMobile }) {
+function SignInForm({ onComplete, onForgotPassword, isMobile }) {
   const S = makeStyles(isMobile)
   const [step, setStep]     = useState('form')   // 'form' | 'totp_challenge'
   const [email, setEmail]   = useState('')
@@ -417,15 +542,56 @@ function SignInForm({ onComplete, isMobile }) {
       <button type="submit" style={S.btn()} disabled={loading}>
         {loading ? 'Signing in…' : 'Sign in'}
       </button>
+      {onForgotPassword && (
+        <div style={{ textAlign: 'center', marginTop: 12 }}>
+          <button
+            type="button"
+            onClick={onForgotPassword}
+            style={{
+              background: 'transparent', border: 'none', color: '#93c5fd',
+              fontSize: 13, cursor: 'pointer', padding: 4, textDecoration: 'underline',
+              WebkitTapHighlightColor: 'transparent',
+            }}
+          >
+            Forgot password?
+          </button>
+        </div>
+      )}
     </form>
   )
 }
 
 // ── Root AuthScreen ───────────────────────────────────────────────────────────
-export default function AuthScreen({ onAuth }) {
-  const [activeTab, setActiveTab] = useState('signin')
+// `recoveryMode` is passed by AuthGate when Supabase reports PASSWORD_RECOVERY
+// after a user clicks the magic link — that overrides the normal sign-in /
+// sign-up flow with the reset form. `onRecoveryComplete` clears the flag in
+// AuthGate so the user proceeds straight into the app.
+export default function AuthScreen({ onAuth, recoveryMode, onRecoveryComplete }) {
+  // 'signin' | 'signup' | 'forgot'. recoveryMode short-circuits everything.
+  const [view, setView] = useState('signin')
   const isMobile = useIsMobile()
   const S = makeStyles(isMobile)
+
+  let content
+  if (recoveryMode) {
+    content = <ResetPasswordForm onComplete={onRecoveryComplete} isMobile={isMobile} />
+  } else if (view === 'forgot') {
+    content = <ForgotPasswordForm onBack={() => setView('signin')} isMobile={isMobile} />
+  } else if (view === 'signup') {
+    content = <SignUpForm onComplete={onAuth} isMobile={isMobile} />
+  } else {
+    content = (
+      <SignInForm
+        onComplete={onAuth}
+        onForgotPassword={() => setView('forgot')}
+        isMobile={isMobile}
+      />
+    )
+  }
+
+  // Hide the Sign in / Create account tabs while the user is in a recovery
+  // sub-flow — the chrome would just be noise.
+  const showTabs = !recoveryMode && view !== 'forgot'
 
   return (
     <div style={S.wrap}>
@@ -436,15 +602,14 @@ export default function AuthScreen({ onAuth }) {
           <div style={S.logoSub}>AI-powered caddie brief for competitive golfers</div>
         </div>
 
-        <div style={S.tabs}>
-          <button style={S.tab(activeTab === 'signin')}  onClick={() => setActiveTab('signin')}>Sign in</button>
-          <button style={S.tab(activeTab === 'signup')}  onClick={() => setActiveTab('signup')}>Create account</button>
-        </div>
+        {showTabs && (
+          <div style={S.tabs}>
+            <button style={S.tab(view === 'signin')} onClick={() => setView('signin')}>Sign in</button>
+            <button style={S.tab(view === 'signup')} onClick={() => setView('signup')}>Create account</button>
+          </div>
+        )}
 
-        {activeTab === 'signin'
-          ? <SignInForm onComplete={onAuth} isMobile={isMobile} />
-          : <SignUpForm onComplete={onAuth} isMobile={isMobile} />
-        }
+        {content}
 
         <div style={S.divider} />
         <p style={S.small}>
