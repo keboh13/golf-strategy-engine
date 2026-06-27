@@ -7,6 +7,7 @@
   "background_color": "#0f1117",
   "theme_color": "#0f1117",
   "orientation": "portrait-primary",
+  "categories": ["sports", "productivity"],
   "icons": [
     {
       "src": "/icon-192.png",
@@ -16,7 +17,24 @@
     {
       "src": "/icon-512.png",
       "sizes": "512x512",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Round Prep",
+      "short_name": "Prep",
+      "description": "Start a new round brief",
+      "url": "/?tab=prep",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "History",
+      "short_name": "History",
+      "description": "View saved briefs",
+      "url": "/?tab=history",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
     }
   ]
 }

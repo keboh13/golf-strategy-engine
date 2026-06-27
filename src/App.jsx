@@ -16,6 +16,8 @@ import { ENRICH_STEP_IDS } from './lib/enrichSteps.js'
 import { STEP_STATES } from './lib/progress.js'
 import { GENERATION_PHASE_IDS, stripPhaseMarkers, findPhaseMarkers } from './lib/generationPhases.js'
 import { useProfile } from './lib/useProfile.js'
+import { usePwa } from './lib/usePwa.js'
+import PwaBanner from './components/PwaBanner.jsx'
 import { loadCourseCache, getCachedCourse, setCachedCourse, cacheKey, saveCourseCache, removeCachedCourseByKey, purgeOrphanedLocalEntries } from './lib/courseCache.js'
 import { mergeUploadedScorecard, isSameCourseKey } from './lib/scorecardMerge.js'
 import AuthScreen from './screens/AuthScreen.jsx'
@@ -71,6 +73,7 @@ class ErrorBoundary extends Component {
 // ─── Main App ─────────────────────────────────────────────────────────────────
 function AppInner({ user, session, onSignOut }) {
   const isMobile = useIsMobile()
+  const { canInstall, isOnline, installApp, dismiss: dismissInstall } = usePwa()
   // ── API keys — loaded from localStorage, falling back to .env ────────────
   const [apiKey,          setApiKeyRaw]       = useState(() => loadSavedKeys().anthropic  || '')
   const [mapsKey,         setMapsKeyRaw]      = useState(() => loadSavedKeys().maps        || ENV_MAPS_KEY)
@@ -117,7 +120,10 @@ function AppInner({ user, session, onSignOut }) {
   const setMapsKey = (v) => { setMapsKeyRaw(v);     saveKeys({ ...loadSavedKeys(), maps:        v }) }
   const setGolfKey = (v) => { setGolfKeyRaw(v);     saveKeys({ ...loadSavedKeys(), golfCourse:  v }) }
 
-  const [tab, setTab] = useState('player')
+  const [tab, setTab] = useState(() => {
+    const p = new URLSearchParams(window.location.search).get('tab')
+    return ['player','prep','history','settings','admin'].includes(p) ? p : 'player'
+  })
 
   // Player profile — persisted to localStorage across sessions (clubs live alongside in the
   // saved blob but are kept in their own state, so playerInfo's shape stays unchanged)
@@ -1347,7 +1353,13 @@ Be direct. No filler. ALL 18 HOLES.`
 
 
   return (
-    <div style={{ background: C.bg, minHeight: '100vh', fontFamily: F }}>
+    <div style={{ background: C.bg, minHeight: '100vh', fontFamily: F, paddingTop: isOnline ? 0 : 40 }}>
+      <PwaBanner
+        isOnline={isOnline}
+        canInstall={canInstall}
+        onInstall={installApp}
+        onDismiss={dismissInstall}
+      />
       <style>{`
         @keyframes spin{to{transform:rotate(360deg)}}
         @keyframes blink{50%{opacity:0}}

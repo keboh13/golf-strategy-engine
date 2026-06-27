@@ -353,7 +353,7 @@ function ForgotPasswordForm({ onBack, isMobile }) {
         <div style={S.info}>
           <strong>Check your email</strong><br />
           If an account exists for <strong>{email}</strong>, we just sent a password reset link.<br />
-          Click it from the same device and you'll be able to set a new password.
+          Click it from any browser or device and you'll be able to set a new password.
         </div>
         <button type="button" style={S.btn('secondary')} onClick={onBack}>
           ← Back to sign in
@@ -365,7 +365,7 @@ function ForgotPasswordForm({ onBack, isMobile }) {
   return (
     <form onSubmit={handleSubmit}>
       <div style={S.info}>
-        Enter the email tied to your account. We'll send a reset link — click it from the same browser to set a new password.
+        Enter the email tied to your account. We'll send a reset link — click it from any browser or device to set a new password.
       </div>
       {error && <div style={S.err}>{error}</div>}
       <label style={S.label}>Email</label>
