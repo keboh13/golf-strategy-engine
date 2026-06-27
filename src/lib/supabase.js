@@ -353,6 +353,21 @@ export async function loadPrepSession(userId, profileName = 'Default') {
   return data || null
 }
 
+// ── rec_quality ──────────────────────────────────────────────────────────────
+// Upserts a user rating for a single rec_log entry. The unique index on
+// (rec_log_id, rater_id, dimension) means calling this again just updates the
+// existing row — so "change your mind" is safe.
+
+export async function saveRecQuality(recLogId, raterId, rating, dimension = 'overall', notes = null) {
+  const { error } = await supabase
+    .from('rec_quality')
+    .upsert(
+      { rec_log_id: recLogId, rater_id: raterId, rating, dimension, notes: notes || null },
+      { onConflict: 'rec_log_id,rater_id,dimension' }
+    )
+  if (error) throw error
+}
+
 export async function savePrepSession(userId, profileName, state) {
   const { error } = await supabase
     .from('prep_sessions')
