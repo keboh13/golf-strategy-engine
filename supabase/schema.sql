@@ -588,11 +588,20 @@ create table if not exists public.rec_quality (
 
 create index if not exists rec_quality_log_idx on public.rec_quality(rec_log_id);
 
+-- Unique index so upsert on (rec_log_id, rater_id, dimension) works — lets
+-- the user change their rating without producing duplicate rows.
+create unique index if not exists rec_quality_rater_dimension_idx
+  on public.rec_quality (rec_log_id, rater_id, dimension);
+
 alter table public.rec_quality enable row level security;
 
 drop policy if exists "users can write own ratings" on public.rec_quality;
 create policy "users can write own ratings"
   on public.rec_quality for insert with check (auth.uid() = rater_id);
+
+drop policy if exists "users can update own ratings" on public.rec_quality;
+create policy "users can update own ratings"
+  on public.rec_quality for update using (auth.uid() = rater_id);
 
 drop policy if exists "users can read own ratings" on public.rec_quality;
 create policy "users can read own ratings"

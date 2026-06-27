@@ -1,7 +1,47 @@
+import { useState } from 'react'
 import { C, F, card, inp, lbl, btnP, btnG } from '../theme.js'
 import { Badge, SectionHead } from '../components/ui.jsx'
-import { deleteSavedPlan } from '../lib/supabase.js'
+import { deleteSavedPlan, saveRecQuality } from '../lib/supabase.js'
 
+// ── Star rating widget ────────────────────────────────────────────────────────
+// Renders 5 stars; hover preview, click to commit. After commit the stars are
+// static (re-click to change). Only shown when the brief has a rec_log_id
+// (i.e. it was generated after step 13 of the optimisation plan shipped).
+function StarRating({ value, onChange, saving }) {
+  const [hovered, setHovered] = useState(null)
+  const display = hovered ?? value ?? 0
+  return (
+    <div
+      style={{ display: 'flex', gap: 2, alignItems: 'center' }}
+      onMouseLeave={() => setHovered(null)}
+    >
+      {[1, 2, 3, 4, 5].map(n => (
+        <button
+          key={n}
+          disabled={saving}
+          onClick={() => onChange(n)}
+          onMouseEnter={() => setHovered(n)}
+          aria-label={`Rate ${n} star${n !== 1 ? 's' : ''}`}
+          style={{
+            background: 'transparent',
+            border: 'none',
+            padding: '2px 1px',
+            cursor: saving ? 'default' : 'pointer',
+            fontSize: 18,
+            color: n <= display ? '#f59e0b' : C.textFaint,
+            lineHeight: 1,
+            transition: 'color 0.1s',
+            WebkitTapHighlightColor: 'transparent',
+          }}
+        >
+          {n <= display ? '★' : '☆'}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+// ── History tab ───────────────────────────────────────────────────────────────
 export default function HistoryTab({
   user,
   savedBriefs,
@@ -19,6 +59,20 @@ export default function HistoryTab({
   setPlan,
   renderPlan,
 }) {
+  // Per-brief rating state: { [rec_log_id]: { value: 1-5, saving: bool, saved: bool, error: '' } }
+  const [ratings, setRatings] = useState({})
+
+  async function handleRate(recLogId, stars) {
+    if (!user || !recLogId) return
+    setRatings(r => ({ ...r, [recLogId]: { ...r[recLogId], value: stars, saving: true, error: '' } }))
+    try {
+      await saveRecQuality(recLogId, user.id, stars, 'overall')
+      setRatings(r => ({ ...r, [recLogId]: { value: stars, saving: false, saved: true, error: '' } }))
+    } catch (e) {
+      setRatings(r => ({ ...r, [recLogId]: { ...r[recLogId], saving: false, error: e.message || 'Save failed' } }))
+    }
+  }
+
   return (
     <div>
       <SectionHead title="History" sub="Your saved round prep reports and notes" />
@@ -36,6 +90,7 @@ export default function HistoryTab({
             const confirmState = deleteConfirm[i]
             const noteKey = b.id || `local-${i}`
             const note = briefNotes[noteKey] ?? (b.notes || '')
+            const ratingState = b.rec_log_id ? (ratings[b.rec_log_id] || {}) : null
             return (
               <div key={b.id || i} style={{ ...card, borderColor: expandedBrief === i ? C.accent : C.border }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
@@ -106,8 +161,36 @@ export default function HistoryTab({
                   </div>
                 )}
 
+                {/* ── Rating ───────────────────────────────────────────── */}
+                {ratingState !== null && (
+                  <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 10, marginBottom: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 12, color: C.textMuted, fontWeight: 500 }}>Rate this brief</span>
+                      <StarRating
+                        value={ratingState.value ?? null}
+                        onChange={stars => handleRate(b.rec_log_id, stars)}
+                        saving={ratingState.saving}
+                      />
+                      {ratingState.saving && (
+                        <span style={{ fontSize: 11, color: C.textFaint }}>Saving…</span>
+                      )}
+                      {ratingState.saved && !ratingState.saving && (
+                        <span style={{ fontSize: 11, color: C.green }}>✓ Saved</span>
+                      )}
+                      {ratingState.error && (
+                        <span style={{ fontSize: 11, color: C.red }}>{ratingState.error}</span>
+                      )}
+                    </div>
+                    {!ratingState.value && !ratingState.saving && (
+                      <p style={{ fontSize: 10, color: C.textFaint, margin: '4px 0 0' }}>
+                        Helps improve future recommendations for this course.
+                      </p>
+                    )}
+                  </div>
+                )}
+
                 {/* Notes for refining AI */}
-                <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 10 }}>
+                <div style={{ borderTop: ratingState !== null ? `1px solid ${C.border}` : undefined, paddingTop: ratingState !== null ? 10 : 0 }}>
                   <label style={{ ...lbl, marginBottom: 6 }}>Notes for AI refinement</label>
                   <textarea
                     style={{ ...inp, height: 48, resize: 'vertical', fontSize: 12 }}
