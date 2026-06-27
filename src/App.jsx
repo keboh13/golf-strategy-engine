@@ -98,20 +98,8 @@ function AppInner({ user, session, onSignOut }) {
   const [acctMsg,         setAcctMsg]         = useState(null)  // { type: 'ok'|'err', text }
   const [acctLoading,     setAcctLoading]     = useState(false)
 
-  // ── Admin user management state ───────────────────────────────────────────
-  const [isAdmin,         setIsAdmin]         = useState(null)  // null = unknown (not yet checked)
-  const [adminUsers,      setAdminUsers]      = useState(null)  // null = not loaded
-  const [adminUsersLoading, setAdminUsersLoading] = useState(false)
-  const [adminUsersError, setAdminUsersError] = useState('')
-  const [adminDeleteMsg,  setAdminDeleteMsg]  = useState('')
-  const [adminGrantMsg,   setAdminGrantMsg]   = useState('')
-
-  // ── Admin shared-cache (PDF scorecards) state ────────────────────────────
-  const [sharedCache,        setSharedCache]        = useState(null)  // null = not loaded
-  const [sharedCacheLoading, setSharedCacheLoading] = useState(false)
-  const [sharedCacheError,   setSharedCacheError]   = useState('')
-  const [scorecardBusyKey,   setScorecardBusyKey]   = useState('')    // cache_key currently uploading/removing
-  const [scorecardMsg,       setScorecardMsg]       = useState('')
+  // ── Admin state ───────────────────────────────────────────────────────────
+  const [isAdmin, setIsAdmin] = useState(null)  // null = unknown (not yet checked)
 
   // ── Admin course metadata editor ─────────────────────────────────────────
   const [editorCourse, setEditorCourse] = useState(null)  // course object being edited (null = closed)
@@ -1552,12 +1540,9 @@ Be direct. No filler. ALL 18 HOLES.`
         {tab === 'admin' && (
           <SettingsTab
             isMobile={isMobile}
-            isAdmin={isAdmin}
             user={user}
             session={session}
             onSignOut={onSignOut}
-            course={course}
-            setCourse={setCourse}
             selectedModel={selectedModel}
             setSelectedModel={setSelectedModel}
             acctSection={acctSection}
@@ -1572,28 +1557,7 @@ Be direct. No filler. ALL 18 HOLES.`
             setAcctConfirmPass={setAcctConfirmPass}
             acctNewEmail={acctNewEmail}
             setAcctNewEmail={setAcctNewEmail}
-            sharedCache={sharedCache}
-            setSharedCache={setSharedCache}
-            sharedCacheLoading={sharedCacheLoading}
-            setSharedCacheLoading={setSharedCacheLoading}
-            sharedCacheError={sharedCacheError}
-            setSharedCacheError={setSharedCacheError}
-            scorecardBusyKey={scorecardBusyKey}
-            setScorecardBusyKey={setScorecardBusyKey}
-            scorecardMsg={scorecardMsg}
-            setScorecardMsg={setScorecardMsg}
-            adminUsers={adminUsers}
-            setAdminUsers={setAdminUsers}
-            adminUsersLoading={adminUsersLoading}
-            setAdminUsersLoading={setAdminUsersLoading}
-            adminUsersError={adminUsersError}
-            setAdminUsersError={setAdminUsersError}
-            adminDeleteMsg={adminDeleteMsg}
-            setAdminDeleteMsg={setAdminDeleteMsg}
-            adminGrantMsg={adminGrantMsg}
-            setAdminGrantMsg={setAdminGrantMsg}
             setCacheVersion={setCacheVersion}
-            setEditorCourse={setEditorCourse}
             setTab={setTab}
             setPrepStep={setPrepStep}
             applyScorecard={applyScorecard}
