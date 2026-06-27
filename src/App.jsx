@@ -28,6 +28,7 @@ import PlayerTab from './screens/PlayerTab.jsx'
 import SettingsTab from './screens/SettingsTab.jsx'
 import PrepTab from './screens/PrepTab.jsx'
 import AdminTab from './screens/AdminTab.jsx'
+import LibraryTab from './screens/LibraryTab.jsx'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
@@ -122,7 +123,7 @@ function AppInner({ user, session, onSignOut }) {
 
   const [tab, setTab] = useState(() => {
     const p = new URLSearchParams(window.location.search).get('tab')
-    return ['player','prep','history','settings','admin'].includes(p) ? p : 'player'
+    return ['player','prep','history','settings','admin','library'].includes(p) ? p : 'player'
   })
 
   // Player profile — persisted to localStorage across sessions (clubs live alongside in the
@@ -1347,6 +1348,7 @@ Be direct. No filler. ALL 18 HOLES.`
     { id: 'player',  label: 'My Player',  short: 'Player',  icon: '🏌️' },
     { id: 'prep',    label: 'Round Prep', short: 'Prep',    icon: '⛳' },
     { id: 'history', label: 'History',    short: 'History', icon: '📋' },
+    { id: 'library', label: 'Library',    short: 'Library', icon: '📚' },
     { id: 'admin',   label: 'Settings',   short: 'Settings',icon: '⚙️' },
     ...(isAdmin === true ? [{ id: 'admintab', label: 'Admin', short: 'Admin', icon: '🛡️' }] : []),
   ]
@@ -1530,6 +1532,19 @@ Be direct. No filler. ALL 18 HOLES.`
             setPrepStep={setPrepStep}
             setPlan={setPlan}
             renderPlan={renderPlan}
+          />
+        )}
+
+        {/* ── COURSE LIBRARY ── */}
+        {tab === 'library' && (
+          <LibraryTab
+            isMobile={isMobile}
+            session={session}
+            onUseForPrep={(course) => {
+              applyScorecard(course)
+              setTab('prep')
+              setPrepStep(2)
+            }}
           />
         )}
 
