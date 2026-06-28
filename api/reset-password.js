@@ -35,16 +35,18 @@ export default async function handler(req) {
   if (!email || !newPassword) return json({ error: 'Email and new password are required' }, 400)
   if (newPassword.length < 8)  return json({ error: 'Password must be at least 8 characters' }, 400)
 
-  // Look up the user by email via the admin API
+  // GoTrue admin list supports a `filter` text-search across email/phone.
+  // We fetch up to 50 matches then exact-match locally to avoid updating the
+  // wrong account if the search returns multiple partial hits.
   const listRes = await fetch(
-    `${supabaseUrl}/auth/v1/admin/users?email=${encodeURIComponent(email)}&page=1&per_page=1`,
+    `${supabaseUrl}/auth/v1/admin/users?filter=${encodeURIComponent(email)}&page=1&per_page=50`,
     { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` } }
   )
   if (!listRes.ok) return json({ error: 'Could not look up account' }, 500)
 
   const listData = await listRes.json()
-  const users = listData.users ?? listData ?? []
-  const user = Array.isArray(users) ? users[0] : null
+  const users = Array.isArray(listData.users) ? listData.users : (Array.isArray(listData) ? listData : [])
+  const user = users.find(u => u.email?.toLowerCase() === email.toLowerCase()) ?? null
 
   // Return the same generic message whether or not the email exists (avoids
   // leaking which emails are registered).
