@@ -46,7 +46,7 @@ export default function AdminContributions({ authToken }) {
       const d = await res.json()
       if (!res.ok) throw new Error(d.error || res.status)
       setMsg(action === 'approve'
-        ? `✓ Hole ${holeRef} geometry merged into course_geo for ${courseKey}.`
+        ? `✓ Hole ${holeRef} geometry merged into course_geo${d.attributed ? ' · attribution recorded' : ''}.`
         : `Contribution for hole ${holeRef} rejected and removed.`)
       setItems(prev => prev ? prev.filter(i => !(i.course_key === courseKey && i.hole_ref === holeRef)) : prev)
     } catch (e) {
@@ -109,9 +109,16 @@ export default function AdminContributions({ authToken }) {
                       Tee: {fmtCoord(h.tee_lng)}, {fmtCoord(h.tee_lat)}
                       {' · '}Pin: {fmtCoord(h.pin_lng)}, {fmtCoord(h.pin_lat)}
                     </p>
-                    <p style={{ fontSize: 11, color: C.textFaint, margin: '2px 0 0' }}>
-                      Submitted {shortDate(h.updated_at)}
-                      {h.contributor ? ` · by user ${h.contributor.slice(0, 8)}…` : ''}
+                    <p style={{ fontSize: 11, color: C.textFaint, margin: '2px 0 0', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                      <span>Submitted {shortDate(h.updated_at)}</span>
+                      {h._contributorEmail && <span>· {h._contributorEmail}</span>}
+                      {h._approvedCount != null && (
+                        <Badge
+                          label={h._approvedCount >= 5 ? `★ trusted (${h._approvedCount})` : `${h._approvedCount} approved`}
+                          bg={h._approvedCount >= 5 ? '#1a2e1a' : C.bgInput}
+                          fg={h._approvedCount >= 5 ? C.green : C.textFaint}
+                        />
+                      )}
                     </p>
                   </div>
                   <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>

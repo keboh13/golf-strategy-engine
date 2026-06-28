@@ -68,7 +68,30 @@ export default async function handler(req) {
 
     const res = await fetch(endpoint, { headers: svcH })
     if (!res.ok) return json({ error: `Supabase error: ${await res.text()}` }, 500)
-    return json(await res.json())
+    const rows = await res.json()
+
+    // Enrich contributor display: look up email + trust count from user_roles
+    const contributorIds = [...new Set(rows.map(r => r.contributor).filter(Boolean))]
+    const trustByUser = {}
+    if (contributorIds.length) {
+      const [authList, rolesList] = await Promise.all([
+        fetch(`${supabaseUrl}/auth/v1/admin/users?per_page=500`, { headers: svcH }).then(r => r.ok ? r.json() : {}),
+        fetch(`${base}/user_roles?user_id=in.(${contributorIds.join(',')})&select=user_id,approved_contrib_count`, { headers: svcH }).then(r => r.ok ? r.json() : []),
+      ])
+      const emailById = new Map((authList.users || []).map(u => [u.id, u.email]))
+      for (const r of (rolesList || [])) {
+        trustByUser[r.user_id] = { count: r.approved_contrib_count ?? 0, email: emailById.get(r.user_id) }
+      }
+      for (const id of contributorIds) {
+        if (!trustByUser[id]) trustByUser[id] = { count: 0, email: null }
+      }
+    }
+
+    return json(rows.map(r => ({
+      ...r,
+      _contributorEmail: r.contributor ? (trustByUser[r.contributor]?.email || null) : null,
+      _approvedCount: r.contributor ? (trustByUser[r.contributor]?.count ?? 0) : null,
+    })))
   }
 
   // ── PATCH: approve or reject ─────────────────────────────────────────────
@@ -133,7 +156,64 @@ export default async function handler(req) {
         { method: 'DELETE', headers: svcH })
 
       await writeAudit(supabaseUrl, svcKey, requester.id, 'contribution.approve', targetId, { courseKey, holeRef })
-      return json({ ok: true })
+
+      // ── Attribution + trust tier ──────────────────────────────────────────
+      const contributorId = c.contributor || null
+      if (contributorId) {
+        // Look up display name from auth
+        let displayName = null
+        const authUserRes = await fetch(`${supabaseUrl}/auth/v1/admin/users/${contributorId}`, {
+          headers: { ...svcH, apikey: svcKey },
+        }).catch(() => null)
+        if (authUserRes?.ok) {
+          const authUser = await authUserRes.json()
+          displayName = authUser.user_metadata?.full_name || authUser.email || null
+        }
+
+        // Write attribution record (visible on public course detail pages)
+        await fetch(`${base}/course_attributions`, {
+          method: 'POST',
+          headers: svcH,
+          body: JSON.stringify({
+            course_key: courseKey,
+            user_id: contributorId,
+            contributor_display: displayName,
+            contribution_type: 'hole_geometry',
+          }),
+        }).catch(() => {})
+
+        // Increment approved_contrib_count and auto-promote to trusted_contributor
+        // at TRUST_THRESHOLD approved contributions.
+        const TRUST_THRESHOLD = 5
+        const roleRes = await fetch(`${base}/user_roles?user_id=eq.${contributorId}&select=role,approved_contrib_count&limit=1`, { headers: svcH })
+        const roleRows = roleRes.ok ? await roleRes.json() : []
+        const existing = roleRows[0]
+
+        const newCount = (existing?.approved_contrib_count ?? 0) + 1
+        const promoted = !existing?.role?.includes('admin') && !existing?.role?.includes('owner')
+          && newCount >= TRUST_THRESHOLD
+
+        if (existing) {
+          await fetch(`${base}/user_roles?user_id=eq.${contributorId}`, {
+            method: 'PATCH',
+            headers: svcH,
+            body: JSON.stringify({ approved_contrib_count: newCount }),
+          }).catch(() => {})
+        } else {
+          await fetch(`${base}/user_roles`, {
+            method: 'POST',
+            headers: { ...svcH, Prefer: 'return=minimal' },
+            body: JSON.stringify({ user_id: contributorId, role: 'viewer', approved_contrib_count: newCount }),
+          }).catch(() => {})
+        }
+
+        if (promoted) {
+          await writeAudit(supabaseUrl, svcKey, requester.id, 'contribution.trust_promoted',
+            contributorId, { courseKey, holeRef, newCount })
+        }
+      }
+
+      return json({ ok: true, attributed: !!contributorId })
     }
 
     return json({ error: `Unknown action: ${action}` }, 400)
