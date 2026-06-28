@@ -7,6 +7,7 @@ import AdminCoursesPanel from '../components/AdminCoursesPanel.jsx'
 import AdminDataPanel from '../components/AdminDataPanel.jsx'
 import AdminUsagePanel from '../components/AdminUsagePanel.jsx'
 import AdminAuditPanel from '../components/AdminAuditPanel.jsx'
+import AdminOrgsPanel  from '../components/AdminOrgsPanel.jsx'
 
 const ADMIN_SUBS = [
   { id: 'overview', label: 'Overview', icon: '📊' },
@@ -15,9 +16,10 @@ const ADMIN_SUBS = [
   { id: 'data',     label: 'Data',     icon: '🗂' },
   { id: 'usage',    label: 'Usage',    icon: '📈' },
   { id: 'audit',    label: 'Audit',    icon: '📜' },
+  { id: 'orgs',     label: 'Orgs',     icon: '🏢' },
 ]
 
-export default function AdminTab({ isMobile, authToken, currentUserId, onEditCourse }) {
+export default function AdminTab({ isMobile, authToken, currentUserId, onEditCourse, activeOrgId, onOrgChange }) {
   const [sub, setSub] = useState('overview')
 
   // AdminOverviewPanel emits 'admin:sub' events so its quick-link buttons can
@@ -63,6 +65,7 @@ export default function AdminTab({ isMobile, authToken, currentUserId, onEditCou
       {sub === 'data'     && <AdminDataPanel     onNavigate={setSub} />}
       {sub === 'usage'    && <AdminUsagePanel    authToken={authToken} />}
       {sub === 'audit'    && <AdminAuditPanel    authToken={authToken} />}
+      {sub === 'orgs'     && <AdminOrgsPanel     authToken={authToken} currentUserId={currentUserId} activeOrgId={activeOrgId} onOrgChange={onOrgChange} />}
     </div>
   )
 }

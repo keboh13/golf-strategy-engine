@@ -25,6 +25,10 @@ export default function UserMenu({
   profileNames,
   onSwitchProfile,
   onCreateProfile,
+  // Org switcher props. Optional — hidden when absent.
+  orgs,
+  activeOrgId,
+  onSwitchOrg,
 }) {
   const [open, setOpen] = useState(false)
   const [signingOut, setSigningOut] = useState(false)
@@ -185,6 +189,35 @@ export default function UserMenu({
                   </div>
                 </div>
               )}
+            </div>
+          )}
+
+          {Array.isArray(orgs) && orgs.length > 0 && (
+            <div style={{ padding: '4px 4px 6px', borderBottom: `1px solid ${C.border}`, marginBottom: 4 }}>
+              <p style={{ margin: '4px 10px 6px', fontSize: 10, color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Organisation</p>
+              <button
+                role="menuitemradio"
+                aria-checked={!activeOrgId}
+                onClick={() => { onSwitchOrg?.(null); setOpen(false) }}
+                style={{ ...menuItemStyle(false), fontWeight: !activeOrgId ? 600 : 500, color: !activeOrgId ? C.accent : C.text }}
+              >
+                <span style={{ width: 18 }}>{!activeOrgId ? '✓' : ' '}</span> Personal
+              </button>
+              {orgs.map(o => {
+                const active = o.id === activeOrgId
+                return (
+                  <button
+                    key={o.id}
+                    role="menuitemradio"
+                    aria-checked={active}
+                    onClick={() => { onSwitchOrg?.(o.id); setOpen(false) }}
+                    style={{ ...menuItemStyle(false), fontWeight: active ? 600 : 500, color: active ? C.accent : C.text }}
+                  >
+                    <span style={{ width: 18 }}>{active ? '✓' : ' '}</span> {o.name}
+                    <span style={{ marginLeft: 4, fontSize: 10, color: C.textFaint }}>{o.plan !== 'free' ? `· ${o.plan}` : ''}</span>
+                  </button>
+                )
+              })}
             </div>
           )}
 
