@@ -1706,9 +1706,10 @@ function AuthGate() {
     )
   }
 
-  // Not authenticated
+  // Not authenticated — check for invite token in URL
   if (!session || !user) {
-    return <AuthScreen onAuth={handleAuth} />
+    const inviteToken = new URLSearchParams(window.location.search).get('invite') || null
+    return <AuthScreen onAuth={handleAuth} inviteToken={inviteToken} />
   }
 
   // New user — show onboarding wizard
