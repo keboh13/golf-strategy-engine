@@ -1656,6 +1656,14 @@ function AuthGate() {
 
   // Check existing session on mount
   useEffect(() => {
+    // With implicit flow, Supabase parses the hash and fires PASSWORD_RECOVERY
+    // immediately on createClient() — before React has mounted and registered
+    // onAuthStateChange. Guard against this by also reading the hash directly.
+    const hashParams = new URLSearchParams(window.location.hash.slice(1))
+    if (hashParams.get('type') === 'recovery') {
+      setRecoveryMode(true)
+    }
+
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session)
       setUser(session?.user ?? null)
