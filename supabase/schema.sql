@@ -342,9 +342,14 @@ create table if not exists public.user_roles (
   user_id     uuid primary key references auth.users(id) on delete cascade,
   role        text not null default 'viewer'
                  check (role in ('viewer','editor','admin','owner')),
+  daily_cap   integer,                             -- null = global RATE_LIMIT_PER_DAY default
   created_at  timestamptz not null default now(),
   created_by  uuid references auth.users(id) on delete set null
 );
+
+-- Migration (idempotent): add daily_cap for older deploys.
+alter table public.user_roles
+  add column if not exists daily_cap integer;
 
 alter table public.user_roles enable row level security;
 

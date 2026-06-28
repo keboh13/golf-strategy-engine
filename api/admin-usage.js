@@ -146,10 +146,72 @@ export default async function handler(req) {
     }
   }
 
+  // ── rec_quality: ratings by course + by dimension ─────────────────────────
+  // Join rec_quality → rec_log to get course_key per rating. All-time (no
+  // window) so even a sparse quality signal shows up even if it predates the
+  // selected date range.
+  const qualRes = await fetch(
+    `${supabaseUrl}/rest/v1/rec_quality?select=rating,dimension,rec_log:rec_log_id!inner(course_key)&limit=5000`,
+    { headers: svcHeaders },
+  )
+  const qualRows = qualRes.ok ? await qualRes.json() : []
+
+  const avgArr = (arr) => arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : null
+
+  const allRatings = []
+  const dimSamples = {}
+  const courseSamples = new Map()
+
+  for (const r of qualRows) {
+    const courseKey = r.rec_log?.course_key || '(unknown)'
+    const dim = r.dimension || 'overall'
+    const rating = r.rating
+    if (!Number.isFinite(rating)) continue
+
+    allRatings.push(rating)
+    if (!dimSamples[dim]) dimSamples[dim] = []
+    dimSamples[dim].push(rating)
+
+    if (!courseSamples.has(courseKey)) courseSamples.set(courseKey, { all: [], byDim: {} })
+    const ce = courseSamples.get(courseKey)
+    ce.all.push(rating)
+    if (!ce.byDim[dim]) ce.byDim[dim] = []
+    ce.byDim[dim].push(rating)
+  }
+
+  const byCourse = [...courseSamples.entries()]
+    .map(([key, { all, byDim }]) => ({
+      course_key: key,
+      count: all.length,
+      avg: avgArr(all),
+      byDimension: Object.fromEntries(Object.entries(byDim).map(([k, arr]) => [k, avgArr(arr)])),
+    }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 15)
+
+  const qualityStats = {
+    totalRatings: allRatings.length,
+    overallAvg: avgArr(allRatings),
+    byDimension: Object.fromEntries(
+      Object.entries(dimSamples).map(([k, arr]) => [k, { avg: avgArr(arr), count: arr.length }])
+    ),
+    byCourse,
+  }
+
+  // ── per-user daily caps from user_roles ──────────────────────────────────
+  const capsRes = await fetch(
+    `${supabaseUrl}/rest/v1/user_roles?select=user_id,daily_cap&daily_cap=not.is.null`,
+    { headers: svcHeaders },
+  )
+  const capsRows = capsRes.ok ? await capsRes.json() : []
+  const dailyCaps = Object.fromEntries((capsRows || []).map(r => [r.user_id, r.daily_cap]))
+
   return jsonResponse({
     days,
     dailyTotals: [...dailyByKey.values()],
     topUsers,
     phaseStats,
+    qualityStats,
+    dailyCaps,
   })
 }

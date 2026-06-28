@@ -81,8 +81,22 @@ async function checkAndRecordUsage(userId) {
   )
   const count = parseInt(countRes.headers.get('Content-Range')?.split('/')[1] || '0', 10)
 
-  if (count >= DAILY_LIMIT) {
-    return { allowed: false, used: count, recordId: null }
+  // Resolve per-user cap (user_roles.daily_cap overrides global DAILY_LIMIT when set)
+  let effectiveLimit = DAILY_LIMIT
+  try {
+    const capRes = await fetch(
+      `${base}/user_roles?user_id=eq.${userId}&select=daily_cap&limit=1`,
+      { headers }
+    )
+    if (capRes.ok) {
+      const rows = await capRes.json()
+      const cap = rows?.[0]?.daily_cap
+      if (typeof cap === 'number' && cap >= 0) effectiveLimit = cap
+    }
+  } catch { /* non-fatal — fall back to global limit */ }
+
+  if (count >= effectiveLimit) {
+    return { allowed: false, used: count, recordId: null, limit: effectiveLimit }
   }
 
   // Record this request — return=representation gives back the inserted row (including id)
@@ -97,7 +111,7 @@ async function checkAndRecordUsage(userId) {
     recordId = Array.isArray(rows) ? (rows[0]?.id ?? null) : null
   }
 
-  return { allowed: true, used: count + 1, recordId }
+  return { allowed: true, used: count + 1, recordId, limit: effectiveLimit }
 }
 
 // ── Handler ───────────────────────────────────────────────────────────────────
@@ -158,15 +172,15 @@ export default async function handler(req) {
   }
 
   // ── 2. Rate limit ─────────────────────────────────────────────────────────
-  const { allowed, used, recordId } = await checkAndRecordUsage(userId)
+  const { allowed, used, recordId, limit: effectiveLimit } = await checkAndRecordUsage(userId)
   if (!allowed) {
     return new Response(JSON.stringify({
-      error: `Daily limit reached (${DAILY_LIMIT} AI plans/day). Try again tomorrow.`,
+      error: `Daily limit reached (${effectiveLimit} AI plans/day). Try again tomorrow.`,
       used,
-      limit: DAILY_LIMIT,
+      limit: effectiveLimit,
     }), {
       status: 429,
-      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json', 'X-RateLimit-Limit': String(DAILY_LIMIT), 'X-RateLimit-Remaining': '0' },
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json', 'X-RateLimit-Limit': String(effectiveLimit), 'X-RateLimit-Remaining': '0' },
     })
   }
 
@@ -371,8 +385,8 @@ export default async function handler(req) {
       headers: {
         ...CORS_HEADERS,
         'Content-Type': upstream.headers.get('Content-Type') || 'text/event-stream',
-        'X-RateLimit-Limit':     String(DAILY_LIMIT),
-        'X-RateLimit-Remaining': String(Math.max(0, DAILY_LIMIT - used)),
+        'X-RateLimit-Limit':     String(effectiveLimit),
+        'X-RateLimit-Remaining': String(Math.max(0, effectiveLimit - used)),
       },
     })
   } catch (e) {
