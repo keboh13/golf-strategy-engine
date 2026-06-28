@@ -347,9 +347,13 @@ create table if not exists public.user_roles (
   created_by  uuid references auth.users(id) on delete set null
 );
 
--- Migration (idempotent): add daily_cap for older deploys.
+-- Migration (idempotent): add columns for older deploys.
 alter table public.user_roles
   add column if not exists daily_cap integer;
+-- Counts admin-approved contributions; drives the trusted_contributor tier
+-- (>= 5 approved → trusted, displayed in Admin → Usage and Contributions panels).
+alter table public.user_roles
+  add column if not exists approved_contrib_count integer not null default 0;
 
 alter table public.user_roles enable row level security;
 
