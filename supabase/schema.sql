@@ -675,3 +675,108 @@ create policy "users can read own ratings"
 drop policy if exists "admins can read all ratings" on public.rec_quality;
 create policy "admins can read all ratings"
   on public.rec_quality for select using (public.is_admin());
+
+-- ─── orgs ─────────────────────────────────────────────────────────────────────
+-- Multi-tenant org container. org_id = null on other tables = public/personal.
+-- plan: 'free' allows 1 org, 'pro' allows private courses, 'team' adds SSO hooks.
+create table if not exists public.orgs (
+  id          uuid primary key default uuid_generate_v4(),
+  name        text not null,
+  slug        text not null,              -- url-safe, unique per owner
+  owner_id    uuid not null references auth.users(id) on delete restrict,
+  plan        text not null default 'free' check (plan in ('free','pro','team')),
+  created_at  timestamptz not null default now(),
+  unique (slug)
+);
+
+create index if not exists orgs_owner_idx on public.orgs(owner_id);
+
+alter table public.orgs enable row level security;
+
+drop policy if exists "org members can read org" on public.orgs;
+create policy "org members can read org"
+  on public.orgs for select
+  using (
+    owner_id = auth.uid()
+    or exists (
+      select 1 from public.org_members om
+      where om.org_id = id and om.user_id = auth.uid()
+    )
+  );
+
+drop policy if exists "owner can update org" on public.orgs;
+create policy "owner can update org"
+  on public.orgs for update
+  using (owner_id = auth.uid());
+
+drop policy if exists "owner can delete org" on public.orgs;
+create policy "owner can delete org"
+  on public.orgs for delete
+  using (owner_id = auth.uid());
+
+drop policy if exists "authenticated users can create org" on public.orgs;
+create policy "authenticated users can create org"
+  on public.orgs for insert
+  with check (auth.role() = 'authenticated' and owner_id = auth.uid());
+
+-- ─── org_members ─────────────────────────────────────────────────────────────
+-- Membership + role per org. Replaces the flat user_roles table for org-scoped
+-- access. role mirrors the user_roles enum so gating logic is consistent.
+create table if not exists public.org_members (
+  org_id      uuid not null references public.orgs(id) on delete cascade,
+  user_id     uuid not null references auth.users(id) on delete cascade,
+  role        text not null default 'viewer'
+                check (role in ('viewer','editor','admin','owner')),
+  invited_by  uuid references auth.users(id) on delete set null,
+  joined_at   timestamptz not null default now(),
+  primary key (org_id, user_id)
+);
+
+create index if not exists org_members_user_idx on public.org_members(user_id);
+
+alter table public.org_members enable row level security;
+
+drop policy if exists "org members can read membership" on public.org_members;
+create policy "org members can read membership"
+  on public.org_members for select
+  using (
+    user_id = auth.uid()
+    or exists (
+      select 1 from public.org_members om2
+      where om2.org_id = org_id and om2.user_id = auth.uid()
+    )
+  );
+
+drop policy if exists "org admins can manage members" on public.org_members;
+create policy "org admins can manage members"
+  on public.org_members for all
+  using (
+    exists (
+      select 1 from public.org_members om
+      where om.org_id = org_id
+        and om.user_id = auth.uid()
+        and om.role in ('admin','owner')
+    )
+  )
+  with check (
+    exists (
+      select 1 from public.org_members om
+      where om.org_id = org_id
+        and om.user_id = auth.uid()
+        and om.role in ('admin','owner')
+    )
+  );
+
+-- ─── Org-scope extensions (all additive / idempotent) ────────────────────────
+
+-- course_cache: org_id = null → public library; set → org-private course
+alter table public.course_cache
+  add column if not exists org_id uuid references public.orgs(id) on delete set null;
+
+-- invites: org_id = null → personal admin invite; set → org membership invite
+alter table public.invites
+  add column if not exists org_id uuid references public.orgs(id) on delete cascade;
+
+-- user_settings: remember which org the user last had active
+alter table public.user_settings
+  add column if not exists active_org_id uuid references public.orgs(id) on delete set null;

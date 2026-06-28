@@ -133,6 +133,31 @@ function AppInner({ user, session, onSignOut }) {
     cacheActiveProfileData,
   } = useProfile({ user })
 
+  // Active org + org list — persisted to user_settings.active_org_id on change
+  const [activeOrgId, setActiveOrgId] = useState(null)
+  const [userOrgs,    setUserOrgs]    = useState([])
+  useEffect(() => {
+    if (!user?.id || !session?.access_token) return
+    // Load persisted active org from user_settings
+    import('./lib/supabase.js').then(({ loadUserSettings }) =>
+      loadUserSettings(user.id).then(s => { if (s.active_org_id) setActiveOrgId(s.active_org_id) }).catch(() => {})
+    )
+    // Load org list for the switcher
+    fetch('/api/orgs', { headers: { Authorization: `Bearer ${session.access_token}` } })
+      .then(r => r.ok ? r.json() : [])
+      .then(setUserOrgs)
+      .catch(() => {})
+  }, [user?.id, session?.access_token])
+
+  const handleOrgChange = (orgId) => {
+    setActiveOrgId(orgId)
+    if (user?.id) {
+      import('./lib/supabase.js').then(({ saveUserSettings }) =>
+        saveUserSettings(user.id, { active_org_id: orgId }).catch(() => {})
+      )
+    }
+  }
+
   // Club distances — persisted with the player profile (localStorage + Supabase)
   const [clubs, setClubs] = useState(() => {
     try { return clubsFromProfile(JSON.parse(localStorage.getItem(LS_PLAYER))) } catch { return DEFAULT_CLUBS }
@@ -1389,6 +1414,9 @@ Be direct. No filler. ALL 18 HOLES.`
             profileNames={profileNames}
             onSwitchProfile={setCurrentProfile}
             onCreateProfile={(name) => createProfile(name, { ...playerInfo, clubs })}
+            orgs={userOrgs}
+            activeOrgId={activeOrgId}
+            onSwitchOrg={handleOrgChange}
           />
         </div>
       </div>
@@ -1572,6 +1600,8 @@ Be direct. No filler. ALL 18 HOLES.`
             authToken={session?.access_token || ''}
             currentUserId={user?.id}
             onEditCourse={(c) => setEditorCourse(c)}
+            activeOrgId={activeOrgId}
+            onOrgChange={handleOrgChange}
           />
         )}
 
