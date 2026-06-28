@@ -7,6 +7,10 @@ if (!SUPABASE_URL || !SUPABASE_ANON) {
   console.warn('[supabase] VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY not set — auth and DB disabled')
 }
 
+// Capture hash params before createClient() clears them via history.replaceState
+const _initialHash = new URLSearchParams(window.location.hash.slice(1))
+export const initialFlowType = _initialHash.get('type') // 'recovery' | null
+
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON, {
   auth: {
     autoRefreshToken: true,

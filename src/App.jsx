@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef, useMemo, Component } from 'react'
-import { supabase, loadUserProfiles, saveUserProfile, deleteUserProfile, loadUserHistory, saveUserHistory, loadUserSettings, saveUserSettings, getCachedCourseDB, setCachedCourseDB, getAllCachedCoursesDB, deleteCachedCourseDB, loadSavedPlans, savePlan, deleteSavedPlan, loadCourseHazards, listCoursePdfs, uploadCoursePdfToBucket, deleteAllCoursePdfs, deleteCourseHazards, clearCachedScorecardPdfRef, listCanonicalCacheKeys, listAliasKeys, loadPrepSession, savePrepSession } from './lib/supabase.js'
+import { supabase, initialFlowType, loadUserProfiles, saveUserProfile, deleteUserProfile, loadUserHistory, saveUserHistory, loadUserSettings, saveUserSettings, getCachedCourseDB, setCachedCourseDB, getAllCachedCoursesDB, deleteCachedCourseDB, loadSavedPlans, savePlan, deleteSavedPlan, loadCourseHazards, listCoursePdfs, uploadCoursePdfToBucket, deleteAllCoursePdfs, deleteCourseHazards, clearCachedScorecardPdfRef, listCanonicalCacheKeys, listAliasKeys, loadPrepSession, savePrepSession } from './lib/supabase.js'
 import { buildBagSection } from './lib/promptSections.js'
 import { buildRecommendationPrompt } from './lib/recommendation/prompt.js'
 import { validatePlanContract } from './lib/recommendation/planContract.js'
@@ -1652,7 +1652,8 @@ function AuthGate() {
   // email link). Forces AuthScreen to render its reset-password view, even
   // when a recovery session is technically valid — we don't want them dropped
   // into the main app until they've set a new password.
-  const [recoveryMode, setRecoveryMode] = useState(false)
+  // initialFlowType is captured in supabase.js before createClient clears the hash
+  const [recoveryMode, setRecoveryMode] = useState(initialFlowType === 'recovery')
 
   // Check existing session on mount
   useEffect(() => {

@@ -418,48 +418,48 @@ function SignUpForm({ onComplete, isMobile }) {
 }
 
 // ── Forgot-password flow ──────────────────────────────────────────────────────
-// First leg of the recovery flow: collect the user's email and ask Supabase to
-// send them a magic link back to this app. The second leg (setting a new
-// password) lives in ResetPasswordForm below, triggered when AuthGate detects
-// the PASSWORD_RECOVERY auth event.
+// One-step form: user enters their email + new password. The server looks up
+// the account and updates the password directly — no email link needed.
 function ForgotPasswordForm({ onBack, isMobile }) {
   const S = makeStyles(isMobile)
   const [email, setEmail]     = useState('')
+  const [pass, setPass]       = useState('')
+  const [pass2, setPass2]     = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError]     = useState('')
-  const [sent, setSent]       = useState(false)
+  const [done, setDone]       = useState(false)
 
   async function handleSubmit(e) {
     e.preventDefault()
     setError('')
+    if (pass.length < 8)  { setError('Password must be at least 8 characters.'); return }
+    if (pass !== pass2)   { setError('Passwords do not match.'); return }
     setLoading(true)
     try {
-      // redirectTo: the email link drops the user back at this app. The
-      // Supabase client picks up the recovery hash automatically (its config
-      // already has detectSessionInUrl: true) and fires PASSWORD_RECOVERY,
-      // which AuthGate consumes to render ResetPasswordForm.
-      const { error: resetErr } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: window.location.origin,
+      const res = await fetch('/api/reset-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, newPassword: pass }),
       })
-      if (resetErr) throw resetErr
-      setSent(true)
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Could not reset password.')
+      setDone(true)
     } catch (err) {
-      setError(err.message || 'Could not send reset email.')
+      setError(err.message || 'Could not reset password.')
     } finally {
       setLoading(false)
     }
   }
 
-  if (sent) {
+  if (done) {
     return (
       <div>
         <div style={S.info}>
-          <strong>Check your email</strong><br />
-          If an account exists for <strong>{email}</strong>, we just sent a password reset link.<br />
-          Click it from any browser or device and you'll be able to set a new password.
+          <strong>Password updated</strong><br />
+          If <strong>{email}</strong> has an account, your password has been changed. Sign in with your new password.
         </div>
-        <button type="button" style={S.btn('secondary')} onClick={onBack}>
-          ← Back to sign in
+        <button type="button" style={S.btn('primary')} onClick={onBack}>
+          Sign in
         </button>
       </div>
     )
@@ -468,7 +468,7 @@ function ForgotPasswordForm({ onBack, isMobile }) {
   return (
     <form onSubmit={handleSubmit}>
       <div style={S.info}>
-        Enter the email tied to your account. We'll send a reset link — click it from any browser or device to set a new password.
+        Enter your account email and choose a new password.
       </div>
       {error && <div style={S.err}>{error}</div>}
       <label style={S.label}>Email</label>
@@ -478,8 +478,20 @@ function ForgotPasswordForm({ onBack, isMobile }) {
         value={email} onChange={e => setEmail(e.target.value)}
         autoFocus
       />
+      <label style={S.label}>New password</label>
+      <input
+        style={S.input} type="password" required autoComplete="new-password"
+        placeholder="8+ characters"
+        value={pass} onChange={e => setPass(e.target.value)}
+      />
+      <label style={S.label}>Confirm new password</label>
+      <input
+        style={S.input} type="password" required autoComplete="new-password"
+        placeholder="Repeat password"
+        value={pass2} onChange={e => setPass2(e.target.value)}
+      />
       <button type="submit" style={S.btn()} disabled={loading}>
-        {loading ? 'Sending…' : 'Send reset link'}
+        {loading ? 'Updating…' : 'Reset password'}
       </button>
       <button type="button" style={{ ...S.btn('secondary'), marginTop: 8 }} onClick={onBack}>
         ← Back to sign in
