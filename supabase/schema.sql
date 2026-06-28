@@ -690,9 +690,25 @@ create table if not exists public.orgs (
 );
 
 create index if not exists orgs_owner_idx on public.orgs(owner_id);
-
 alter table public.orgs enable row level security;
 
+-- ─── org_members ─────────────────────────────────────────────────────────────
+-- Membership + role per org. Replaces the flat user_roles table for org-scoped
+-- access. role mirrors the user_roles enum so gating logic is consistent.
+create table if not exists public.org_members (
+  org_id      uuid not null references public.orgs(id) on delete cascade,
+  user_id     uuid not null references auth.users(id) on delete cascade,
+  role        text not null default 'viewer'
+                check (role in ('viewer','editor','admin','owner')),
+  invited_by  uuid references auth.users(id) on delete set null,
+  joined_at   timestamptz not null default now(),
+  primary key (org_id, user_id)
+);
+
+create index if not exists org_members_user_idx on public.org_members(user_id);
+alter table public.org_members enable row level security;
+
+-- ─── Policies (both tables exist now) ────────────────────────────────────────
 drop policy if exists "org members can read org" on public.orgs;
 create policy "org members can read org"
   on public.orgs for select
@@ -718,23 +734,6 @@ drop policy if exists "authenticated users can create org" on public.orgs;
 create policy "authenticated users can create org"
   on public.orgs for insert
   with check (auth.role() = 'authenticated' and owner_id = auth.uid());
-
--- ─── org_members ─────────────────────────────────────────────────────────────
--- Membership + role per org. Replaces the flat user_roles table for org-scoped
--- access. role mirrors the user_roles enum so gating logic is consistent.
-create table if not exists public.org_members (
-  org_id      uuid not null references public.orgs(id) on delete cascade,
-  user_id     uuid not null references auth.users(id) on delete cascade,
-  role        text not null default 'viewer'
-                check (role in ('viewer','editor','admin','owner')),
-  invited_by  uuid references auth.users(id) on delete set null,
-  joined_at   timestamptz not null default now(),
-  primary key (org_id, user_id)
-);
-
-create index if not exists org_members_user_idx on public.org_members(user_id);
-
-alter table public.org_members enable row level security;
 
 drop policy if exists "org members can read membership" on public.org_members;
 create policy "org members can read membership"
