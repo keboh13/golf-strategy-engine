@@ -9,7 +9,7 @@ import {
   fetchScorecardViaClaudeSearch, fetchYardageBookViaClaudeSearch,
 } from '../lib/courseApi.js'
 import { getCachedCourse, setCachedCourse, searchLocalCache } from '../lib/courseCache.js'
-import { getCachedCourseDB, setCachedCourseDB } from '../lib/supabase.js'
+import { getCachedCourseDB, setCachedCourseDB, supabase } from '../lib/supabase.js'
 import { STEP_STATES } from '../lib/progress.js'
 
 // Step IDs are stable so ProgressTracker can map states to rows.
@@ -32,7 +32,7 @@ const WEB_STEPS = [
   { id: STEP_YBOOK, label: 'Yardage book lookup',             expectedMs: 8000 },
 ]
 
-export default function CourseSearch({ authToken, onSelect }) {
+export default function CourseSearch({ authToken, onSelect, onBrowseLibrary }) {
   const isMobile = useIsMobile()
   const [query,    setQuery]    = useState('')
   const [location, setLocation] = useState('')
@@ -41,6 +41,7 @@ export default function CourseSearch({ authToken, onSelect }) {
   const [loading,  setLoading]  = useState(false)
   const [error,    setError]    = useState('')
   const [source,   setSource]   = useState('')
+  const [libraryResults, setLibraryResults] = useState([])
   // Progress state: which steps are pending/running/done/skipped/error.
   const [progress, setProgress] = useState({ steps: FAST_STEPS, states: {}, startsAt: {}, endsAt: {}, errors: {} })
   // Live local-cache suggestions while the user is still typing.
@@ -82,6 +83,27 @@ export default function CourseSearch({ authToken, onSelect }) {
     setSource(label)
     setLoading(false)
     setWebPromptVisible(false)
+  }
+
+  // Fuzzy search course_cache for courses matching the current query.
+  // Called when fast sources fail so we surface library options before Claude.
+  const searchLibrary = async (q, loc) => {
+    const needle = `%${(q + (loc ? ' ' + loc : '')).trim().toLowerCase()}%`
+    const { data } = await supabase
+      .from('course_cache')
+      .select('cache_key,course_data,source,hit_count,is_public')
+      .ilike('cache_key', needle)
+      .order('hit_count', { ascending: false })
+      .limit(5)
+    if (!data?.length) return
+    const hits = data.map(r => ({
+      ...r.course_data,
+      source: r.source,
+      _cacheKey: r.cache_key,
+      _hitCount: r.hit_count,
+      _isPublic: r.is_public,
+    }))
+    setLibraryResults(hits)
   }
 
   // Race the GolfCourseAPI and OpenGolfAPI lookups. Whichever produces a
@@ -129,7 +151,7 @@ export default function CourseSearch({ authToken, onSelect }) {
   const search = async () => {
     if (!query.trim()) return
     setLoading(true); setError(''); setResults([]); setDetail(null); setSource('')
-    setWebPromptVisible(false)
+    setWebPromptVisible(false); setLibraryResults([])
     const ac = beginSearch(FAST_STEPS)
 
     // Step 1 — instant local cache check. The DB cache key needs an exact
@@ -178,8 +200,10 @@ export default function CourseSearch({ authToken, onSelect }) {
     }
 
     // No fast-source hit. Surface the opt-in web search button instead of
-    // burning 5–8s automatically.
+    // burning 5–8s automatically. Also kick off a background library search
+    // so we can surface library courses before asking the user to burn Claude.
     setWebPromptVisible(true)
+    searchLibrary(query, location).catch(() => {})
     if (!authToken) {
       setError('No results from the verified sources. Sign in to enable the web-search fallback.')
     }
@@ -371,19 +395,62 @@ export default function CourseSearch({ authToken, onSelect }) {
       )}
 
       {webPromptVisible && !detail && !loading && (
-        <div style={{ marginTop: 10, padding: '10px 14px', background: C.bgInput, border: `1px dashed ${C.border}`, borderRadius: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-          <p style={{ fontSize: 12, color: C.textMuted, margin: 0 }}>
-            Can't find it in the verified sources? Try Claude's web search — slower (5–8s) and not free.
-          </p>
-          <button style={btnG} onClick={searchTheWeb} disabled={!authToken}>
-            Search the web →
-          </button>
-        </div>
+        <>
+          {/* Library results — shown first so users can pick without burning Claude */}
+          {libraryResults.length > 0 && (
+            <div style={{ marginTop: 10 }}>
+              <p style={{ fontSize: 11, color: C.textFaint, margin: '0 0 6px' }}>Found in library:</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                {libraryResults.map((r, i) => (
+                  <button key={i}
+                    onClick={() => finishCachedHit(r, r._isPublic ? 'library' : 'shared cache')}
+                    style={{
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                      background: C.bgInput, border: `1px solid ${C.border}`, borderRadius: 7,
+                      padding: '8px 12px', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.borderColor = C.accentDim}
+                    onMouseLeave={e => e.currentTarget.style.borderColor = C.border}
+                  >
+                    <div>
+                      <span style={{ fontSize: 13, color: C.text, fontWeight: 500 }}>{r.name}</span>
+                      <span style={{ fontSize: 11, color: C.textMuted, marginLeft: 8 }}>{r.location}</span>
+                      {r.par && <span style={{ fontSize: 11, color: C.textFaint, marginLeft: 6 }}>· Par {r.par}</span>}
+                    </div>
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
+                      {r._isPublic && <Badge label="Library" bg={C.accentMuted} fg={C.accent} />}
+                      <span style={{ fontSize: 11, color: C.textMuted }}>Use →</span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div style={{ marginTop: 10, padding: '10px 14px', background: C.bgInput, border: `1px dashed ${C.border}`, borderRadius: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+            <p style={{ fontSize: 12, color: C.textMuted, margin: 0 }}>
+              Can't find it in the verified sources? Try Claude's web search — slower (5–8s) and not free.
+            </p>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {onBrowseLibrary && (
+                <button style={btnG} onClick={() => onBrowseLibrary(query)}>Browse library →</button>
+              )}
+              <button style={btnG} onClick={searchTheWeb} disabled={!authToken}>
+                Search the web →
+              </button>
+            </div>
+          </div>
+        </>
       )}
 
       {error && (
         <div style={{ marginTop: 10, padding: '10px 14px', background: C.redMuted, border: `1px solid ${C.red}`, borderRadius: 8 }}>
           <p style={{ fontSize: 12, color: C.red, margin: 0, whiteSpace: 'pre-wrap' }}>⚠ {error}</p>
+          {onBrowseLibrary && (
+            <button style={{ ...btnG, marginTop: 8, fontSize: 11 }} onClick={() => onBrowseLibrary(query)}>
+              Browse the course library →
+            </button>
+          )}
         </div>
       )}
 

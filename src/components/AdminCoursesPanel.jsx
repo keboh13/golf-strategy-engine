@@ -10,15 +10,18 @@ import {
   clearCachedScorecardPdfRef,
 } from '../lib/supabase.js'
 import { adminUploadScorecardPdf } from '../lib/courseApi.js'
+import AdminReparseQueue   from './AdminReparseQueue.jsx'
+import AdminBulkImport     from './AdminBulkImport.jsx'
+import AdminContributions  from './AdminContributions.jsx'
+import AdminGeometryEditor from './AdminGeometryEditor.jsx'
 
-// Courses sub-tab content (Part 4 step 11 of the optimization plan). Replaces
-// the placeholder card with a filterable table that scales past the ~50
-// courses where the legacy single-modal panel started to choke. The edit
-// pathway still opens AdminCourseEditor — the existing modal is good; what
-// was missing was a way to find a row fast.
-//
-// Bulk reparse queue, CSV/JSON bulk import, contributions moderation, and
-// the geometry editor are deferred to sibling PRs.
+const COURSE_SUBS = [
+  { id: 'browser',      label: 'Browser',      icon: '⛳' },
+  { id: 'reparse',      label: 'Reparse queue', icon: '🔄' },
+  { id: 'import',       label: 'Bulk import',   icon: '📥' },
+  { id: 'contribs',     label: 'Contributions', icon: '📍' },
+  { id: 'geometry',     label: 'Geometry',      icon: '🗺' },
+]
 
 const SOURCE_FILTERS = [
   { id: 'all',     label: 'All sources' },
@@ -46,11 +49,16 @@ function sourceBadge(c) {
 }
 
 export default function AdminCoursesPanel({ authToken, onEditCourse }) {
+  const [sub, setSub] = useState('browser')
   const [rows, setRows] = useState(null)        // null = not loaded yet
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [busyKey, setBusyKey] = useState('')    // cache_key currently uploading/removing
   const [msg, setMsg] = useState('')
+
+  const authHeaders = authToken
+    ? { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' }
+    : { 'Content-Type': 'application/json' }
   const [search, setSearch] = useState('')
   const [sourceFilter, setSourceFilter] = useState('all')
   const [onlyNeedsReview, setOnlyNeedsReview] = useState(false)
@@ -121,6 +129,24 @@ export default function AdminCoursesPanel({ authToken, onEditCourse }) {
     setBusyKey('')
   }
 
+  const handleTogglePublic = async (c) => {
+    const nextVal = !c.is_public
+    setBusyKey(c._cacheKey); setMsg('')
+    try {
+      const res = await fetch('/api/admin-course', {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({ action: 'set-public', course_key: c._cacheKey, is_public: nextVal }),
+      })
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.status)
+      setRows(prev => prev ? prev.map(r => r._cacheKey === c._cacheKey ? { ...r, is_public: nextVal } : r) : prev)
+      setMsg(`✓ ${c.name} is ${nextVal ? 'now in the Library' : 'removed from the Library'}.`)
+    } catch (e) {
+      setMsg(`Error: ${e.message}`)
+    }
+    setBusyKey('')
+  }
+
   const handleRemove = async (c) => {
     if (!window.confirm(`Remove the uploaded scorecard PDF + extracted hazards for ${c.name}?\n\nThe course will fall back to API / auto-discovered data on next lookup. All users will see this change.`)) return
     setBusyKey(c._cacheKey); setMsg('')
@@ -138,6 +164,33 @@ export default function AdminCoursesPanel({ authToken, onEditCourse }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* ── Sub-tab nav ──────────────────────────────────────────────── */}
+      <div role="tablist" style={{ display: 'flex', gap: 4, background: C.bgInput, borderRadius: 10, padding: 4, overflowX: 'auto' }}>
+        {COURSE_SUBS.map(s => (
+          <button
+            key={s.id}
+            role="tab"
+            aria-selected={sub === s.id}
+            onClick={() => setSub(s.id)}
+            style={{
+              flex: 1, padding: '8px 12px', fontSize: 12, fontWeight: 500, fontFamily: F,
+              border: 'none', borderRadius: 8, cursor: 'pointer', whiteSpace: 'nowrap',
+              background: sub === s.id ? C.accent : 'transparent',
+              color: sub === s.id ? C.bg : C.textMuted,
+              transition: 'all 0.15s', minHeight: 36,
+            }}
+          >
+            {s.icon} {s.label}
+          </button>
+        ))}
+      </div>
+
+      {sub === 'reparse'  && <AdminReparseQueue  authToken={authToken} />}
+      {sub === 'import'   && <AdminBulkImport />}
+      {sub === 'contribs' && <AdminContributions authToken={authToken} />}
+      {sub === 'geometry' && <AdminGeometryEditor />}
+
+      {sub === 'browser' && <>
       {/* ── Toolbar ──────────────────────────────────────────────────── */}
       <div style={{ ...card }}>
         <p style={{ ...lbl, margin: '0 0 6px' }}>Course browser</p>
@@ -208,6 +261,7 @@ export default function AdminCoursesPanel({ authToken, onEditCourse }) {
                         <Badge label={sb.label} bg={sb.bg} fg={sb.fg} />
                         {hasPdf && <Badge label="PDF on file" bg={C.accentMuted} fg={C.accent} />}
                         {c._needs_review && <Badge label="needs review" bg={C.redMuted} fg={C.red} />}
+                        {c.is_public && <Badge label="📚 Library" bg={C.greenMuted} fg={C.green} />}
                       </div>
                       <p style={{ fontSize: 11, color: C.textMuted, margin: '2px 0 0' }}>
                         {c.location} · Par {c.par || '—'} · {c.yardage ? Number(c.yardage).toLocaleString() + 'y' : '—'}
@@ -229,6 +283,11 @@ export default function AdminCoursesPanel({ authToken, onEditCourse }) {
                         disabled={busy}
                         onClick={() => onEditCourse?.(c)}
                       >✎ Edit metadata</button>
+                      <button
+                        style={{ ...btnG, padding: '6px 10px', color: c.is_public ? C.green : C.textMuted }}
+                        disabled={busy}
+                        onClick={() => handleTogglePublic(c)}
+                      >{c.is_public ? '📚 In Library' : '+ Library'}</button>
                       <label
                         style={{
                           ...btnG, padding: '6px 10px',
@@ -263,6 +322,7 @@ export default function AdminCoursesPanel({ authToken, onEditCourse }) {
           </div>
         )}
       </div>
+      </>}
     </div>
   )
 }

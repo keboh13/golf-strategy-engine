@@ -1,7 +1,16 @@
+import { useEffect, useState } from 'react'
 import { C, F } from '../theme.js'
 import { polygonToSvgPath } from '../lib/greenGeometry.js'
 
 export default function GreenView({ green, holeNum }) {
+  const [fullscreen, setFullscreen] = useState(false)
+
+  useEffect(() => {
+    const handler = (e) => { if (e.key === 'Escape' && fullscreen) setFullscreen(false) }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [fullscreen])
+
   if (!green) return null
   const FIXED_W = 320, FIXED_H = 290
   const cx = FIXED_W / 2, cy = 135
@@ -96,13 +105,21 @@ export default function GreenView({ green, holeNum }) {
     : green._source === 'osm' ? 'real shape'
     : null
 
-  return (
-    <div style={{ background: C.bgInput, borderRadius: 10, padding: '12px 8px', marginTop: 10 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, padding: '0 8px' }}>
+  const inner = (
+    <div style={fullscreen
+      ? { position: 'fixed', inset: 0, zIndex: 1001, background: C.bg, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 24 }
+      : { background: C.bgInput, borderRadius: 10, padding: '12px 8px', marginTop: 10 }
+    }>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, padding: '0 8px', width: '100%' }}>
         <span style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Green — Hole {holeNum}</span>
         <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           {sourceTag && <span style={{ fontSize: 9, fontWeight: 600, color: C.green, background: '#1a4d2e55', padding: '1px 6px', borderRadius: 4 }}>{sourceTag}</span>}
           {tierCount > 0 && <span style={{ fontSize: 10, fontWeight: 600, color: C.amber, background: C.amberMuted, padding: '1px 6px', borderRadius: 4 }}>{tierCount}-tier</span>}
+          <button
+            onClick={() => setFullscreen(f => !f)}
+            title={fullscreen ? 'Exit fullscreen (Esc)' : 'Fullscreen'}
+            style={{ background: 'none', border: `1px solid ${C.border}`, borderRadius: 4, color: C.textMuted, fontSize: 13, cursor: 'pointer', padding: '1px 5px', lineHeight: 1, fontFamily: F }}
+          >{fullscreen ? '⊠' : '⛶'}</button>
         </span>
       </div>
       <svg viewBox={`0 0 ${FIXED_W} ${FIXED_H}`} width="100%" style={{ display: 'block' }}>
@@ -149,7 +166,7 @@ export default function GreenView({ green, holeNum }) {
         <polygon points={`${cx - 4},${FIXED_H - 8} ${cx + 4},${FIXED_H - 8} ${cx},${FIXED_H - 16}`} fill={C.textFaint} />
         <text x={cx} y={FIXED_H - 2} textAnchor="middle" fill={C.textFaint} fontSize={8} fontFamily={F}>approach</text>
       </svg>
-      <div style={{ padding: '4px 8px 0', display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <div style={{ padding: '4px 8px 0', display: 'flex', flexDirection: 'column', gap: 2, width: '100%' }}>
         {green.confidence && green.confidence !== 'verified' && !sourceTag && (
           <p style={{ fontSize: 9, color: C.amber, margin: 0, fontStyle: 'italic' }}>
             Green data is estimated — verify with course knowledge
@@ -160,6 +177,19 @@ export default function GreenView({ green, holeNum }) {
         {green.green_notes && <p style={{ fontSize: 10, color: C.green, margin: 0, fontStyle: 'italic' }}>{green.green_notes}</p>}
       </div>
     </div>
+  )
+
+  if (!fullscreen) return inner
+  return (
+    <>
+      {/* Placeholder to preserve layout space when fullscreen */}
+      <div style={{ background: C.bgInput, borderRadius: 10, padding: '12px 8px', marginTop: 10, opacity: 0.3, pointerEvents: 'none' }}>
+        <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <span style={{ fontSize: 12, color: C.textFaint }}>Green view — fullscreen</span>
+        </div>
+      </div>
+      {inner}
+    </>
   )
 }
 

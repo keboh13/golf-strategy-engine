@@ -182,7 +182,7 @@ export async function getAllCachedCoursesDB() {
     .select('*')
     .order('cached_at', { ascending: false })
   if (error) throw error
-  return (data || []).map(r => ({ ...r.course_data, source: r.source, _cachedAt: new Date(r.cached_at).getTime(), _cacheKey: r.cache_key, _hitCount: r.hit_count, _editVersion: r.edit_version ?? 0, _updatedAt: r.updated_at }))
+  return (data || []).map(r => ({ ...r.course_data, source: r.source, _cachedAt: new Date(r.cached_at).getTime(), _cacheKey: r.cache_key, _hitCount: r.hit_count, _editVersion: r.edit_version ?? 0, _updatedAt: r.updated_at, is_public: !!r.is_public }))
 }
 
 // Returns the set of canonical cache_keys currently in course_cache. Used by
@@ -351,6 +351,21 @@ export async function loadPrepSession(userId, profileName = 'Default') {
     .maybeSingle()
   if (error) throw error
   return data || null
+}
+
+// ── rec_quality ──────────────────────────────────────────────────────────────
+// Upserts a user rating for a single rec_log entry. The unique index on
+// (rec_log_id, rater_id, dimension) means calling this again just updates the
+// existing row — so "change your mind" is safe.
+
+export async function saveRecQuality(recLogId, raterId, rating, dimension = 'overall', notes = null) {
+  const { error } = await supabase
+    .from('rec_quality')
+    .upsert(
+      { rec_log_id: recLogId, rater_id: raterId, rating, dimension, notes: notes || null },
+      { onConflict: 'rec_log_id,rater_id,dimension' }
+    )
+  if (error) throw error
 }
 
 export async function savePrepSession(userId, profileName, state) {

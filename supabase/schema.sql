@@ -286,6 +286,32 @@ alter table public.course_cache
   add column if not exists updated_by   uuid references auth.users(id) on delete set null,
   add column if not exists edit_version integer not null default 0;
 
+-- ─── course_cache: public library flag ───────────────────────────────────────
+-- V2 public course library: is_public = true means this row is curated and
+-- visible in the Library tab. owner_user_id is null for library-owned courses
+-- (shared) and set to the uploading user for privately-contributed courses.
+alter table public.course_cache
+  add column if not exists is_public      boolean not null default false,
+  add column if not exists owner_user_id  uuid references auth.users(id) on delete set null;
+
+-- ─── course_attributions ─────────────────────────────────────────────────────
+-- Credits per course per contributor. Written server-side when a contribution
+-- is approved or when a PDF is uploaded for a course.
+create table if not exists public.course_attributions (
+  id                  uuid primary key default uuid_generate_v4(),
+  course_key          text not null references public.course_cache(cache_key) on delete cascade,
+  user_id             uuid references auth.users(id) on delete set null,
+  contributor_display text,           -- shown on public detail page (email or nickname)
+  contribution_type   text not null,  -- 'geometry' | 'scorecard' | 'pdf' | 'hazards'
+  created_at          timestamptz not null default now()
+);
+create index if not exists course_attributions_course_idx on public.course_attributions(course_key);
+alter table public.course_attributions enable row level security;
+
+drop policy if exists "anyone can read attributions" on public.course_attributions;
+create policy "anyone can read attributions"
+  on public.course_attributions for select using (true);
+
 -- ─── course_aliases ───────────────────────────────────────────────────────────
 -- When an admin renames a course, the old cache_key is recorded here so that
 -- search-by-old-name still resolves to the canonical row. One row per old key.
@@ -316,9 +342,18 @@ create table if not exists public.user_roles (
   user_id     uuid primary key references auth.users(id) on delete cascade,
   role        text not null default 'viewer'
                  check (role in ('viewer','editor','admin','owner')),
+  daily_cap   integer,                             -- null = global RATE_LIMIT_PER_DAY default
   created_at  timestamptz not null default now(),
   created_by  uuid references auth.users(id) on delete set null
 );
+
+-- Migration (idempotent): add columns for older deploys.
+alter table public.user_roles
+  add column if not exists daily_cap integer;
+-- Counts admin-approved contributions; drives the trusted_contributor tier
+-- (>= 5 approved → trusted, displayed in Admin → Usage and Contributions panels).
+alter table public.user_roles
+  add column if not exists approved_contrib_count integer not null default 0;
 
 alter table public.user_roles enable row level security;
 
@@ -460,6 +495,36 @@ create policy "admins read audit log"
 
 -- No insert/update/delete policies — only the service role writes.
 
+-- ─── user_soft_deletes ────────────────────────────────────────────────────────
+create table if not exists public.user_soft_deletes (
+  user_id        uuid primary key references auth.users(id) on delete cascade,
+  deleted_at     timestamptz not null default now(),
+  deleted_by     uuid references auth.users(id) on delete set null,
+  restore_before timestamptz not null
+);
+alter table public.user_soft_deletes enable row level security;
+
+-- ─── course_reparse_queue ────────────────────────────────────────────────────
+create table if not exists public.course_reparse_queue (
+  id            uuid primary key default uuid_generate_v4(),
+  course_key    text not null,
+  course_name   text not null,
+  location      text not null default '',
+  pdf_url       text not null,
+  status        text not null default 'pending'
+                  check (status in ('pending','running','pending_approval','approved','rejected','error')),
+  submitted_by  uuid references auth.users(id) on delete set null,
+  submitted_at  timestamptz not null default now(),
+  started_at    timestamptz,
+  finished_at   timestamptz,
+  result_data   jsonb,
+  error_msg     text,
+  approved_by   uuid references auth.users(id) on delete set null,
+  approved_at   timestamptz
+);
+create index if not exists course_reparse_queue_status_idx on public.course_reparse_queue(status, submitted_at desc);
+alter table public.course_reparse_queue enable row level security;
+
 -- ─── admin_rename_course RPC ──────────────────────────────────────────────────
 -- Atomically migrate a course from old_key → new_key across course_cache,
 -- course_hole_hazards, course_geo, and course_hole_contrib. Inserts an alias
@@ -588,11 +653,20 @@ create table if not exists public.rec_quality (
 
 create index if not exists rec_quality_log_idx on public.rec_quality(rec_log_id);
 
+-- Unique index so upsert on (rec_log_id, rater_id, dimension) works — lets
+-- the user change their rating without producing duplicate rows.
+create unique index if not exists rec_quality_rater_dimension_idx
+  on public.rec_quality (rec_log_id, rater_id, dimension);
+
 alter table public.rec_quality enable row level security;
 
 drop policy if exists "users can write own ratings" on public.rec_quality;
 create policy "users can write own ratings"
   on public.rec_quality for insert with check (auth.uid() = rater_id);
+
+drop policy if exists "users can update own ratings" on public.rec_quality;
+create policy "users can update own ratings"
+  on public.rec_quality for update using (auth.uid() = rater_id);
 
 drop policy if exists "users can read own ratings" on public.rec_quality;
 create policy "users can read own ratings"

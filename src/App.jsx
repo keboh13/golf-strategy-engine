@@ -28,6 +28,7 @@ import PlayerTab from './screens/PlayerTab.jsx'
 import SettingsTab from './screens/SettingsTab.jsx'
 import PrepTab from './screens/PrepTab.jsx'
 import AdminTab from './screens/AdminTab.jsx'
+import LibraryTab from './screens/LibraryTab.jsx'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
@@ -97,20 +98,8 @@ function AppInner({ user, session, onSignOut }) {
   const [acctMsg,         setAcctMsg]         = useState(null)  // { type: 'ok'|'err', text }
   const [acctLoading,     setAcctLoading]     = useState(false)
 
-  // ── Admin user management state ───────────────────────────────────────────
-  const [isAdmin,         setIsAdmin]         = useState(null)  // null = unknown (not yet checked)
-  const [adminUsers,      setAdminUsers]      = useState(null)  // null = not loaded
-  const [adminUsersLoading, setAdminUsersLoading] = useState(false)
-  const [adminUsersError, setAdminUsersError] = useState('')
-  const [adminDeleteMsg,  setAdminDeleteMsg]  = useState('')
-  const [adminGrantMsg,   setAdminGrantMsg]   = useState('')
-
-  // ── Admin shared-cache (PDF scorecards) state ────────────────────────────
-  const [sharedCache,        setSharedCache]        = useState(null)  // null = not loaded
-  const [sharedCacheLoading, setSharedCacheLoading] = useState(false)
-  const [sharedCacheError,   setSharedCacheError]   = useState('')
-  const [scorecardBusyKey,   setScorecardBusyKey]   = useState('')    // cache_key currently uploading/removing
-  const [scorecardMsg,       setScorecardMsg]       = useState('')
+  // ── Admin state ───────────────────────────────────────────────────────────
+  const [isAdmin, setIsAdmin] = useState(null)  // null = unknown (not yet checked)
 
   // ── Admin course metadata editor ─────────────────────────────────────────
   const [editorCourse, setEditorCourse] = useState(null)  // course object being edited (null = closed)
@@ -122,7 +111,7 @@ function AppInner({ user, session, onSignOut }) {
 
   const [tab, setTab] = useState(() => {
     const p = new URLSearchParams(window.location.search).get('tab')
-    return ['player','prep','history','settings','admin'].includes(p) ? p : 'player'
+    return ['player','prep','history','settings','admin','library'].includes(p) ? p : 'player'
   })
 
   // Player profile — persisted to localStorage across sessions (clubs live alongside in the
@@ -1053,6 +1042,7 @@ Be direct. No filler. ALL 18 HOLES.`
     const ctrl = new AbortController()
     abortRef.current = ctrl
     setPlanLoading(true); setPlanPhase('Analyzing scoring history'); setPlanError(''); setPlanValidationBanner(''); setPlan(''); setTab('prep'); setPrepStep(4)
+    let capturedRecLogId = null
     // Reset + start the generation tracker. The implicit 'strategy' phase is
     // running from the first byte; markers advance the machine from there.
     const genStartedAt = Date.now()
@@ -1129,6 +1119,10 @@ Be direct. No filler. ALL 18 HOLES.`
                 return stripPhaseMarkers(next)
               })
             }
+            // Final event emitted by the edge function after rec_log insert.
+            if (j.type === 'metadata' && j.rec_log_id) {
+              capturedRecLogId = j.rec_log_id
+            }
           } catch {}
         }
       }
@@ -1162,7 +1156,7 @@ Be direct. No filler. ALL 18 HOLES.`
             setPlanValidationBanner('')
           }
         }
-        const entry = { course: course.name || 'Profile brief', date: new Date().toISOString().slice(0, 10), plan: p, tee: course.selectedTee || '' }
+        const entry = { course: course.name || 'Profile brief', date: new Date().toISOString().slice(0, 10), plan: p, tee: course.selectedTee || '', rec_log_id: capturedRecLogId || null }
         setSavedBriefs(prev => {
           const updated = [entry, ...prev].slice(0, 10)
           try { localStorage.setItem('golf_saved_briefs', JSON.stringify(updated)) } catch {}
@@ -1342,6 +1336,7 @@ Be direct. No filler. ALL 18 HOLES.`
     { id: 'player',  label: 'My Player',  short: 'Player',  icon: '🏌️' },
     { id: 'prep',    label: 'Round Prep', short: 'Prep',    icon: '⛳' },
     { id: 'history', label: 'History',    short: 'History', icon: '📋' },
+    { id: 'library', label: 'Library',    short: 'Library', icon: '📚' },
     { id: 'admin',   label: 'Settings',   short: 'Settings',icon: '⚙️' },
     ...(isAdmin === true ? [{ id: 'admintab', label: 'Admin', short: 'Admin', icon: '🛡️' }] : []),
   ]
@@ -1528,16 +1523,26 @@ Be direct. No filler. ALL 18 HOLES.`
           />
         )}
 
+        {/* ── COURSE LIBRARY ── */}
+        {tab === 'library' && (
+          <LibraryTab
+            isMobile={isMobile}
+            session={session}
+            onUseForPrep={(course) => {
+              applyScorecard(course)
+              setTab('prep')
+              setPrepStep(2)
+            }}
+          />
+        )}
+
         {/* ── SETTINGS / ADMIN ── */}
         {tab === 'admin' && (
           <SettingsTab
             isMobile={isMobile}
-            isAdmin={isAdmin}
             user={user}
             session={session}
             onSignOut={onSignOut}
-            course={course}
-            setCourse={setCourse}
             selectedModel={selectedModel}
             setSelectedModel={setSelectedModel}
             acctSection={acctSection}
@@ -1552,28 +1557,7 @@ Be direct. No filler. ALL 18 HOLES.`
             setAcctConfirmPass={setAcctConfirmPass}
             acctNewEmail={acctNewEmail}
             setAcctNewEmail={setAcctNewEmail}
-            sharedCache={sharedCache}
-            setSharedCache={setSharedCache}
-            sharedCacheLoading={sharedCacheLoading}
-            setSharedCacheLoading={setSharedCacheLoading}
-            sharedCacheError={sharedCacheError}
-            setSharedCacheError={setSharedCacheError}
-            scorecardBusyKey={scorecardBusyKey}
-            setScorecardBusyKey={setScorecardBusyKey}
-            scorecardMsg={scorecardMsg}
-            setScorecardMsg={setScorecardMsg}
-            adminUsers={adminUsers}
-            setAdminUsers={setAdminUsers}
-            adminUsersLoading={adminUsersLoading}
-            setAdminUsersLoading={setAdminUsersLoading}
-            adminUsersError={adminUsersError}
-            setAdminUsersError={setAdminUsersError}
-            adminDeleteMsg={adminDeleteMsg}
-            setAdminDeleteMsg={setAdminDeleteMsg}
-            adminGrantMsg={adminGrantMsg}
-            setAdminGrantMsg={setAdminGrantMsg}
             setCacheVersion={setCacheVersion}
-            setEditorCourse={setEditorCourse}
             setTab={setTab}
             setPrepStep={setPrepStep}
             applyScorecard={applyScorecard}
