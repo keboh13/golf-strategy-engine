@@ -98,6 +98,9 @@ function AppInner({ user, session, onSignOut }) {
   const [acctMsg,         setAcctMsg]         = useState(null)  // { type: 'ok'|'err', text }
   const [acctLoading,     setAcctLoading]     = useState(false)
 
+  // ── Prep flow step ───────────────────────────────────────────────────────
+  const [prepStep, setPrepStep] = useState(1)
+
   // ── Admin state ───────────────────────────────────────────────────────────
   const [isAdmin, setIsAdmin] = useState(null)  // null = unknown (not yet checked)
 
@@ -1363,7 +1366,6 @@ Be direct. No filler. ALL 18 HOLES.`
   ]
 
   const [playerSubTab, setPlayerSubTab] = useState('details')
-  const [prepStep, setPrepStep] = useState(1)
   const [deleteConfirm, setDeleteConfirm] = useState({})
   const [briefNotes, setBriefNotes] = useState({})
 
