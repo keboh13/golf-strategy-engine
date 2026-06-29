@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef, useMemo, Component } from 'react'
-import { supabase, initialFlowType, loadUserProfiles, saveUserProfile, deleteUserProfile, loadUserHistory, saveUserHistory, loadUserSettings, saveUserSettings, getCachedCourseDB, setCachedCourseDB, getAllCachedCoursesDB, deleteCachedCourseDB, loadSavedPlans, savePlan, deleteSavedPlan, loadCourseHazards, listCoursePdfs, uploadCoursePdfToBucket, deleteAllCoursePdfs, deleteCourseHazards, clearCachedScorecardPdfRef, listCanonicalCacheKeys, listAliasKeys, loadPrepSession, savePrepSession } from './lib/supabase.js'
+import { supabase, loadUserProfiles, saveUserProfile, deleteUserProfile, loadUserHistory, saveUserHistory, loadUserSettings, saveUserSettings, getCachedCourseDB, setCachedCourseDB, getAllCachedCoursesDB, deleteCachedCourseDB, loadSavedPlans, savePlan, deleteSavedPlan, loadCourseHazards, listCoursePdfs, uploadCoursePdfToBucket, deleteAllCoursePdfs, deleteCourseHazards, clearCachedScorecardPdfRef, listCanonicalCacheKeys, listAliasKeys, loadPrepSession, savePrepSession } from './lib/supabase.js'
 import { buildBagSection } from './lib/promptSections.js'
 import { buildRecommendationPrompt } from './lib/recommendation/prompt.js'
 import { validatePlanContract } from './lib/recommendation/planContract.js'
@@ -1652,8 +1652,12 @@ function AuthGate() {
   // email link). Forces AuthScreen to render its reset-password view, even
   // when a recovery session is technically valid — we don't want them dropped
   // into the main app until they've set a new password.
-  // initialFlowType is captured in supabase.js before createClient clears the hash
-  const [recoveryMode, setRecoveryMode] = useState(initialFlowType === 'recovery')
+  // Lazy initializer runs synchronously on first render — the hash is still
+  // present at this point because Supabase's hash-clearing is async (it waits
+  // for the token exchange network request before calling history.replaceState).
+  const [recoveryMode, setRecoveryMode] = useState(
+    () => new URLSearchParams(window.location.hash.slice(1)).get('type') === 'recovery'
+  )
 
   // Check existing session on mount
   useEffect(() => {
