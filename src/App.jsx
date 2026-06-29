@@ -139,9 +139,7 @@ function AppInner({ user, session, onSignOut }) {
   useEffect(() => {
     if (!user?.id || !session?.access_token) return
     // Load persisted active org from user_settings
-    import('./lib/supabase.js').then(({ loadUserSettings }) =>
-      loadUserSettings(user.id).then(s => { if (s.active_org_id) setActiveOrgId(s.active_org_id) }).catch(() => {})
-    )
+    loadUserSettings(user.id).then(s => { if (s.active_org_id) setActiveOrgId(s.active_org_id) }).catch(() => {})
     // Load org list for the switcher
     fetch('/api/orgs', { headers: { Authorization: `Bearer ${session.access_token}` } })
       .then(r => r.ok ? r.json() : [])
@@ -152,9 +150,7 @@ function AppInner({ user, session, onSignOut }) {
   const handleOrgChange = (orgId) => {
     setActiveOrgId(orgId)
     if (user?.id) {
-      import('./lib/supabase.js').then(({ saveUserSettings }) =>
-        saveUserSettings(user.id, { active_org_id: orgId }).catch(() => {})
-      )
+      saveUserSettings(user.id, { active_org_id: orgId }).catch(() => {})
     }
   }
 
