@@ -90,9 +90,24 @@ export default function CourseHoleMap({
   const [contribStep, setContribStep] = useState(null) // null | 'tee' | 'pin'
   const [teeDraft, setTeeDraft] = useState(null)       // [lng, lat]
   const [saving, setSaving] = useState(false)
+  const [fullscreen, setFullscreen] = useState(false)
 
   const contribute = !!onContribute
   const inContribMode = contribStep != null
+
+  // Resize the MapLibre canvas whenever the container changes size (fullscreen toggle).
+  useEffect(() => {
+    if (!mapRef.current) return
+    const t = setTimeout(() => mapRef.current?.resize(), 60)
+    return () => clearTimeout(t)
+  }, [fullscreen])
+
+  // Escape key exits fullscreen.
+  useEffect(() => {
+    const handler = (e) => { if (e.key === 'Escape' && fullscreen) setFullscreen(false) }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [fullscreen])
 
   // Init map once `coords` are known. Critical for perf: we don't wait for
   // OSM/Overpass to finish — the satellite renders the moment we know where
@@ -282,7 +297,10 @@ export default function CourseHoleMap({
   })()
 
   return (
-    <div style={{ ...card, marginBottom: 14 }}>
+    <div style={fullscreen
+      ? { position: 'fixed', inset: 0, zIndex: 1000, background: C.bg, display: 'flex', flexDirection: 'column', overflowY: 'auto', padding: '12px 16px' }
+      : { ...card, marginBottom: 14 }
+    }>
       {/* Header row: course name + coverage + contribute control */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, gap: 8, flexWrap: 'wrap' }}>
         <p style={{ ...lbl, margin: 0 }}>Course map — {courseName}</p>
@@ -342,7 +360,11 @@ export default function CourseHoleMap({
       <div style={{ position: 'relative' }}>
         <div
           ref={containerRef}
-          style={{ height: 480, borderRadius: 10, overflow: 'hidden', border: `1px solid ${C.border}`, background: '#0c1410' }}
+          style={{
+            height: fullscreen ? 'calc(100vh - 120px)' : 480,
+            borderRadius: fullscreen ? 8 : 10,
+            overflow: 'hidden', border: `1px solid ${C.border}`, background: '#0c1410',
+          }}
         />
         {selectedHole != null && coords?.lat && (
           <div
@@ -375,6 +397,23 @@ export default function CourseHoleMap({
               </span>
             )}
           </div>
+        )}
+
+        {/* Fullscreen toggle */}
+        {coords?.lat && (
+          <button
+            onClick={() => setFullscreen(f => !f)}
+            title={fullscreen ? 'Exit fullscreen (Esc)' : 'Fullscreen'}
+            style={{
+              position: 'absolute', bottom: 10, left: 10, zIndex: 4,
+              width: 32, height: 32, borderRadius: 6, border: `1px solid ${C.borderHover}`,
+              background: 'rgba(15,17,23,0.85)', backdropFilter: 'blur(6px)',
+              color: '#fff', fontSize: 15, cursor: 'pointer', display: 'flex',
+              alignItems: 'center', justifyContent: 'center', fontFamily: 'inherit',
+            }}
+          >
+            {fullscreen ? '⊠' : '⛶'}
+          </button>
         )}
 
         {/* Contribute mode floating prompt */}

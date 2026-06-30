@@ -98,6 +98,14 @@ export default function PrepTab({
           <CourseSearch
             authToken={session?.access_token || ''}
             onSelect={(r) => { applyScorecard(r); setPrepStep(2) }}
+            onBrowseLibrary={(q) => {
+              // Navigate to Library tab; pass the query via a custom event so
+              // LibraryTab can pre-fill its search box.
+              if (q?.trim()) {
+                window.dispatchEvent(new CustomEvent('library:search', { detail: q.trim() }))
+              }
+              setTab('library')
+            }}
           />
           {course.name && (
             <div style={{ ...card, marginTop: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>

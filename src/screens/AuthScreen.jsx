@@ -163,6 +163,109 @@ function makeStyles(isMobile) {
   }
 }
 
+// ── Invite-based signup ───────────────────────────────────────────────────────
+function InviteSignupForm({ inviteToken, onComplete, isMobile }) {
+  const S = makeStyles(isMobile)
+  const [invite, setInvite] = useState(null)   // { email, role }
+  const [inviteErr, setInviteErr] = useState('')
+  const [step, setStep]   = useState('loading') // loading | form | confirm_email | done | invalid
+  const [pass,  setPass]  = useState('')
+  const [pass2, setPass2] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error,   setError]   = useState('')
+
+  useEffect(() => {
+    fetch(`/api/consume-invite?token=${encodeURIComponent(inviteToken)}`)
+      .then(r => r.json())
+      .then(d => {
+        if (d.error) { setInviteErr(d.error); setStep('invalid') }
+        else { setInvite(d); setStep('form') }
+      })
+      .catch(() => { setInviteErr('Could not verify invite link.'); setStep('invalid') })
+  }, [inviteToken])
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    setError('')
+    if (pass !== pass2) { setError('Passwords do not match.'); return }
+    if (pass.length < 8) { setError('Password must be at least 8 characters.'); return }
+    setLoading(true)
+    try {
+      const { data, error: signUpErr } = await supabase.auth.signUp({ email: invite.email, password: pass })
+      if (signUpErr) throw signUpErr
+
+      if (!data.session) {
+        // Email confirmation required — consume will happen after they confirm
+        // We store the token in sessionStorage so the confirmation handler can consume it
+        try { sessionStorage.setItem('pendingInviteToken', inviteToken) } catch {}
+        setStep('confirm_email')
+        setLoading(false)
+        return
+      }
+
+      // Session available immediately — consume the invite now
+      const consumeRes = await fetch('/api/consume-invite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${data.session.access_token}` },
+        body: JSON.stringify({ token: inviteToken }),
+      })
+      if (!consumeRes.ok) console.warn('[invite] consume failed:', await consumeRes.text())
+
+      // Clear URL param so normal nav works
+      window.history.replaceState({}, '', window.location.pathname)
+      onComplete('new')
+    } catch (err) {
+      setError(err.message || 'Sign-up failed.')
+      setLoading(false)
+    }
+  }
+
+  if (step === 'loading') {
+    return <div style={{ padding: '2rem', textAlign: 'center', color: '#64748b', fontSize: 14 }}>Verifying invite…</div>
+  }
+
+  if (step === 'invalid') {
+    return (
+      <div style={S.field}>
+        <div style={{ ...S.info, borderColor: '#ef4444', background: '#2d1515' }}>
+          <strong>Invalid invite</strong><br />{inviteErr}
+        </div>
+      </div>
+    )
+  }
+
+  if (step === 'confirm_email') {
+    return (
+      <div style={S.field}>
+        <div style={S.info}>
+          <strong>Check your email</strong><br />
+          We sent a confirmation link to <strong>{invite?.email}</strong>.<br />
+          Click it to activate your account — your role will be set automatically.
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <div style={{ ...S.info, marginBottom: 16 }}>
+        You've been invited to <strong>Golf Strategy Engine</strong>
+        {invite?.role && invite.role !== 'viewer' && <> as <strong>{invite.role}</strong></>}.
+      </div>
+      {error && <div style={S.err}>{error}</div>}
+      <label style={S.label}>Email</label>
+      <input style={{ ...S.input, opacity: 0.6, cursor: 'not-allowed' }} value={invite?.email || ''} readOnly tabIndex={-1} />
+      <label style={S.label}>Password</label>
+      <input style={S.input} type="password" value={pass} onChange={e => setPass(e.target.value)} autoFocus minLength={8} required placeholder="At least 8 characters" />
+      <label style={S.label}>Confirm password</label>
+      <input style={S.input} type="password" value={pass2} onChange={e => setPass2(e.target.value)} required placeholder="Repeat password" />
+      <button style={S.btn('primary')} type="submit" disabled={loading}>
+        {loading ? 'Creating account…' : 'Create account'}
+      </button>
+    </form>
+  )
+}
+
 // ── Sign-up flow ──────────────────────────────────────────────────────────────
 function SignUpForm({ onComplete, isMobile }) {
   const S = makeStyles(isMobile)
@@ -315,48 +418,48 @@ function SignUpForm({ onComplete, isMobile }) {
 }
 
 // ── Forgot-password flow ──────────────────────────────────────────────────────
-// First leg of the recovery flow: collect the user's email and ask Supabase to
-// send them a magic link back to this app. The second leg (setting a new
-// password) lives in ResetPasswordForm below, triggered when AuthGate detects
-// the PASSWORD_RECOVERY auth event.
+// One-step form: user enters their email + new password. The server looks up
+// the account and updates the password directly — no email link needed.
 function ForgotPasswordForm({ onBack, isMobile }) {
   const S = makeStyles(isMobile)
   const [email, setEmail]     = useState('')
+  const [pass, setPass]       = useState('')
+  const [pass2, setPass2]     = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError]     = useState('')
-  const [sent, setSent]       = useState(false)
+  const [done, setDone]       = useState(false)
 
   async function handleSubmit(e) {
     e.preventDefault()
     setError('')
+    if (pass.length < 8)  { setError('Password must be at least 8 characters.'); return }
+    if (pass !== pass2)   { setError('Passwords do not match.'); return }
     setLoading(true)
     try {
-      // redirectTo: the email link drops the user back at this app. The
-      // Supabase client picks up the recovery hash automatically (its config
-      // already has detectSessionInUrl: true) and fires PASSWORD_RECOVERY,
-      // which AuthGate consumes to render ResetPasswordForm.
-      const { error: resetErr } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: window.location.origin,
+      const res = await fetch('/api/reset-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, newPassword: pass }),
       })
-      if (resetErr) throw resetErr
-      setSent(true)
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Could not reset password.')
+      setDone(true)
     } catch (err) {
-      setError(err.message || 'Could not send reset email.')
+      setError(err.message || 'Could not reset password.')
     } finally {
       setLoading(false)
     }
   }
 
-  if (sent) {
+  if (done) {
     return (
       <div>
         <div style={S.info}>
-          <strong>Check your email</strong><br />
-          If an account exists for <strong>{email}</strong>, we just sent a password reset link.<br />
-          Click it from any browser or device and you'll be able to set a new password.
+          <strong>Password updated</strong><br />
+          If <strong>{email}</strong> has an account, your password has been changed. Sign in with your new password.
         </div>
-        <button type="button" style={S.btn('secondary')} onClick={onBack}>
-          ← Back to sign in
+        <button type="button" style={S.btn('primary')} onClick={onBack}>
+          Sign in
         </button>
       </div>
     )
@@ -365,7 +468,7 @@ function ForgotPasswordForm({ onBack, isMobile }) {
   return (
     <form onSubmit={handleSubmit}>
       <div style={S.info}>
-        Enter the email tied to your account. We'll send a reset link — click it from any browser or device to set a new password.
+        Enter your account email and choose a new password.
       </div>
       {error && <div style={S.err}>{error}</div>}
       <label style={S.label}>Email</label>
@@ -375,8 +478,20 @@ function ForgotPasswordForm({ onBack, isMobile }) {
         value={email} onChange={e => setEmail(e.target.value)}
         autoFocus
       />
+      <label style={S.label}>New password</label>
+      <input
+        style={S.input} type="password" required autoComplete="new-password"
+        placeholder="8+ characters"
+        value={pass} onChange={e => setPass(e.target.value)}
+      />
+      <label style={S.label}>Confirm new password</label>
+      <input
+        style={S.input} type="password" required autoComplete="new-password"
+        placeholder="Repeat password"
+        value={pass2} onChange={e => setPass2(e.target.value)}
+      />
       <button type="submit" style={S.btn()} disabled={loading}>
-        {loading ? 'Sending…' : 'Send reset link'}
+        {loading ? 'Updating…' : 'Reset password'}
       </button>
       <button type="button" style={{ ...S.btn('secondary'), marginTop: 8 }} onClick={onBack}>
         ← Back to sign in
@@ -566,15 +681,36 @@ function SignInForm({ onComplete, onForgotPassword, isMobile }) {
 // after a user clicks the magic link — that overrides the normal sign-in /
 // sign-up flow with the reset form. `onRecoveryComplete` clears the flag in
 // AuthGate so the user proceeds straight into the app.
-export default function AuthScreen({ onAuth, recoveryMode, onRecoveryComplete }) {
+export default function AuthScreen({ onAuth, recoveryMode, onRecoveryComplete, inviteToken }) {
   // 'signin' | 'signup' | 'forgot'. recoveryMode short-circuits everything.
   const [view, setView] = useState('signin')
   const isMobile = useIsMobile()
   const S = makeStyles(isMobile)
 
+  // After email-confirmation for an invited user, consume the pending token
+  useEffect(() => {
+    const pending = (() => { try { return sessionStorage.getItem('pendingInviteToken') } catch { return null } })()
+    if (!pending) return
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'SIGNED_IN' && session) {
+        try { sessionStorage.removeItem('pendingInviteToken') } catch {}
+        await fetch('/api/consume-invite', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+          body: JSON.stringify({ token: pending }),
+        }).catch(() => {})
+        window.history.replaceState({}, '', window.location.pathname)
+        onAuth('new')
+      }
+    })
+    return () => subscription.unsubscribe()
+  }, []) // eslint-disable-line
+
   let content
   if (recoveryMode) {
     content = <ResetPasswordForm onComplete={onRecoveryComplete} isMobile={isMobile} />
+  } else if (inviteToken) {
+    content = <InviteSignupForm inviteToken={inviteToken} onComplete={onAuth} isMobile={isMobile} />
   } else if (view === 'forgot') {
     content = <ForgotPasswordForm onBack={() => setView('signin')} isMobile={isMobile} />
   } else if (view === 'signup') {
@@ -589,9 +725,8 @@ export default function AuthScreen({ onAuth, recoveryMode, onRecoveryComplete })
     )
   }
 
-  // Hide the Sign in / Create account tabs while the user is in a recovery
-  // sub-flow — the chrome would just be noise.
-  const showTabs = !recoveryMode && view !== 'forgot'
+  // Hide tabs when in a sub-flow (recovery, invite, forgot)
+  const showTabs = !recoveryMode && !inviteToken && view !== 'forgot'
 
   return (
     <div style={S.wrap}>

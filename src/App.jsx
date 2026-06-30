@@ -98,20 +98,11 @@ function AppInner({ user, session, onSignOut }) {
   const [acctMsg,         setAcctMsg]         = useState(null)  // { type: 'ok'|'err', text }
   const [acctLoading,     setAcctLoading]     = useState(false)
 
-  // ── Admin user management state ───────────────────────────────────────────
-  const [isAdmin,         setIsAdmin]         = useState(null)  // null = unknown (not yet checked)
-  const [adminUsers,      setAdminUsers]      = useState(null)  // null = not loaded
-  const [adminUsersLoading, setAdminUsersLoading] = useState(false)
-  const [adminUsersError, setAdminUsersError] = useState('')
-  const [adminDeleteMsg,  setAdminDeleteMsg]  = useState('')
-  const [adminGrantMsg,   setAdminGrantMsg]   = useState('')
+  // ── Prep flow step ───────────────────────────────────────────────────────
+  const [prepStep, setPrepStep] = useState(1)
 
-  // ── Admin shared-cache (PDF scorecards) state ────────────────────────────
-  const [sharedCache,        setSharedCache]        = useState(null)  // null = not loaded
-  const [sharedCacheLoading, setSharedCacheLoading] = useState(false)
-  const [sharedCacheError,   setSharedCacheError]   = useState('')
-  const [scorecardBusyKey,   setScorecardBusyKey]   = useState('')    // cache_key currently uploading/removing
-  const [scorecardMsg,       setScorecardMsg]       = useState('')
+  // ── Admin state ───────────────────────────────────────────────────────────
+  const [isAdmin, setIsAdmin] = useState(null)  // null = unknown (not yet checked)
 
   // ── Admin course metadata editor ─────────────────────────────────────────
   const [editorCourse, setEditorCourse] = useState(null)  // course object being edited (null = closed)
@@ -144,6 +135,27 @@ function AppInner({ user, session, onSignOut }) {
     createProfile,
     cacheActiveProfileData,
   } = useProfile({ user })
+
+  // Active org + org list — persisted to user_settings.active_org_id on change
+  const [activeOrgId, setActiveOrgId] = useState(null)
+  const [userOrgs,    setUserOrgs]    = useState([])
+  useEffect(() => {
+    if (!user?.id || !session?.access_token) return
+    // Load persisted active org from user_settings
+    loadUserSettings(user.id).then(s => { if (s.active_org_id) setActiveOrgId(s.active_org_id) }).catch(() => {})
+    // Load org list for the switcher
+    fetch('/api/orgs', { headers: { Authorization: `Bearer ${session.access_token}` } })
+      .then(r => r.ok ? r.json() : [])
+      .then(setUserOrgs)
+      .catch(() => {})
+  }, [user?.id, session?.access_token])
+
+  const handleOrgChange = (orgId) => {
+    setActiveOrgId(orgId)
+    if (user?.id) {
+      saveUserSettings(user.id, { active_org_id: orgId }).catch(() => {})
+    }
+  }
 
   // Club distances — persisted with the player profile (localStorage + Supabase)
   const [clubs, setClubs] = useState(() => {
@@ -1354,7 +1366,6 @@ Be direct. No filler. ALL 18 HOLES.`
   ]
 
   const [playerSubTab, setPlayerSubTab] = useState('details')
-  const [prepStep, setPrepStep] = useState(1)
   const [deleteConfirm, setDeleteConfirm] = useState({})
   const [briefNotes, setBriefNotes] = useState({})
 
@@ -1401,6 +1412,9 @@ Be direct. No filler. ALL 18 HOLES.`
             profileNames={profileNames}
             onSwitchProfile={setCurrentProfile}
             onCreateProfile={(name) => createProfile(name, { ...playerInfo, clubs })}
+            orgs={userOrgs}
+            activeOrgId={activeOrgId}
+            onSwitchOrg={handleOrgChange}
           />
         </div>
       </div>
@@ -1552,12 +1566,9 @@ Be direct. No filler. ALL 18 HOLES.`
         {tab === 'admin' && (
           <SettingsTab
             isMobile={isMobile}
-            isAdmin={isAdmin}
             user={user}
             session={session}
             onSignOut={onSignOut}
-            course={course}
-            setCourse={setCourse}
             selectedModel={selectedModel}
             setSelectedModel={setSelectedModel}
             acctSection={acctSection}
@@ -1572,28 +1583,7 @@ Be direct. No filler. ALL 18 HOLES.`
             setAcctConfirmPass={setAcctConfirmPass}
             acctNewEmail={acctNewEmail}
             setAcctNewEmail={setAcctNewEmail}
-            sharedCache={sharedCache}
-            setSharedCache={setSharedCache}
-            sharedCacheLoading={sharedCacheLoading}
-            setSharedCacheLoading={setSharedCacheLoading}
-            sharedCacheError={sharedCacheError}
-            setSharedCacheError={setSharedCacheError}
-            scorecardBusyKey={scorecardBusyKey}
-            setScorecardBusyKey={setScorecardBusyKey}
-            scorecardMsg={scorecardMsg}
-            setScorecardMsg={setScorecardMsg}
-            adminUsers={adminUsers}
-            setAdminUsers={setAdminUsers}
-            adminUsersLoading={adminUsersLoading}
-            setAdminUsersLoading={setAdminUsersLoading}
-            adminUsersError={adminUsersError}
-            setAdminUsersError={setAdminUsersError}
-            adminDeleteMsg={adminDeleteMsg}
-            setAdminDeleteMsg={setAdminDeleteMsg}
-            adminGrantMsg={adminGrantMsg}
-            setAdminGrantMsg={setAdminGrantMsg}
             setCacheVersion={setCacheVersion}
-            setEditorCourse={setEditorCourse}
             setTab={setTab}
             setPrepStep={setPrepStep}
             applyScorecard={applyScorecard}
@@ -1608,6 +1598,8 @@ Be direct. No filler. ALL 18 HOLES.`
             authToken={session?.access_token || ''}
             currentUserId={user?.id}
             onEditCourse={(c) => setEditorCourse(c)}
+            activeOrgId={activeOrgId}
+            onOrgChange={handleOrgChange}
           />
         )}
 
@@ -1658,10 +1650,23 @@ function AuthGate() {
   // email link). Forces AuthScreen to render its reset-password view, even
   // when a recovery session is technically valid — we don't want them dropped
   // into the main app until they've set a new password.
-  const [recoveryMode, setRecoveryMode] = useState(false)
+  // Lazy initializer runs synchronously on first render — the hash is still
+  // present at this point because Supabase's hash-clearing is async (it waits
+  // for the token exchange network request before calling history.replaceState).
+  const [recoveryMode, setRecoveryMode] = useState(
+    () => new URLSearchParams(window.location.hash.slice(1)).get('type') === 'recovery'
+  )
 
   // Check existing session on mount
   useEffect(() => {
+    // With implicit flow, Supabase parses the hash and fires PASSWORD_RECOVERY
+    // immediately on createClient() — before React has mounted and registered
+    // onAuthStateChange. Guard against this by also reading the hash directly.
+    const hashParams = new URLSearchParams(window.location.hash.slice(1))
+    if (hashParams.get('type') === 'recovery') {
+      setRecoveryMode(true)
+    }
+
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session)
       setUser(session?.user ?? null)
@@ -1742,9 +1747,10 @@ function AuthGate() {
     )
   }
 
-  // Not authenticated
+  // Not authenticated — check for invite token in URL
   if (!session || !user) {
-    return <AuthScreen onAuth={handleAuth} />
+    const inviteToken = new URLSearchParams(window.location.search).get('invite') || null
+    return <AuthScreen onAuth={handleAuth} inviteToken={inviteToken} />
   }
 
   // New user — show onboarding wizard

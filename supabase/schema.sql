@@ -342,9 +342,18 @@ create table if not exists public.user_roles (
   user_id     uuid primary key references auth.users(id) on delete cascade,
   role        text not null default 'viewer'
                  check (role in ('viewer','editor','admin','owner')),
+  daily_cap   integer,                             -- null = global RATE_LIMIT_PER_DAY default
   created_at  timestamptz not null default now(),
   created_by  uuid references auth.users(id) on delete set null
 );
+
+-- Migration (idempotent): add columns for older deploys.
+alter table public.user_roles
+  add column if not exists daily_cap integer;
+-- Counts admin-approved contributions; drives the trusted_contributor tier
+-- (>= 5 approved → trusted, displayed in Admin → Usage and Contributions panels).
+alter table public.user_roles
+  add column if not exists approved_contrib_count integer not null default 0;
 
 alter table public.user_roles enable row level security;
 
@@ -485,6 +494,36 @@ create policy "admins read audit log"
   on public.audit_log for select using (public.is_admin());
 
 -- No insert/update/delete policies — only the service role writes.
+
+-- ─── user_soft_deletes ────────────────────────────────────────────────────────
+create table if not exists public.user_soft_deletes (
+  user_id        uuid primary key references auth.users(id) on delete cascade,
+  deleted_at     timestamptz not null default now(),
+  deleted_by     uuid references auth.users(id) on delete set null,
+  restore_before timestamptz not null
+);
+alter table public.user_soft_deletes enable row level security;
+
+-- ─── course_reparse_queue ────────────────────────────────────────────────────
+create table if not exists public.course_reparse_queue (
+  id            uuid primary key default uuid_generate_v4(),
+  course_key    text not null,
+  course_name   text not null,
+  location      text not null default '',
+  pdf_url       text not null,
+  status        text not null default 'pending'
+                  check (status in ('pending','running','pending_approval','approved','rejected','error')),
+  submitted_by  uuid references auth.users(id) on delete set null,
+  submitted_at  timestamptz not null default now(),
+  started_at    timestamptz,
+  finished_at   timestamptz,
+  result_data   jsonb,
+  error_msg     text,
+  approved_by   uuid references auth.users(id) on delete set null,
+  approved_at   timestamptz
+);
+create index if not exists course_reparse_queue_status_idx on public.course_reparse_queue(status, submitted_at desc);
+alter table public.course_reparse_queue enable row level security;
 
 -- ─── admin_rename_course RPC ──────────────────────────────────────────────────
 -- Atomically migrate a course from old_key → new_key across course_cache,
@@ -636,3 +675,107 @@ create policy "users can read own ratings"
 drop policy if exists "admins can read all ratings" on public.rec_quality;
 create policy "admins can read all ratings"
   on public.rec_quality for select using (public.is_admin());
+
+-- ─── orgs ─────────────────────────────────────────────────────────────────────
+-- Multi-tenant org container. org_id = null on other tables = public/personal.
+-- plan: 'free' allows 1 org, 'pro' allows private courses, 'team' adds SSO hooks.
+create table if not exists public.orgs (
+  id          uuid primary key default uuid_generate_v4(),
+  name        text not null,
+  slug        text not null,              -- url-safe, unique per owner
+  owner_id    uuid not null references auth.users(id) on delete restrict,
+  plan        text not null default 'free' check (plan in ('free','pro','team')),
+  created_at  timestamptz not null default now(),
+  unique (slug)
+);
+
+create index if not exists orgs_owner_idx on public.orgs(owner_id);
+alter table public.orgs enable row level security;
+
+-- ─── org_members ─────────────────────────────────────────────────────────────
+-- Membership + role per org. Replaces the flat user_roles table for org-scoped
+-- access. role mirrors the user_roles enum so gating logic is consistent.
+create table if not exists public.org_members (
+  org_id      uuid not null references public.orgs(id) on delete cascade,
+  user_id     uuid not null references auth.users(id) on delete cascade,
+  role        text not null default 'viewer'
+                check (role in ('viewer','editor','admin','owner')),
+  invited_by  uuid references auth.users(id) on delete set null,
+  joined_at   timestamptz not null default now(),
+  primary key (org_id, user_id)
+);
+
+create index if not exists org_members_user_idx on public.org_members(user_id);
+alter table public.org_members enable row level security;
+
+-- ─── Policies (both tables exist now) ────────────────────────────────────────
+drop policy if exists "org members can read org" on public.orgs;
+create policy "org members can read org"
+  on public.orgs for select
+  using (
+    owner_id = auth.uid()
+    or exists (
+      select 1 from public.org_members om
+      where om.org_id = id and om.user_id = auth.uid()
+    )
+  );
+
+drop policy if exists "owner can update org" on public.orgs;
+create policy "owner can update org"
+  on public.orgs for update
+  using (owner_id = auth.uid());
+
+drop policy if exists "owner can delete org" on public.orgs;
+create policy "owner can delete org"
+  on public.orgs for delete
+  using (owner_id = auth.uid());
+
+drop policy if exists "authenticated users can create org" on public.orgs;
+create policy "authenticated users can create org"
+  on public.orgs for insert
+  with check (auth.role() = 'authenticated' and owner_id = auth.uid());
+
+drop policy if exists "org members can read membership" on public.org_members;
+create policy "org members can read membership"
+  on public.org_members for select
+  using (
+    user_id = auth.uid()
+    or exists (
+      select 1 from public.org_members om2
+      where om2.org_id = org_id and om2.user_id = auth.uid()
+    )
+  );
+
+drop policy if exists "org admins can manage members" on public.org_members;
+create policy "org admins can manage members"
+  on public.org_members for all
+  using (
+    exists (
+      select 1 from public.org_members om
+      where om.org_id = org_id
+        and om.user_id = auth.uid()
+        and om.role in ('admin','owner')
+    )
+  )
+  with check (
+    exists (
+      select 1 from public.org_members om
+      where om.org_id = org_id
+        and om.user_id = auth.uid()
+        and om.role in ('admin','owner')
+    )
+  );
+
+-- ─── Org-scope extensions (all additive / idempotent) ────────────────────────
+
+-- course_cache: org_id = null → public library; set → org-private course
+alter table public.course_cache
+  add column if not exists org_id uuid references public.orgs(id) on delete set null;
+
+-- invites: org_id = null → personal admin invite; set → org membership invite
+alter table public.invites
+  add column if not exists org_id uuid references public.orgs(id) on delete cascade;
+
+-- user_settings: remember which org the user last had active
+alter table public.user_settings
+  add column if not exists active_org_id uuid references public.orgs(id) on delete set null;

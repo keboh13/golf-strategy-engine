@@ -1,41 +1,36 @@
-import { useState } from 'react'
-import { C, F, card, lbl } from '../theme.js'
+import { useEffect, useState } from 'react'
+import { C, F } from '../theme.js'
 import { SectionHead } from '../components/ui.jsx'
+import AdminOverviewPanel from '../components/AdminOverviewPanel.jsx'
 import AdminUsersPanel from '../components/AdminUsersPanel.jsx'
 import AdminCoursesPanel from '../components/AdminCoursesPanel.jsx'
+import AdminDataPanel from '../components/AdminDataPanel.jsx'
 import AdminUsagePanel from '../components/AdminUsagePanel.jsx'
 import AdminAuditPanel from '../components/AdminAuditPanel.jsx'
-
-// Top-level Admin area. Part 4 step 9 of the optimization plan — promotes
-// admin out of the Settings tab into its own first-class section with a
-// stable sub-tab layout. This first PR ships the scaffold + sub-nav; the
-// existing admin features (User Management, Shared Course Scorecards) are
-// migrated out of SettingsTab into the matching sub-tabs in a follow-up.
-//
-// Visibility is gated by `isAdmin === true` at the App level; this component
-// trusts that gate and renders unconditionally.
+import AdminOrgsPanel  from '../components/AdminOrgsPanel.jsx'
 
 const ADMIN_SUBS = [
-  { id: 'overview', label: 'Overview', icon: '📊', desc: 'KPIs and quick stats' },
-  { id: 'users',    label: 'Users',    icon: '👥', desc: 'List, grant roles, delete' },
-  { id: 'courses',  label: 'Courses',  icon: '⛳', desc: 'Edit metadata, upload scorecards, reparse' },
-  { id: 'data',     label: 'Data',     icon: '🗂', desc: 'Cache browser, OSM refresh, contributions' },
-  { id: 'usage',    label: 'Usage',    icon: '📈', desc: 'API usage, recommendation quality' },
-  { id: 'audit',    label: 'Audit',    icon: '📜', desc: 'Who changed what & when' },
+  { id: 'overview', label: 'Overview', icon: '📊' },
+  { id: 'users',    label: 'Users',    icon: '👥' },
+  { id: 'courses',  label: 'Courses',  icon: '⛳' },
+  { id: 'data',     label: 'Data',     icon: '🗂' },
+  { id: 'usage',    label: 'Usage',    icon: '📈' },
+  { id: 'audit',    label: 'Audit',    icon: '📜' },
+  { id: 'orgs',     label: 'Orgs',     icon: '🏢' },
 ]
 
-function PlaceholderCard({ title, sub, hint }) {
-  return (
-    <div style={{ ...card, padding: '1.5rem 1.75rem', textAlign: 'left' }}>
-      <p style={{ ...lbl, margin: '0 0 4px' }}>{title}</p>
-      <p style={{ fontSize: 13, color: C.textMuted, margin: '0 0 12px', lineHeight: 1.5 }}>{sub}</p>
-      <p style={{ fontSize: 12, color: C.textFaint, margin: 0, fontStyle: 'italic' }}>{hint}</p>
-    </div>
-  )
-}
-
-export default function AdminTab({ isMobile, authToken, currentUserId, onEditCourse }) {
+export default function AdminTab({ isMobile, authToken, currentUserId, onEditCourse, activeOrgId, onOrgChange }) {
   const [sub, setSub] = useState('overview')
+
+  // AdminOverviewPanel emits 'admin:sub' events so its quick-link buttons can
+  // navigate to sibling sub-tabs without needing a prop callback chain.
+  useEffect(() => {
+    const handler = (e) => {
+      if (ADMIN_SUBS.some(s => s.id === e.detail)) setSub(e.detail)
+    }
+    window.addEventListener('admin:sub', handler)
+    return () => window.removeEventListener('admin:sub', handler)
+  }, [])
 
   return (
     <div>
@@ -64,35 +59,13 @@ export default function AdminTab({ isMobile, authToken, currentUserId, onEditCou
         ))}
       </div>
 
-      {/* Sub-tab content. Each panel starts as a placeholder describing what
-          lands in the follow-up PRs (Part 4 steps 10–12 of the optimization
-          plan). Keeps the IA stable while the features migrate. */}
-      {sub === 'overview' && (
-        <PlaceholderCard
-          title="Overview"
-          sub="High-level KPIs at a glance: total users, courses cached, recommendations today, errors today, p50/p95 generation duration."
-          hint="Wires up alongside the Usage sub-tab in the next admin PR."
-        />
-      )}
-      {sub === 'users' && (
-        <AdminUsersPanel authToken={authToken} currentUserId={currentUserId} />
-      )}
-      {sub === 'courses' && (
-        <AdminCoursesPanel authToken={authToken} onEditCourse={onEditCourse} />
-      )}
-      {sub === 'data' && (
-        <PlaceholderCard
-          title="Data"
-          sub="Course cache browser (currently in Settings), per-course OSM refresh, contributions queue, Tier-3 diagnostic, manual scorecard PDF upload."
-          hint="Settings → Course Cache moves here."
-        />
-      )}
-      {sub === 'usage' && (
-        <AdminUsagePanel authToken={authToken} />
-      )}
-      {sub === 'audit' && (
-        <AdminAuditPanel authToken={authToken} />
-      )}
+      {sub === 'overview' && <AdminOverviewPanel authToken={authToken} />}
+      {sub === 'users'    && <AdminUsersPanel    authToken={authToken} currentUserId={currentUserId} />}
+      {sub === 'courses'  && <AdminCoursesPanel  authToken={authToken} onEditCourse={onEditCourse} />}
+      {sub === 'data'     && <AdminDataPanel     onNavigate={setSub} />}
+      {sub === 'usage'    && <AdminUsagePanel    authToken={authToken} />}
+      {sub === 'audit'    && <AdminAuditPanel    authToken={authToken} />}
+      {sub === 'orgs'     && <AdminOrgsPanel     authToken={authToken} currentUserId={currentUserId} activeOrgId={activeOrgId} onOrgChange={onOrgChange} />}
     </div>
   )
 }
