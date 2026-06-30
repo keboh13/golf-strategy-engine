@@ -3,12 +3,14 @@ import { C, F, card, inp, lbl, btnP, btnG } from '../theme.js'
 import { Badge } from './ui.jsx'
 import {
   getAllCachedCoursesDB,
+  deleteCachedCourseDB,
   listCoursePdfs,
   uploadCoursePdfToBucket,
   deleteAllCoursePdfs,
   deleteCourseHazards,
   clearCachedScorecardPdfRef,
 } from '../lib/supabase.js'
+import { deleteCachedGeoDB } from '../lib/courseGeoCache.js'
 import { adminUploadScorecardPdf } from '../lib/courseApi.js'
 import AdminReparseQueue   from './AdminReparseQueue.jsx'
 import AdminBulkImport     from './AdminBulkImport.jsx'
@@ -156,6 +158,29 @@ export default function AdminCoursesPanel({ authToken, onEditCourse }) {
       await clearCachedScorecardPdfRef(c.name, c.location)
       setMsg(`✓ Removed ${n} PDF${n === 1 ? '' : 's'} + hazards for ${c.name}.`)
       await load()
+    } catch (e) {
+      setMsg(`Error: ${e.message}`)
+    }
+    setBusyKey('')
+  }
+
+  const handleDeleteFromCache = async (c) => {
+    if (!window.confirm(
+      `Permanently delete "${c.name}" from the shared cache?\n\n` +
+      `This removes the course_cache row, its geometry (course_geo), all stored PDFs, ` +
+      `and extracted hazards. Any user who next loads this course will trigger a fresh ` +
+      `API + OSM lookup. This cannot be undone.`
+    )) return
+    setBusyKey(c._cacheKey); setMsg('')
+    try {
+      await Promise.all([
+        deleteCachedCourseDB(c.name, c.location),
+        deleteCachedGeoDB(c.name, c.location).catch(() => {}), // geo row may not exist
+        deleteAllCoursePdfs(c.name, c.location).catch(() => {}),
+        deleteCourseHazards(c.name, c.location).catch(() => {}),
+      ])
+      setRows(prev => prev ? prev.filter(r => r._cacheKey !== c._cacheKey) : prev)
+      setMsg(`✓ "${c.name}" removed from cache.`)
     } catch (e) {
       setMsg(`Error: ${e.message}`)
     }
@@ -314,6 +339,14 @@ export default function AdminCoursesPanel({ authToken, onEditCourse }) {
                           Remove PDF
                         </button>
                       )}
+                      <button
+                        style={{ ...btnG, color: C.red, borderColor: C.red, padding: '6px 10px' }}
+                        disabled={busy}
+                        onClick={() => handleDeleteFromCache(c)}
+                        title="Permanently delete this course and all its data from the shared cache"
+                      >
+                        {busy ? 'Working…' : '🗑 Delete'}
+                      </button>
                     </div>
                   </div>
                 </div>

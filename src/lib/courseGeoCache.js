@@ -79,3 +79,15 @@ export async function setCachedGeo(name, location, record) {
   setCachedGeoLS(name, location, record)
   await setCachedGeoDB(name, location, record)
 }
+
+export async function deleteCachedGeoDB(name, location) {
+  const key = cacheKey(name, location)
+  const { error } = await supabase.from('course_geo').delete().eq('course_key', key)
+  if (error) throw error
+  // Also evict local LS entry
+  const cache = loadGeoCache()
+  if (cache[key]) {
+    delete cache[key]
+    saveGeoCache(cache)
+  }
+}
