@@ -73,42 +73,39 @@ function resolveNodes(wayOrRelation, nodeMap) {
 }
 
 async function overpassFetch(query) {
-  let lastErr = null
-  for (const url of OVERPASS_URLS) {
-    try {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: 'data=' + encodeURIComponent(query),
-      })
-      if (res.ok) return await res.json()
-      lastErr = new Error(`Overpass ${url} HTTP ${res.status}`)
-    } catch (e) {
-      lastErr = e
-    }
-  }
-  throw lastErr || new Error('Overpass: all endpoints failed')
+  // Race all endpoints; return first successful response.
+  const attempt = (url) => fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'data=' + encodeURIComponent(query),
+  }).then(res => {
+    if (!res.ok) throw new Error(`Overpass ${url} HTTP ${res.status}`)
+    return res.json()
+  })
+
+  return Promise.any(OVERPASS_URLS.map(attempt))
+    .catch(() => { throw new Error('Overpass: all endpoints failed') })
 }
 
 export async function fetchOSMCourseData(lat, lng) {
   if (!lat || !lng) return null
 
+  // Fire area and bbox queries in parallel. The area query is preferred when it
+  // returns golf-tagged elements (avoids bleeding into adjacent courses). If it
+  // comes back empty we fall back to the bbox result which runs concurrently.
+  const [areaResult, bboxResult] = await Promise.allSettled([
+    overpassFetch(buildAreaQuery(lat, lng)),
+    overpassFetch(buildBboxQuery(lat, lng)),
+  ])
+
   let data = null
-  try {
-    data = await overpassFetch(buildAreaQuery(lat, lng))
-  } catch {
-    data = null
+  const areaData = areaResult.status === 'fulfilled' ? areaResult.value : null
+  if (areaData?.elements?.some(e => e.tags?.golf)) {
+    data = areaData
+  } else if (bboxResult.status === 'fulfilled') {
+    data = bboxResult.value
   }
-  // If the area query returned nothing useful, fall back to the bbox query.
-  // We treat "no golf-tagged elements" as no area match.
-  const hasGolf = data?.elements?.some(e => e.tags?.golf)
-  if (!hasGolf) {
-    try {
-      data = await overpassFetch(buildBboxQuery(lat, lng))
-    } catch {
-      return null
-    }
-  }
+
   if (!data) return null
   const elements = data.elements || []
 
@@ -449,13 +446,21 @@ function unionBbox(a, b) {
   return [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])]
 }
 
-function nearestHoleRef(lat, lng, holeIndex) {
-  let bestRef = null, bestDist = Infinity
+function buildFlatHoleIndex(holeIndex) {
+  // Flatten {ref, nodes} into [{ref, lat, lng}] once so callers don't re-walk
+  // the nested structure on every feature lookup.
+  const flat = []
   for (const { ref, nodes } of holeIndex) {
-    for (const n of nodes) {
-      const d = haversineMeters(lat, lng, n.lat, n.lng)
-      if (d < bestDist) { bestDist = d; bestRef = ref }
-    }
+    for (const n of nodes) flat.push({ ref, lat: n.lat, lng: n.lng })
+  }
+  return flat
+}
+
+function nearestHoleRef(lat, lng, flatIndex) {
+  let bestRef = null, bestDist = Infinity
+  for (const n of flatIndex) {
+    const d = haversineMeters(lat, lng, n.lat, n.lng)
+    if (d < bestDist) { bestDist = d; bestRef = n.ref }
   }
   return { ref: bestRef, distM: bestDist }
 }
@@ -469,6 +474,7 @@ export function exportCourseGeoJSON(osmData /*, courseHoles */) {
   const holeIndex = holes
     .filter(h => h.nodes?.length >= 2 && h.ref >= 1 && h.ref <= 18)
     .map(h => ({ ref: h.ref, par: h.par || 0, nodes: h.nodes }))
+  const flatHoleIndex = buildFlatHoleIndex(holeIndex)
 
   const features = []
   const bboxByHole = {}
@@ -509,7 +515,7 @@ export function exportCourseGeoJSON(osmData /*, courseHoles */) {
       if (!ring) continue
       let holeRef = null
       if (holeIndex.length) {
-        const { ref, distM } = nearestHoleRef(item.lat, item.lng, holeIndex)
+        const { ref, distM } = nearestHoleRef(item.lat, item.lng, flatHoleIndex)
         if (distM <= maxM) holeRef = ref
       }
       features.push({
@@ -527,7 +533,7 @@ export function exportCourseGeoJSON(osmData /*, courseHoles */) {
     if (p.ref && parseInt(p.ref) >= 1 && parseInt(p.ref) <= 18) {
       holeRef = parseInt(p.ref)
     } else if (holeIndex.length) {
-      const { ref, distM } = nearestHoleRef(p.lat, p.lng, holeIndex)
+      const { ref, distM } = nearestHoleRef(p.lat, p.lng, flatHoleIndex)
       if (distM <= 30) holeRef = ref
     }
     features.push({
