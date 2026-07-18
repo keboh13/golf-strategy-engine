@@ -14,7 +14,7 @@ import { computeHoleTimes, getWeatherAtHour, windDir } from './lib/weather.js'
 import { fetchHoleDesignViaSearch, mergeDesignDataIntoHoles, searchGolfCourseAPI, normalizeGolfCourseAPICourse, geocodeViaClaudeSearch } from './lib/courseApi.js'
 import { ENRICH_STEP_IDS } from './lib/enrichSteps.js'
 import { STEP_STATES } from './lib/progress.js'
-import { GENERATION_PHASE_IDS, stripPhaseMarkers, findPhaseMarkers } from './lib/generationPhases.js'
+import { GENERATION_PHASE_IDS, stripPhaseMarkers, stripStreamingArtifacts, findPhaseMarkers } from './lib/generationPhases.js'
 import { useProfile } from './lib/useProfile.js'
 import { usePwa } from './lib/usePwa.js'
 import PwaBanner from './components/PwaBanner.jsx'
@@ -1288,7 +1288,7 @@ Be direct. No filler. ALL 18 HOLES.`
 
   const renderPlan = (text) => (
     <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
-      {text}
+      {stripStreamingArtifacts(text)}
     </ReactMarkdown>
   )
 
