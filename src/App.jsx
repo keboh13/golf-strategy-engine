@@ -219,6 +219,10 @@ function AppInner({ user, session, onSignOut }) {
   })
   const [holeScores,  setHoleScores]  = useState({})
   const [expandedBrief, setExpandedBrief] = useState(null)
+  // Rec-log id of the most recently generated brief. Surfaced to the Prep
+  // tab so the in-flow BriefRating widget can save a rating without waiting
+  // for the user to go to History.
+  const [lastRecLogId, setLastRecLogId] = useState(null)
 
   const setScore = (holeNum, val) => setHoleScores(s => ({ ...s, [holeNum]: Math.max(1, val) }))
   const clearScores = () => setHoleScores({})
@@ -1065,7 +1069,7 @@ Be direct. No filler. ALL 18 HOLES.`
     if (abortRef.current) abortRef.current.abort()
     const ctrl = new AbortController()
     abortRef.current = ctrl
-    setPlanLoading(true); setPlanPhase('Analyzing scoring history'); setPlanError(''); setPlanValidationBanner(''); setPlan(''); setTab('prep'); setPrepStep(4)
+    setPlanLoading(true); setPlanPhase('Analyzing scoring history'); setPlanError(''); setPlanValidationBanner(''); setPlan(''); setLastRecLogId(null); setTab('prep'); setPrepStep(4)
     let capturedRecLogId = null
     // Reset + start the generation tracker. The implicit 'strategy' phase is
     // running from the first byte; markers advance the machine from there.
@@ -1146,6 +1150,7 @@ Be direct. No filler. ALL 18 HOLES.`
             // Final event emitted by the edge function after rec_log insert.
             if (j.type === 'metadata' && j.rec_log_id) {
               capturedRecLogId = j.rec_log_id
+              setLastRecLogId(j.rec_log_id)
             }
           } catch {}
         }
@@ -1473,6 +1478,8 @@ Be direct. No filler. ALL 18 HOLES.`
           <PrepTab
             isMobile={isMobile}
             session={session}
+            user={user}
+            lastRecLogId={lastRecLogId}
             prepStep={prepStep}
             setPrepStep={setPrepStep}
             course={course}

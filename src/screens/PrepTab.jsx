@@ -13,6 +13,7 @@ import CourseHoleMap from '../components/CourseHoleMap.jsx'
 import CourseSearch from '../components/CourseSearch.jsx'
 import ScorecardPreview from '../components/ScorecardPreview.jsx'
 import WeatherPanel from '../components/WeatherPanel.jsx'
+import BriefRating from '../components/BriefRating.jsx'
 
 const PREP_STEPS = [
   { num: 1, label: 'Select Course',    icon: '🔍' },
@@ -24,6 +25,8 @@ const PREP_STEPS = [
 export default function PrepTab({
   isMobile,
   session,
+  user,
+  lastRecLogId,
   prepStep, setPrepStep,
   course, setCourse,
   coords, setCoords,
@@ -362,6 +365,9 @@ export default function PrepTab({
                 </div>
               </div>
             </div>
+
+            {/* In-flow rating — captures the reaction at the moment, not later */}
+            <BriefRating user={user} recLogId={lastRecLogId} />
 
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
