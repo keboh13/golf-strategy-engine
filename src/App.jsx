@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef, useMemo, Component } from 'react'
-import { supabase, loadUserProfiles, saveUserProfile, deleteUserProfile, loadUserHistory, saveUserHistory, loadUserSettings, saveUserSettings, getCachedCourseDB, setCachedCourseDB, getAllCachedCoursesDB, deleteCachedCourseDB, loadSavedPlans, savePlan, deleteSavedPlan, loadCourseHazards, listCoursePdfs, uploadCoursePdfToBucket, deleteAllCoursePdfs, deleteCourseHazards, clearCachedScorecardPdfRef, listCanonicalCacheKeys, listAliasKeys, loadPrepSession, savePrepSession, clearPrepSession } from './lib/supabase.js'
+import { supabase, loadUserProfiles, saveUserProfile, deleteUserProfile, loadUserHistory, saveUserHistory, loadUserSettings, saveUserSettings, getCachedCourseDB, setCachedCourseDB, getAllCachedCoursesDB, deleteCachedCourseDB, loadSavedPlans, savePlan, deleteSavedPlan, loadCourseHazards, listCoursePdfs, uploadCoursePdfToBucket, deleteAllCoursePdfs, deleteCourseHazards, clearCachedScorecardPdfRef, listCanonicalCacheKeys, listCanonicalCacheVersions, listAliasKeys, loadPrepSession, savePrepSession, clearPrepSession } from './lib/supabase.js'
 import { buildBagSection } from './lib/promptSections.js'
 import { buildRecommendationPrompt } from './lib/recommendation/prompt.js'
 import { validatePlanContract } from './lib/recommendation/planContract.js'
@@ -345,10 +345,14 @@ function AppInner({ user, session, onSignOut, onRunOnboarding }) {
     let cancelled = false
     ;(async () => {
       try {
-        const [keys, aliases] = await Promise.all([listCanonicalCacheKeys(), listAliasKeys()])
+        const [keys, aliases, versions] = await Promise.all([
+          listCanonicalCacheKeys(),
+          listAliasKeys(),
+          listCanonicalCacheVersions(),
+        ])
         if (cancelled || !keys) return
-        const removed = purgeOrphanedLocalEntries(keys, aliases || [])
-        if (removed) console.log(`[course cache] purged ${removed} orphaned local entr${removed === 1 ? 'y' : 'ies'}`)
+        const removed = purgeOrphanedLocalEntries(keys, aliases || [], versions)
+        if (removed) console.log(`[course cache] purged ${removed} orphaned or stale local entr${removed === 1 ? 'y' : 'ies'}`)
       } catch {}
     })()
     return () => { cancelled = true }
@@ -1675,6 +1679,19 @@ Be direct. No filler. ALL 18 HOLES.`
             authToken={session?.access_token || ''}
             currentUserId={user?.id}
             onEditCourse={(c) => setEditorCourse(c)}
+            onCourseChanged={(cacheKey) => {
+              // Fires when a course was uploaded / deleted / had its PDF
+              // removed from the admin browser. Bumping cacheVersion re-runs
+              // any downstream memoized selectors (LibraryTab list, etc.) so
+              // the change surfaces without a full reload. If the affected
+              // course is the one currently loaded in the Prep flow, force a
+              // reset — the underlying data is now stale or gone.
+              setCacheVersion(v => v + 1)
+              if (cacheKey && isSameCourseKey(course, { name: course.name, location: course.location })) {
+                const currentKey = `${(course.name || '').toLowerCase().trim()}|${(course.location || '').toLowerCase().trim()}`
+                if (currentKey === cacheKey) resetPrep()
+              }
+            }}
             activeOrgId={activeOrgId}
             onOrgChange={handleOrgChange}
           />

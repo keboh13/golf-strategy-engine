@@ -114,30 +114,42 @@ export default async function handler(req) {
       // Mark as running
       await patch({ status: 'running', started_at: new Date().toISOString() })
 
-      // Call the existing admin-course PDF parse endpoint
+      // Re-parse the queued PDF via course-ai. `persist: false` returns the
+      // parsed course_data without touching course_cache — the diff lives in
+      // result_data and only the `approve` step writes to the shared cache.
       try {
-        const parseRes = await fetch(`${new URL(req.url).origin}/api/admin-course`, {
+        const parseRes = await fetch(`${new URL(req.url).origin}/api/course-ai`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            action: 'parsePdf',
+            action:     'parse-yardage-book-pdf',
             courseName: item.course_name,
             location:   item.location,
-            pdfUrl:     item.pdf_url,
+            pdf_url:    item.pdf_url,
+            persist:    false,
           }),
         })
+        const parseText = await parseRes.text()
         if (!parseRes.ok) {
-          const err = await parseRes.text()
-          await patch({ status: 'error', error_msg: err.slice(0, 500), finished_at: new Date().toISOString() })
+          const err = parseText.slice(0, 500)
+          await patch({ status: 'error', error_msg: err, finished_at: new Date().toISOString() })
           return json({ error: `Parse failed: ${err}` }, 500)
         }
-        const result = await parseRes.json()
+        let parsed
+        try { parsed = JSON.parse(parseText) } catch {
+          const err = `Parser returned non-JSON: ${parseText.slice(0, 200)}`
+          await patch({ status: 'error', error_msg: err, finished_at: new Date().toISOString() })
+          return json({ error: err }, 502)
+        }
+        // course-ai returns { result: <course_data> }. Stash the course_data so
+        // that approve can write it directly into course_cache.course_data.
+        const resultData = parsed?.result || parsed
         await patch({
           status:      'pending_approval',
-          result_data: result,
+          result_data: resultData,
           finished_at: new Date().toISOString(),
         })
-        return json({ ok: true, result })
+        return json({ ok: true, result: resultData })
       } catch (e) {
         await patch({ status: 'error', error_msg: e.message, finished_at: new Date().toISOString() })
         return json({ error: e.message }, 500)
@@ -146,15 +158,69 @@ export default async function handler(req) {
 
     if (action === 'approve') {
       if (!item.result_data) return json({ error: 'No result to approve — run the parse first.' }, 400)
-      // The result_data is the updated course_data from parsePdf; write it to course_cache
-      const cacheRes = await fetch(`${base}/course_cache?cache_key=eq.${encodeURIComponent(item.course_key)}`, {
-        method: 'PATCH',
-        headers: svcH,
-        body: JSON.stringify({ course_data: item.result_data, source: 'yardage_book' }),
+      // The parse result carries the full course_data (including tees[] and
+      // hazardsByHole). Split it: scorecard-ish fields go into course_cache,
+      // hazards go into course_hole_hazards. Bump edit_version so every
+      // client's stale localStorage entry gets refetched on next lookup.
+      const parsed = item.result_data || {}
+      const hazardsByHole = Array.isArray(parsed.hazardsByHole) ? parsed.hazardsByHole : []
+      const scorecardOnly = { ...parsed }
+      delete scorecardOnly.hazardsByHole
+      scorecardOnly._source = 'yardage_book'
+      scorecardOnly._sourcePdf = item.pdf_url
+
+      let nextVersion = 1
+      try {
+        const cur = await fetch(
+          `${base}/course_cache?cache_key=eq.${encodeURIComponent(item.course_key)}&select=edit_version`,
+          { headers: svcH }
+        )
+        if (cur.ok) {
+          const rows = await cur.json()
+          if (Array.isArray(rows) && rows[0]?.edit_version != null) {
+            nextVersion = Number(rows[0].edit_version) + 1
+          }
+        }
+      } catch {}
+
+      const cacheRes = await fetch(`${base}/course_cache?on_conflict=cache_key`, {
+        method: 'POST',
+        headers: { ...svcH, Prefer: 'resolution=merge-duplicates' },
+        body: JSON.stringify({
+          cache_key:    item.course_key,
+          course_data:  scorecardOnly,
+          source:       'yardage_book',
+          cached_at:    new Date().toISOString(),
+          updated_at:   new Date().toISOString(),
+          updated_by:   requester.id,
+          edit_version: nextVersion,
+        }),
       })
-      if (!cacheRes.ok) return json({ error: `Cache update failed: ${await cacheRes.text()}` }, 500)
+      if (!cacheRes.ok) return json({ error: `Cache upsert failed: ${await cacheRes.text()}` }, 500)
+
+      if (hazardsByHole.length) {
+        const hzRows = hazardsByHole
+          .filter(h => h && h.hole)
+          .map(h => ({
+            course_key: item.course_key,
+            hole_ref:   Number(h.hole),
+            hazards:    h,
+            source:     'pdf_vision',
+            image_path: item.pdf_url,
+            confidence: parsed._confidence || 'medium',
+            updated_at: new Date().toISOString(),
+          }))
+        if (hzRows.length) {
+          await fetch(`${base}/course_hole_hazards?on_conflict=course_key,hole_ref`, {
+            method: 'POST',
+            headers: { ...svcH, Prefer: 'resolution=merge-duplicates' },
+            body: JSON.stringify(hzRows),
+          }).catch(() => {})
+        }
+      }
+
       await patch({ status: 'approved', approved_by: requester.id, approved_at: new Date().toISOString() })
-      return json({ ok: true })
+      return json({ ok: true, edit_version: nextVersion })
     }
 
     if (action === 'reject') {
