@@ -15,6 +15,7 @@ import { fetchHoleDesignViaSearch, mergeDesignDataIntoHoles, searchGolfCourseAPI
 import { ENRICH_STEP_IDS } from './lib/enrichSteps.js'
 import { STEP_STATES } from './lib/progress.js'
 import { GENERATION_PHASE_IDS, stripPhaseMarkers, stripStreamingArtifacts, findPhaseMarkers } from './lib/generationPhases.js'
+import { todayLocalIso } from './lib/localDate.js'
 import { useProfile } from './lib/useProfile.js'
 import { usePwa } from './lib/usePwa.js'
 import PwaBanner from './components/PwaBanner.jsx'
@@ -184,7 +185,7 @@ function AppInner({ user, session, onSignOut }) {
 
   // Tee time & weather
   const [teeTime,  setTeeTime]  = useState('10:00')
-  const [teeDate,  setTeeDate]  = useState(() => new Date().toISOString().slice(0, 10))
+  const [teeDate,  setTeeDate]  = useState(() => todayLocalIso())
   const [pace,     setPace]     = useState(11)
   const [timezone] = useState(Intl.DateTimeFormat().resolvedOptions().timeZone)
   const [weather,        setWeather]        = useState(null)
@@ -1180,7 +1181,7 @@ Be direct. No filler. ALL 18 HOLES.`
             setPlanValidationBanner('')
           }
         }
-        const entry = { course: course.name || 'Profile brief', date: new Date().toISOString().slice(0, 10), plan: p, tee: course.selectedTee || '', rec_log_id: capturedRecLogId || null }
+        const entry = { course: course.name || 'Profile brief', date: todayLocalIso(), plan: p, tee: course.selectedTee || '', rec_log_id: capturedRecLogId || null }
         setSavedBriefs(prev => {
           const updated = [entry, ...prev].slice(0, 10)
           try { localStorage.setItem('golf_saved_briefs', JSON.stringify(updated)) } catch {}
