@@ -22,6 +22,8 @@ export function mergeUploadedScorecard(course, uploaded, hazardsByRef = {}) {
   const safeHazards = hazardsByRef && typeof hazardsByRef === 'object' ? hazardsByRef : {}
   const hazardCount = Object.keys(safeHazards).length
 
+  const upTees = Array.isArray(uploaded.tees) && uploaded.tees.length > 0 ? uploaded.tees : null
+
   return {
     ...course,
     yardage:     uploaded.yardage  != null ? String(uploaded.yardage)  : course.yardage,
@@ -30,6 +32,10 @@ export function mergeUploadedScorecard(course, uploaded, hazardsByRef = {}) {
     par:         uploaded.par      != null ? uploaded.par              : course.par,
     source:      uploaded.source   || course.source,
     selectedTee: uploaded.selectedTee || course.selectedTee,
+    // If the PDF parse discovered a full tees[] set, replace whatever was
+    // there (usually a GolfCourseAPI shape). Otherwise leave the existing
+    // array in place — the merge shouldn't silently drop tees.
+    tees:        upTees || course.tees,
     holes: (course.holes || []).map((h, i) => {
       const u = upHoles[i] || {}
       const ref = i + 1

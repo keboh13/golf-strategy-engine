@@ -87,8 +87,27 @@ describe('mergeUploadedScorecard', () => {
     expect(merged.osmEnriched).toBe(true)
     expect(merged.contribByRef).toBe(before.contribByRef)
     expect(merged.webDesignSource).toBe('greenskeeper.org')
-    expect(merged.tees).toBe(before.tees)
+    expect(merged.tees).toBe(before.tees)   // uploaded has no tees[] → keep existing
     expect(merged.conditions).toBe('Normal')
+  })
+
+  it('replaces course.tees when the uploaded payload includes a tees[] array', () => {
+    const pdfTees = [
+      { name: 'Black', color: 'black', yardage: 7205, rating: 74.4, slope: 138, par: 72, holes: Array.from({ length: 18 }, () => ({ par: 4, yardage: 400, handicap: 1 })) },
+      { name: 'Blue',  color: 'blue',  yardage: 6700, rating: 71.9, slope: 133, par: 72, holes: Array.from({ length: 18 }, () => ({ par: 4, yardage: 370, handicap: 1 })) },
+      { name: 'White', color: 'white', yardage: 6200, rating: 69.5, slope: 128, par: 72, holes: Array.from({ length: 18 }, () => ({ par: 4, yardage: 345, handicap: 1 })) },
+      { name: 'Gold',  color: 'gold',  yardage: 5500, rating: 66.7, slope: 121, par: 72, holes: Array.from({ length: 18 }, () => ({ par: 4, yardage: 310, handicap: 1 })) },
+    ]
+    const merged = mergeUploadedScorecard(baseCourse(), uploadedPayload({ tees: pdfTees }))
+    expect(merged.tees).toBe(pdfTees)
+    expect(merged.tees).toHaveLength(4)
+    expect(merged.tees.map(t => t.name)).toEqual(['Black', 'Blue', 'White', 'Gold'])
+  })
+
+  it('keeps existing tees when the uploaded payload has an empty tees[] array', () => {
+    const before = baseCourse()
+    const merged = mergeUploadedScorecard(before, uploadedPayload({ tees: [] }))
+    expect(merged.tees).toBe(before.tees)
   })
 
   it('preserves per-hole osmDesign and webDesign so the map overlay is not lost', () => {

@@ -65,7 +65,20 @@ function buildReparseMessages(pdfUrl, courseName, location) {
       { type: 'document', source: { type: 'url', url: pdfUrl } },
       { type: 'text', text: `This PDF is the official yardage book / scorecard for "${courseName}"${location ? ` in ${location}` : ''}.
 
-Extract scorecard + per-hole hazards + per-hole written content + per-hole visual analysis from the hole diagram. For each hole capture:
+Extract EVERY tee option + scorecard + per-hole hazards + per-hole written content + per-hole visual analysis from the hole diagram.
+
+Tees (a scorecard usually prints 3-6 tee sets — Black/Blue/White/Gold/Red/Green/Championship/Ladies/etc.). For EACH tee capture:
+- "name": label as printed
+- "color": lowercase color word if color-coded ("black", "blue", "white", "gold", "red", "green", "silver", "copper"), else null
+- "yardage": total yards (int)
+- "rating": course rating (float) or null
+- "slope": slope (int) or null
+- "par": par total (int) or null
+- "holes": 18 entries {par, yardage, handicap} matching the yardage row for THIS tee. handicap (stroke index) is usually shared across tees.
+
+Also set top-level selectedTee to the LONGEST tee's name, and mirror its yardage/rating/slope/par/holes as the top-level scorecard fields.
+
+For each hole capture:
 - "holeName": caddie nickname if printed (e.g. "Mind the Gap"), else null
 - "description": the full prose paragraph describing the hole, VERBATIM, else null
 - "greenDepth": green depth in yards (e.g. "DEPTH = 31"), integer, else null
@@ -81,6 +94,10 @@ Extract scorecard + per-hole hazards + per-hole written content + per-hole visua
   "par": <int total>,
   "selectedTee": "Championship",
   "_confidence": "high|medium|low",
+  "tees": [
+    {"name":"Black","color":"black","yardage":7150,"rating":74.2,"slope":140,"par":72,"holes":[{"par":4,"yardage":410,"handicap":7}, ...18]},
+    {"name":"Blue","color":"blue","yardage":6620,"rating":71.8,"slope":135,"par":72,"holes":[{"par":4,"yardage":382,"handicap":7}, ...18]}
+  ],
   "holes": [{"par":4,"yardage":379,"handicap":7}, ...all 18],
   "hazardsByHole": [
     {"hole":1,"holeName":"Outward Right","description":"This medium-length…","greenDepth":31,"visualNotes":"FW narrows at 240; cross-bunker carved into inside corner; green angled L-R","distanceMarkers":[{"label":"sprinkler to front","yards":62}],"dogleg":"left|right|straight","hazards":[{"type":"bunker","side":"R","carry_yards":235,"notes":"fairway"}],"green_notes":"","recommended_line":""},
@@ -105,6 +122,18 @@ function buildScorecardDiff(current, parsed) {
     const next = parsed?.[f]
     if (next != null && String(cur ?? '') !== String(next ?? '')) {
       diff[f] = { current: cur ?? null, parsed: next }
+    }
+  }
+  // tees is an array of {name, color, yardage, rating, slope, par, holes[]} —
+  // hand the whole thing over as a single field diff. Editor's accept handler
+  // replaces the current tees[] wholesale.
+  if (Array.isArray(parsed?.tees) && parsed.tees.length > 0) {
+    const curTees = Array.isArray(current?.tees) ? current.tees : []
+    const summarize = t => `${t?.name || '?'}(${t?.yardage ?? '—'}y)`
+    const curSummary = curTees.map(summarize).join(', ') || '—'
+    const nextSummary = parsed.tees.map(summarize).join(', ')
+    if (JSON.stringify(curTees) !== JSON.stringify(parsed.tees)) {
+      diff.tees = { current: curSummary, parsed: nextSummary, _value: parsed.tees }
     }
   }
   const holesDiff = []
@@ -381,7 +410,7 @@ async function handleRequest(req) {
       const pdfUrl = current._sourcePdf
       if (!pdfUrl) return jsonResponse({ error: 'No stored PDF for this course. Upload one first.' }, 422)
 
-      const text = await callClaude(buildReparseMessages(pdfUrl, current.name, current.location || ''), 10000)
+      const text = await callClaude(buildReparseMessages(pdfUrl, current.name, current.location || ''), 12000)
       const clean = text.replace(/```json|```/g, '').trim()
       const m = clean.match(/\{[\s\S]*\}/)
       if (!m) return jsonResponse({ error: 'No JSON in re-parse response.' }, 502)
