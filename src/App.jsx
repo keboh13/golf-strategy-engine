@@ -15,6 +15,7 @@ import { fetchHoleDesignViaSearch, mergeDesignDataIntoHoles, searchGolfCourseAPI
 import { ENRICH_STEP_IDS } from './lib/enrichSteps.js'
 import { STEP_STATES } from './lib/progress.js'
 import { GENERATION_PHASE_IDS, stripPhaseMarkers, findPhaseMarkers } from './lib/generationPhases.js'
+import { planCacheKey, getCachedPlan, putCachedPlan } from './lib/planCache.js'
 import { useProfile } from './lib/useProfile.js'
 import { usePwa } from './lib/usePwa.js'
 import PwaBanner from './components/PwaBanner.jsx'
@@ -1059,7 +1060,8 @@ Be direct. No filler. ALL 18 HOLES.`
     setPlanLoading(false); setPlanPhase('')
   }
 
-  const generate = async () => {
+  const generate = async (options = {}) => {
+    const { bypassCache = false } = options
     const authToken = session?.access_token || ''
     if (!authToken) { setPlanError('Please sign in to generate a game plan.'); return }
     if (abortRef.current) abortRef.current.abort()
@@ -1091,13 +1093,51 @@ Be direct. No filler. ALL 18 HOLES.`
         endsAt:   { ...p.endsAt, [prev]: ts },
       }))
     }
+
+    // Cache lookup — key is a stable hash of (prompt, model, style). Same
+    // course + player + bag + weather → same key. On a hit we replay the
+    // cached plan into the same rendering pipeline the streaming path uses,
+    // so the UI treats it identically (companion mode, hole cards, saved-to-
+    // history banner). Bypass path is wired to the ↺ Regenerate button below.
+    const promptText = buildPrompt()
+    let cacheKey = null
+    try { cacheKey = await planCacheKey({ prompt: promptText, model: selectedModel, style: planStyle }) } catch {}
+    if (!bypassCache && cacheKey) {
+      const hit = getCachedPlan(cacheKey)
+      if (hit?.plan) {
+        setPlan(hit.plan)
+        setPlanLoading(false)
+        abortRef.current = null
+        const endTs = Date.now()
+        setGenProgress({
+          states: Object.fromEntries(GENERATION_PHASE_IDS.map(id => [id, STEP_STATES.DONE])),
+          startsAt: Object.fromEntries(GENERATION_PHASE_IDS.map(id => [id, genStartedAt])),
+          endsAt: Object.fromEntries(GENERATION_PHASE_IDS.map(id => [id, endTs])),
+          errors: {},
+        })
+        // Still validate + record in history so the user's per-course list is
+        // consistent whether the brief was fresh or cached.
+        if (course.name) {
+          const v = validatePlanContract(hit.plan)
+          setPlanValidationBanner(v.ok ? '' : (v.banner || 'Plan validation failed.'))
+        }
+        const entry = { course: course.name || 'Profile brief', date: new Date().toISOString().slice(0, 10), plan: hit.plan, tee: course.selectedTee || '', rec_log_id: null, cached: true }
+        setSavedBriefs(prev => {
+          const updated = [entry, ...prev].slice(0, 10)
+          try { localStorage.setItem('golf_saved_briefs', JSON.stringify(updated)) } catch {}
+          return updated
+        })
+        return
+      }
+    }
+
     const payload = {
       model: selectedModel,
       max_tokens: 16000,
       stream: true,
       messages: [{
         role: 'user',
-        content: [{ type: 'text', text: buildPrompt(), cache_control: { type: 'ephemeral' } }],
+        content: [{ type: 'text', text: promptText, cache_control: { type: 'ephemeral' } }],
       }],
     }
     try {
@@ -1172,13 +1212,21 @@ Be direct. No filler. ALL 18 HOLES.`
       if (p) {
         // Validate plan against the output contract — surfaces silent
         // truncation, missing sections, malformed green-json.
+        let contractOk = true
         if (course.name) {
           const v = validatePlanContract(p)
+          contractOk = v.ok
           if (!v.ok) {
             setPlanValidationBanner(v.banner || 'Plan validation failed.')
           } else {
             setPlanValidationBanner('')
           }
+        }
+        // Cache the plan so a second Generate with identical inputs is
+        // instant. Only cache validated plans — replaying a malformed brief
+        // isn't a win for the user.
+        if (cacheKey && contractOk) {
+          try { putCachedPlan(cacheKey, p) } catch {}
         }
         const entry = { course: course.name || 'Profile brief', date: new Date().toISOString().slice(0, 10), plan: p, tee: course.selectedTee || '', rec_log_id: capturedRecLogId || null }
         setSavedBriefs(prev => {
