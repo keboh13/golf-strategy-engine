@@ -108,4 +108,32 @@ describe('buildRecommendationPrompt', () => {
     })
     expect(prompt).toMatch(/Miss tendency: Both/)
   })
+
+  it('injects a wind "plays +Xy" delta on the hole line and forces the model to reflect it', () => {
+    // Hole 1 bearing 90 (playing east). Wind from the east (windDir 90) at
+    // 25mph is a full headwind → ~1% per mph on a 425y hole = ~+11y.
+    const holeWeather = [{ windDir: 90, windSpeed: 25, temp: 70, precip: 0 }, ...Array(17).fill(null)]
+    const { prompt } = buildRecommendationPrompt({
+      playerInfo: player, clubs, course,
+      holeWeather,
+      teeTime: '10:00', teeDate: '2026-06-22', pace: 11, scoringHistory: [],
+    })
+    // The hole line for H1 must carry the wind-plays delta …
+    const h1 = prompt.split('\n').find(l => l.startsWith('H1:'))
+    expect(h1).toBeTruthy()
+    expect(h1).toMatch(/wind: plays \+\d+y longer/)
+    // … and the prompt rules must instruct the model to name the club change.
+    expect(prompt).toMatch(/name the club change/)
+  })
+
+  it('does NOT surface a wind delta on calm holes (below 3y threshold)', () => {
+    const holeWeather = [{ windDir: 0, windSpeed: 2, temp: 70, precip: 0 }, ...Array(17).fill(null)]
+    const { prompt } = buildRecommendationPrompt({
+      playerInfo: player, clubs, course,
+      holeWeather,
+      teeTime: '10:00', teeDate: '2026-06-22', pace: 11, scoringHistory: [],
+    })
+    const h1 = prompt.split('\n').find(l => l.startsWith('H1:'))
+    expect(h1).not.toMatch(/wind: plays/)
+  })
 })
