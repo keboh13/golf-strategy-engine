@@ -19,6 +19,7 @@ import { tee_shot_overlaps, formatOverlapLine } from './dispersion.js'
 import { holeConfidence, rollupConfidence } from './confidence.js'
 import { summarizeHistory, renderHistoryBlock } from './history.js'
 import { formatDistancesLine } from '../courseGeometry.js'
+import { renderPriorRoundBlock } from '../postRound.js'
 
 const windCompassFromDeg = (deg) => {
   if (!Number.isFinite(deg)) return ''
@@ -203,8 +204,10 @@ export function buildRecommendationPrompt(inputs) {
     pace,
     scoringHistory,
     style = 'balanced',           // 'balanced' | 'conservative' | 'aggressive'
+    priorRound = null,            // { date, scores, notes, generalNotes } — post-round hindsight
     nowMs,
   } = inputs
+  const priorRoundBlock = renderPriorRoundBlock(priorRound)
 
   const clubList = buildBagSection(clubs)
   const summary = summarizeHistory(scoringHistory, { nowMs })
@@ -296,6 +299,7 @@ ${isPractice ? 'Practice round — frame around learning, not score.' : ''}${isM
 ${course.notes ? `Notes: ${course.notes}` : ''}
 Tee: ${teeTime} (${teeDate}), ${pace} min/hole
 ${historyBlock}
+${priorRoundBlock}
 
 PRE-COMPUTED HINTS (USE THESE — do not redo the math):
 - "plays Xy" = elevation-adjusted effective yardage. Pick clubs off this number.
