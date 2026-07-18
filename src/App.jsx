@@ -15,6 +15,7 @@ import { fetchHoleDesignViaSearch, mergeDesignDataIntoHoles, searchGolfCourseAPI
 import { ENRICH_STEP_IDS } from './lib/enrichSteps.js'
 import { STEP_STATES } from './lib/progress.js'
 import { GENERATION_PHASE_IDS, stripPhaseMarkers, findPhaseMarkers } from './lib/generationPhases.js'
+import { getLatestPostRoundForCourse } from './lib/postRound.js'
 import { useProfile } from './lib/useProfile.js'
 import { usePwa } from './lib/usePwa.js'
 import PwaBanner from './components/PwaBanner.jsx'
@@ -770,15 +771,17 @@ function AppInner({ user, session, onSignOut }) {
   // have to guess at it. Original buildPrompt kept below as buildPromptLegacy
   // for fallback comparison (unused).
   const buildPrompt = useCallback(() => {
+    const priorRound = getLatestPostRoundForCourse(savedBriefs, course?.name)
     const { prompt } = buildRecommendationPrompt({
       playerInfo, clubs, course, holeTimes, holeWeather,
       teeTime, teeDate, pace,
       scoringHistory,
       style: planStyle,
+      priorRound,
       nowMs: Date.now(),
     })
     return prompt
-  }, [clubs, course, playerInfo, holeWeather, holeTimes, teeTime, teeDate, pace, scoringHistory, planStyle])
+  }, [clubs, course, playerInfo, holeWeather, holeTimes, teeTime, teeDate, pace, scoringHistory, planStyle, savedBriefs])
 
   // Legacy inline builder — preserved (unused) for diffing against the new
   // module-based path during rollout. Safe to delete after a few releases.
