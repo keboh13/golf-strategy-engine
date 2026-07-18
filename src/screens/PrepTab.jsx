@@ -53,6 +53,7 @@ export default function PrepTab({
   generate, cancelGenerate,
   copyPlan, printPlan,
   applyScorecard, resetPrep,
+  courseSearchResetKey = 0,
   renderPlan,
   handleHoleContribution,
   setTab, setExpandedBrief,
@@ -100,6 +101,7 @@ export default function PrepTab({
       {prepStep === 1 && (
         <div>
           <CourseSearch
+            key={courseSearchResetKey}
             authToken={session?.access_token || ''}
             onSelect={(r) => { applyScorecard(r); setPrepStep(2) }}
             onBrowseLibrary={(q) => {
@@ -117,7 +119,17 @@ export default function PrepTab({
                 <p style={{ fontSize: 14, fontWeight: 600, color: C.text, margin: 0 }}>{course.name}</p>
                 <p style={{ fontSize: 12, color: C.textMuted, margin: '2px 0 0' }}>{course.location} · Par {course.par} · {course.yardage ? Number(course.yardage).toLocaleString() + 'y' : ''}</p>
               </div>
-              <button style={btnP} onClick={() => setPrepStep(2)}>Continue →</button>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button
+                  style={btnG}
+                  onClick={resetPrep}
+                  aria-label="Clear selected course and start a new search"
+                  title="Clear the loaded course and start over"
+                >
+                  Change course
+                </button>
+                <button style={btnP} onClick={() => setPrepStep(2)}>Continue →</button>
+              </div>
             </div>
           )}
         </div>
