@@ -238,18 +238,28 @@ function buildPdfParseMessages(pdfUrl, courseName, location) {
       { type: 'document', source: { type: 'url', url: pdfUrl } },
       { type: 'text', text: `This PDF is the official yardage book / scorecard for "${courseName}"${location ? ` in ${location}` : ''}.
 
-Extract THREE things and return them in ONE JSON payload:
+Extract FIVE things and return them in ONE JSON payload:
 
-(1) The standard scorecard for the longest tees available (Championship / Tournament / Black / Tips). Capture all 18 holes plus rating, slope, total yards, par total.
+(1) EVERY tee option printed on the scorecard as a "tees" array. A scorecard typically lists 3-6 tee sets across men's/women's rows (Black, Blue, White, Gold, Red, Green, Championship, Member, Forward, etc.). For EACH tee capture:
+   - "name": the tee label as printed ("Black", "Blue", "White", "Gold", "Championship", "Ladies", etc.)
+   - "color": lowercase color word if the tee is color-coded on the scorecard ("black", "blue", "white", "gold", "red", "green", "silver", "copper"), else null
+   - "yardage": total yards from this tee (integer)
+   - "rating": course rating for this tee (float), or null if not printed
+   - "slope": slope rating for this tee (integer), or null if not printed
+   - "par": par total for this tee if printed (usually same as course par)
+   - "holes": array of 18 entries {par, yardage, handicap} with the per-hole values FROM THIS SPECIFIC TEE — the yardage column that corresponds to this tee row. handicap (stroke index) is shared across tees on most scorecards.
+   Also populate the top-level "selectedTee" with the LONGEST tee's name (Championship / Tournament / Black / Tips) — this is the default view.
 
-(2) Per-hole hazards and design features from the diagrams. For each hole 1-18, look at the hole illustration and pull every visible hazard, dogleg, and green note.
+(2) The top-level scorecard fields (yardage, rating, slope, par, holes[]) MUST mirror the entry in tees[] whose name equals selectedTee — this is what renders when a user hasn't switched tees yet.
 
-(3) **Per-hole written content from the PDF text.** For each hole 1-18, also capture:
+(3) Per-hole hazards and design features from the diagrams. For each hole 1-18, look at the hole illustration and pull every visible hazard, dogleg, and green note.
+
+(4) **Per-hole written content from the PDF text.** For each hole 1-18, also capture:
    - "holeName": the caddie/marketing nickname for the hole if one is printed near the hole number (e.g. "Mind the Gap", "All of Texas", "Cascades"). Use null if no nickname exists.
    - "description": the full prose paragraph that describes the hole's strategy / design / approach. Capture it VERBATIM from the PDF — do not paraphrase or shorten. This is the caddie-style write-up usually printed under the hole title. Use null if absent.
    - "greenDepth": the printed green depth in yards (often shown as "DEPTH = 31"). Integer. Use null if absent.
 
-(4) **Visual analysis of the hole diagram (the picture).** For each hole 1-18, study the actual hole illustration / overhead diagram and extract observations a caddie would make from looking at the image — things not necessarily in the prose. Capture as:
+(5) **Visual analysis of the hole diagram (the picture).** For each hole 1-18, study the actual hole illustration / overhead diagram and extract observations a caddie would make from looking at the image — things not necessarily in the prose. Capture as:
    - "visualNotes": 2-4 concise observations as a single string, semicolon-separated. Focus on (a) distance numbers visible on the diagram that aren't covered by hazards/carry_yards — sprinkler-to-landmark yardages, distances to bunker centers, distance to forced carries; (b) fairway shape — pinches, widening, doglegs visible from the overhead; (c) green shape and orientation (kidney, round, peanut, angled L-R, etc.); (d) elevation / cross-slope cues if drawn (downhill arrows, shading). Example: "FW pinches to 25y wide at 240y carry; cross-bunker 35y short of green; green angled left-to-right, ~38y deep; sprinkler at 150 reads as 156 to back pin." Use null if the diagram has no visible markers worth noting.
    - "distanceMarkers": array of {label, yards} for sprinkler/landmark distances clearly readable on the diagram (e.g. {"label":"sprinkler to back of green","yards":85}). Empty array if none readable.
 
@@ -272,6 +282,12 @@ Return ONLY this JSON (no markdown):
   "selectedTee": "Championship",
   "source": "PDF (uploaded yardage book)",
   "_confidence": "high|medium|low",
+  "tees": [
+    {"name":"Black","color":"black","yardage":7150,"rating":74.2,"slope":140,"par":72,"holes":[{"par":4,"yardage":410,"handicap":7}, ...all 18]},
+    {"name":"Blue","color":"blue","yardage":6620,"rating":71.8,"slope":135,"par":72,"holes":[{"par":4,"yardage":382,"handicap":7}, ...all 18]},
+    {"name":"White","color":"white","yardage":6100,"rating":69.5,"slope":128,"par":72,"holes":[{"par":4,"yardage":351,"handicap":7}, ...all 18]},
+    {"name":"Gold","color":"gold","yardage":5480,"rating":66.9,"slope":121,"par":72,"holes":[{"par":4,"yardage":312,"handicap":7}, ...all 18]}
+  ],
   "holes": [{"par":4,"yardage":379,"handicap":7}, ...all 18],
   "hazardsByHole": [
     {"hole":1,"holeName":"Outward Right","description":"This medium-length, dogleg right plays along…","greenDepth":31,"visualNotes":"FW narrows to ~28y at 240; cross-bunker carved into inside corner; green angled left-to-right with hollow short-left","distanceMarkers":[{"label":"sprinkler to front green","yards":62},{"label":"sprinkler to back","yards":108}],"dogleg":"left|right|straight","hazards":[{"type":"bunker","side":"R","carry_yards":235,"notes":"fairway"}],"green_notes":"","recommended_line":""},
@@ -412,9 +428,10 @@ async function handleRequest(req) {
 
   async function parsePdfAndPersist(pdfUrl) {
     const messages = buildPdfParseMessages(pdfUrl, courseName, location || '')
-    // 10000 tokens budget: scorecard (~1.5k) + 18 verbatim descriptions (~3–5k) +
-    // hazards + per-hole visual analysis from the diagrams (~2k).
-    const text = await callClaude(messages, 10000, false, undefined, MODEL_FAST)
+    // 12000 tokens budget: scorecard (~1.5k) + per-tee 18-hole rows (~1.5k for
+    // 4 tees) + 18 verbatim descriptions (~3–5k) + hazards + per-hole visual
+    // analysis from the diagrams (~2k).
+    const text = await callClaude(messages, 12000, false, undefined, MODEL_FAST)
     const r = parseJsonFromText(text)
     if (!r.ok) throw new Error(`No JSON in PDF parse response (${r.error}).`)
     const parsed = r.value
