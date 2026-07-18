@@ -1520,6 +1520,7 @@ Be direct. No filler. ALL 18 HOLES.`
             setScore={setScore}
             displayGeo={displayGeo}
             contributedHoleSet={contributedHoleSet}
+            clubs={clubs}
             parsedHoles={parsedHoles}
             generate={generate}
             cancelGenerate={cancelGenerate}

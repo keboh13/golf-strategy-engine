@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { computeHoleDistances, formatDistancesLine, simplifyAndTrimGeoJSON } from './courseGeometry.js'
+import { computeHoleDistances, formatDistancesLine, simplifyAndTrimGeoJSON, getHoleAnchor, buildCarryRings } from './courseGeometry.js'
 
 // Build a straight north-pointing hole at the equator (where 1° lng ≈ 1° lat
 // in length, makes mental arithmetic simpler). 1° lat ≈ 111_111 meters.
@@ -174,5 +174,47 @@ describe('simplifyAndTrimGeoJSON', () => {
   it('is a no-op when geojson has no features', () => {
     expect(simplifyAndTrimGeoJSON(null)).toBe(null)
     expect(simplifyAndTrimGeoJSON({ type: 'FeatureCollection', features: [] }).features).toEqual([])
+  })
+})
+
+describe('getHoleAnchor', () => {
+  it('pulls tee & pin from the centerline vertices', () => {
+    const gj = fc([lineFeature([[0, 0], [0, 0.004]])])
+    const a = getHoleAnchor(gj, 1)
+    expect(a.tee).toEqual([0, 0])
+    expect(a.pin).toEqual([0, 0.004])
+    expect(a.bearing).toBeCloseTo(0, 1) // due north
+  })
+  it('prefers an explicit pin point over the centerline endpoint', () => {
+    const gj = fc([lineFeature([[0, 0], [0, 0.004]]), pointFeature([0, 0.003])])
+    expect(getHoleAnchor(gj, 1).pin).toEqual([0, 0.003])
+  })
+  it('falls back to the green centroid when there is no pin', () => {
+    const gj = fc([lineFeature([[0, 0], [0, 0.004]]), polyFeature('green', ringAround(0, 0.0035))])
+    const a = getHoleAnchor(gj, 1)
+    expect(a.pin[1]).toBeCloseTo(0.0035, 5)
+  })
+  it('returns null when the hole has no relevant features', () => {
+    const gj = fc([polyFeature('bunker', ringAround(0, 0.002), 2)])
+    expect(getHoleAnchor(gj, 1)).toBeNull()
+  })
+})
+
+describe('buildCarryRings', () => {
+  it('emits one polygon per playable club, filtering the driver on a short par-3', () => {
+    const clubs = [
+      { club: 'Driver', carry: 275 },
+      { club: '7-iron', carry: 160 },
+      { club: 'PW',     carry: 120 },
+      { club: 'putter', carry: 0 },    // ignored (carry <= 20)
+    ]
+    const fc1 = buildCarryRings([0, 0], clubs, { maxYards: 155 })
+    const carries = fc1.features.map(f => f.properties.carry).sort((a, b) => a - b)
+    // PW (120) and 7-iron (160 — within 15y grace) fit; Driver dropped.
+    expect(carries).toEqual([120, 160])
+  })
+  it('is a no-op without a tee or without clubs', () => {
+    expect(buildCarryRings(null, [{ club: 'Driver', carry: 275 }]).features).toEqual([])
+    expect(buildCarryRings([0, 0], []).features).toEqual([])
   })
 })

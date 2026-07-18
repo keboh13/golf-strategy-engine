@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import maplibregl from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { C, card, lbl } from '../theme.js'
-import { computeHoleDistances, formatDistancesLine } from '../lib/courseGeometry.js'
+import { computeHoleDistances, formatDistancesLine, getHoleAnchor, buildCarryRings, computeTeeToPinYards, pointAtBearing } from '../lib/courseGeometry.js'
 
 // Always-on satellite map. Decoupled from OSM completion: it boots as soon
 // as `coords` are known and lays overlays on top as `geojson` arrives. When
@@ -81,16 +81,22 @@ export default function CourseHoleMap({
   extraHazardsByHole, // optional { [ref]: hzDesign } — vision-extracted hazards
                       // surfaced as a chip-list when OSM doesn't cover this hole.
                       // (No lat/lng → can't render as map markers.)
+  clubs,              // optional array of { club, carry } — drives the tee-side
+                      // carry-distance rings. Rings are a huge unlock on holes
+                      // that only have a tee/pin (contribution or partial OSM)
+                      // and no hazards to reference.
 }) {
   const containerRef = useRef(null)
   const mapRef = useRef(null)
   const pinMarkerRef = useRef(null)
   const draftMarkersRef = useRef([])
+  const ringLabelMarkersRef = useRef([])
   const [ready, setReady] = useState(false)
   const [contribStep, setContribStep] = useState(null) // null | 'tee' | 'pin'
   const [teeDraft, setTeeDraft] = useState(null)       // [lng, lat]
   const [saving, setSaving] = useState(false)
   const [fullscreen, setFullscreen] = useState(false)
+  const [ringsOn, setRingsOn] = useState(true)
 
   const contribute = !!onContribute
   const inContribMode = contribStep != null
@@ -143,6 +149,15 @@ export default function CourseHoleMap({
         filter: ['==', ['get', 'kind'], 'centerline'],
         paint: { 'line-color': '#fbbf24', 'line-width': 3, 'line-dasharray': [2, 2] },
       })
+      // Carry-distance rings — thin white lines with light fill for
+      // readability against dark satellite. Sits below markers/labels.
+      map.addSource('carry-rings', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
+      map.addLayer({
+        id: 'carry-ring-line',
+        type: 'line',
+        source: 'carry-rings',
+        paint: { 'line-color': '#f8fafc', 'line-width': 1.2, 'line-opacity': 0.55 },
+      })
       mapRef.current = map
       setReady(true)
     })
@@ -151,6 +166,8 @@ export default function CourseHoleMap({
       pinMarkerRef.current = null
       draftMarkersRef.current.forEach(m => m.remove())
       draftMarkersRef.current = []
+      ringLabelMarkersRef.current.forEach(m => m.remove())
+      ringLabelMarkersRef.current = []
       map.remove()
       mapRef.current = null
       setReady(false)
@@ -165,9 +182,22 @@ export default function CourseHoleMap({
     const fc = filterForHole(geojson, selectedHole)
     map.getSource('hole')?.setData(fc)
 
+    const anchor = selectedHole != null ? getHoleAnchor(geojson, selectedHole) : null
     const bbox = selectedHole != null ? bboxByHole?.[selectedHole] : null
     if (bbox) {
       map.fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]], { padding: 50, duration: 600, maxZoom: 18 })
+    } else if (anchor?.tee && anchor?.pin) {
+      // No OSM bbox — center between tee and pin so both are in-frame. Kills
+      // the "changing holes only changes the label" complaint from the audit
+      // on courses that have any per-hole geometry at all (e.g. a single
+      // user contribution).
+      map.fitBounds(
+        [[Math.min(anchor.tee[0], anchor.pin[0]), Math.min(anchor.tee[1], anchor.pin[1])],
+         [Math.max(anchor.tee[0], anchor.pin[0]), Math.max(anchor.tee[1], anchor.pin[1])]],
+        { padding: 60, duration: 600, maxZoom: 17 }
+      )
+    } else if (anchor?.tee) {
+      map.easeTo({ center: anchor.tee, zoom: 16.5, duration: 600 })
     } else if (coords?.lat) {
       map.easeTo({ center: [coords.lng, coords.lat], zoom: 15.5, duration: 600 })
     }
@@ -182,7 +212,33 @@ export default function CourseHoleMap({
         .setLngLat(pinFeat.geometry.coordinates)
         .addTo(map)
     }
-  }, [ready, selectedHole, geojson, bboxByHole, coords?.lat, coords?.lng])
+
+    // Carry-distance rings + club labels. Recomputed on every anchor / clubs /
+    // toggle change. Empty FC when off so the layer just goes blank.
+    ringLabelMarkersRef.current.forEach(m => m.remove())
+    ringLabelMarkersRef.current = []
+    let rings = { type: 'FeatureCollection', features: [] }
+    if (ringsOn && anchor?.tee && Array.isArray(clubs) && clubs.length) {
+      const teeToPinY = anchor.pin ? computeTeeToPinYards(anchor.tee, anchor.pin) : null
+      const maxYards = teeToPinY != null ? teeToPinY : Infinity
+      rings = buildCarryRings(anchor.tee, clubs, { maxYards })
+      // Label each ring on the aim-line side of the tee (or true north if we
+      // have no pin) so labels don't stack on top of each other.
+      const bearing = anchor.bearing != null ? anchor.bearing : 0
+      for (const f of rings.features) {
+        const yards = f.properties.carry
+        const labelPt = pointAtBearing(anchor.tee, yards, bearing)
+        const el = document.createElement('div')
+        el.style.cssText = 'font:600 10px/1 -apple-system,system-ui,sans-serif;color:#f8fafc;background:rgba(15,17,23,0.7);border:1px solid rgba(248,250,252,0.3);border-radius:4px;padding:2px 5px;white-space:nowrap;pointer-events:none;text-shadow:0 1px 2px rgba(0,0,0,0.9)'
+        el.textContent = `${f.properties.club || ''} ${yards}y`.trim()
+        const m = new maplibregl.Marker({ element: el, anchor: 'bottom' })
+          .setLngLat(labelPt)
+          .addTo(map)
+        ringLabelMarkersRef.current.push(m)
+      }
+    }
+    map.getSource('carry-rings')?.setData(rings)
+  }, [ready, selectedHole, geojson, bboxByHole, coords?.lat, coords?.lng, clubs, ringsOn])
 
   // Contribute mode: install click handler on the canvas.
   useEffect(() => {
@@ -413,6 +469,25 @@ export default function CourseHoleMap({
             }}
           >
             {fullscreen ? '⊠' : '⛶'}
+          </button>
+        )}
+
+        {/* Carry-ring toggle — only shown when we actually have a tee anchor
+            and clubs to render, otherwise it's a dead switch. */}
+        {coords?.lat && Array.isArray(clubs) && clubs.length > 0 && (
+          <button
+            onClick={() => setRingsOn(r => !r)}
+            title={ringsOn ? 'Hide carry rings' : 'Show carry rings'}
+            style={{
+              position: 'absolute', bottom: 10, left: 48, zIndex: 4,
+              height: 32, padding: '0 10px', borderRadius: 6, border: `1px solid ${C.borderHover}`,
+              background: 'rgba(15,17,23,0.85)', backdropFilter: 'blur(6px)',
+              color: ringsOn ? C.accent : '#fff', fontSize: 11, fontWeight: 600, cursor: 'pointer',
+              display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'inherit',
+            }}
+          >
+            <span aria-hidden style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', border: `1.5px solid ${ringsOn ? C.accent : '#fff'}` }} />
+            Rings
           </button>
         )}
 

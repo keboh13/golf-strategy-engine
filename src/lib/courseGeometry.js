@@ -148,6 +148,85 @@ export function computeHoleDistances(geojson, holeRef) {
   return { teeToPin, frontY, centerY, backY, carries }
 }
 
+// Resolve tee/pin anchor coordinates for one hole from whatever the
+// FeatureCollection actually contains. Used by CourseHoleMap to auto-frame
+// per hole and to render carry-distance rings around the tee — even when the
+// hole has no OSM bbox, we can still center on the tee if there's *any*
+// source of coordinates.
+//
+// Preference order:
+//   tee: contribution/OSM centerline start → tee polygon centroid → null
+//   pin: explicit pin point → green centroid → centerline end → null
+export function getHoleAnchor(geojson, holeRef) {
+  if (!geojson?.features) return null
+  let centerline = null, green = null, pin = null, teePoly = null
+  for (const f of geojson.features) {
+    if (f.properties?.holeRef !== holeRef) continue
+    const k = f.properties.kind
+    if (k === 'centerline' && f.geometry?.type === 'LineString') centerline = f
+    else if (k === 'green' && f.geometry?.type === 'Polygon' && !green) green = f
+    else if (k === 'pin' && f.geometry?.type === 'Point') pin = f
+    else if (k === 'tee' && f.geometry?.type === 'Polygon' && !teePoly) teePoly = f
+  }
+  let tee = null
+  if (centerline) tee = centerline.geometry.coordinates[0]
+  else if (teePoly) tee = turf.centroid(teePoly).geometry.coordinates
+  let pinCoord = null
+  if (pin) pinCoord = pin.geometry.coordinates
+  else if (green) pinCoord = turf.centroid(green).geometry.coordinates
+  else if (centerline) pinCoord = centerline.geometry.coordinates[centerline.geometry.coordinates.length - 1]
+  if (!tee && !pinCoord) return null
+  let bearing = null
+  if (tee && pinCoord) {
+    bearing = turf.bearing(turf.point(tee), turf.point(pinCoord))
+  }
+  return { tee, pin: pinCoord, bearing }
+}
+
+// Build carry-distance ring polygons around a tee, one per club, filtered to
+// the range that actually fits between the tee and the pin (so a 275y driver
+// ring doesn't cover the pin on a 155y par-3). Returned as a FeatureCollection
+// ready to feed into a maplibre 'line' layer. Pure so the map can memoize.
+//
+//   clubs: [{ club, carry }, ...]   — carry in yards
+//   options.maxYards: cap so rings don't spill way past the pin (default = teeToPin + 15)
+const Y_TO_M = 0.9144
+export function buildCarryRings(tee, clubs, options = {}) {
+  if (!tee || !Array.isArray(clubs) || !clubs.length) {
+    return { type: 'FeatureCollection', features: [] }
+  }
+  const maxYards = Number.isFinite(options.maxYards) ? options.maxYards : Infinity
+  const teePt = turf.point(tee)
+  const features = []
+  for (const c of clubs) {
+    const yards = Number(c?.carry)
+    if (!Number.isFinite(yards) || yards <= 20) continue
+    if (yards > maxYards + 15) continue
+    const km = (yards * Y_TO_M) / 1000
+    const circle = turf.circle(teePt, km, { steps: 64, units: 'kilometers' })
+    circle.properties = { kind: 'carry-ring', club: c.club || '', carry: yards }
+    features.push(circle)
+  }
+  return { type: 'FeatureCollection', features }
+}
+
+// Straight-line yardage between two [lng, lat] pairs. Used by the map to cap
+// carry rings against the pin so a 275y driver doesn't spill past a 155y
+// par-3 green.
+export function computeTeeToPinYards(tee, pin) {
+  if (!tee || !pin) return null
+  const meters = turf.distance(turf.point(tee), turf.point(pin), { units: 'meters' })
+  return meters * M_TO_Y
+}
+
+// Return the [lng, lat] you land on if you travel `yards` on the given
+// bearing from `from`. Bearing is degrees clockwise from true north.
+export function pointAtBearing(from, yards, bearing) {
+  const km = (yards * Y_TO_M) / 1000
+  const d = turf.destination(turf.point(from), km, bearing, { units: 'kilometers' })
+  return d.geometry.coordinates
+}
+
 // Format a distance set into a short, prompt-friendly line. Returns an empty
 // string when there's nothing meaningful to say (so callers can `if (line)`).
 export function formatDistancesLine(d) {

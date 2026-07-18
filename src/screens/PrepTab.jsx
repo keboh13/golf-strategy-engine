@@ -48,6 +48,7 @@ export default function PrepTab({
   holeScores, setScore,
   displayGeo,
   contributedHoleSet,
+  clubs,
   parsedHoles,
   generate, cancelGenerate,
   copyPlan, printPlan,
@@ -444,6 +445,7 @@ export default function PrepTab({
                         bboxByHole={displayGeo.bboxByHole}
                         coverage={course?.coverage}
                         tier={course?.tier}
+                        clubs={clubs}
                         holes={parsedHoles.holes}
                         extraHazardsByHole={(() => {
                           const out = {}
