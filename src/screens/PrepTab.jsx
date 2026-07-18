@@ -13,6 +13,7 @@ import CourseHoleMap from '../components/CourseHoleMap.jsx'
 import CourseSearch from '../components/CourseSearch.jsx'
 import ScorecardPreview from '../components/ScorecardPreview.jsx'
 import WeatherPanel from '../components/WeatherPanel.jsx'
+import BriefRating from '../components/BriefRating.jsx'
 
 const PREP_STEPS = [
   { num: 1, label: 'Select Course',    icon: '🔍' },
@@ -24,6 +25,8 @@ const PREP_STEPS = [
 export default function PrepTab({
   isMobile,
   session,
+  user,
+  lastRecLogId,
   prepStep, setPrepStep,
   course, setCourse,
   coords, setCoords,
@@ -45,6 +48,7 @@ export default function PrepTab({
   holeScores, setScore,
   displayGeo,
   contributedHoleSet,
+  clubs,
   parsedHoles,
   generate, cancelGenerate,
   copyPlan, printPlan,
@@ -363,6 +367,9 @@ export default function PrepTab({
               </div>
             </div>
 
+            {/* In-flow rating — captures the reaction at the moment, not later */}
+            <BriefRating user={user} recLogId={lastRecLogId} />
+
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <Badge label="Report Ready" bg={C.greenMuted} fg={C.green} />
@@ -371,7 +378,7 @@ export default function PrepTab({
               <div style={{ display: 'flex', gap: 8 }}>
                 <button style={btnG} onClick={copyPlan}>{copied ? '✓ Copied' : 'Copy text'}</button>
                 <button style={btnG} onClick={printPlan}>Print / PDF</button>
-                <button style={btnG} onClick={generate}>↺ Regenerate</button>
+                <button style={btnG} onClick={() => generate({ bypassCache: true })} title="Fetch a fresh brief (skip cache)">↺ Regenerate</button>
               </div>
             </div>
 
@@ -438,6 +445,7 @@ export default function PrepTab({
                         bboxByHole={displayGeo.bboxByHole}
                         coverage={course?.coverage}
                         tier={course?.tier}
+                        clubs={clubs}
                         holes={parsedHoles.holes}
                         extraHazardsByHole={(() => {
                           const out = {}
@@ -515,7 +523,7 @@ export default function PrepTab({
           {planValidationBanner && (
             <div style={{ ...card, borderColor: C.amber, marginTop: 12 }}>
               <p style={{ color: C.amber, fontSize: 13, margin: '0 0 8px', fontWeight: 600 }}>⚠ {planValidationBanner}</p>
-              <button style={{ ...btnP, padding: '6px 14px', fontSize: 12 }} onClick={generate}>
+              <button style={{ ...btnP, padding: '6px 14px', fontSize: 12 }} onClick={() => generate({ bypassCache: true })}>
                 Regenerate
               </button>
             </div>

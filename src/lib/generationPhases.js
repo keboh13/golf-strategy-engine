@@ -30,6 +30,24 @@ export function stripPhaseMarkers(text) {
   return text.replace(PHASE_MARKER_RE, '')
 }
 
+// Structured green-json fenced block that the model emits inside each Hole
+// section. It's parsed out of the finished plan by the extractor, but during
+// streaming the closing fence isn't there yet, so the raw JSON leaks into the
+// rendered brief. Match both closed and unclosed forms so we can drop them
+// from the streaming view.
+const GREEN_JSON_CLOSED   = /```green-json\s*\n[\s\S]*?\n```\s*\n?/g
+const GREEN_JSON_UNCLOSED = /```green-json\s*\n[\s\S]*$/
+
+// Strip streaming artifacts from a partial (or complete) plan chunk so the
+// rendered brief never shows raw JSON or phase markers to the user. Applied
+// on every render — must be pure and cheap.
+export function stripStreamingArtifacts(text) {
+  if (!text) return text
+  return stripPhaseMarkers(text)
+    .replace(GREEN_JSON_CLOSED, '')
+    .replace(GREEN_JSON_UNCLOSED, '')
+}
+
 // Find every phase marker present in `text` and return the matched ids in
 // order. Used by the client to advance the step machine and by the server to
 // timestamp first-appearance of each phase.

@@ -14,7 +14,10 @@ import { computeHoleTimes, getWeatherAtHour, windDir } from './lib/weather.js'
 import { fetchHoleDesignViaSearch, mergeDesignDataIntoHoles, searchGolfCourseAPI, normalizeGolfCourseAPICourse, geocodeViaClaudeSearch } from './lib/courseApi.js'
 import { ENRICH_STEP_IDS } from './lib/enrichSteps.js'
 import { STEP_STATES } from './lib/progress.js'
-import { GENERATION_PHASE_IDS, stripPhaseMarkers, findPhaseMarkers } from './lib/generationPhases.js'
+import { GENERATION_PHASE_IDS, stripPhaseMarkers, stripStreamingArtifacts, findPhaseMarkers } from './lib/generationPhases.js'
+import { todayLocalIso } from './lib/localDate.js'
+import { planCacheKey, getCachedPlan, putCachedPlan } from './lib/planCache.js'
+import { getLatestPostRoundForCourse } from './lib/postRound.js'
 import { useProfile } from './lib/useProfile.js'
 import { usePwa } from './lib/usePwa.js'
 import PwaBanner from './components/PwaBanner.jsx'
@@ -72,7 +75,7 @@ class ErrorBoundary extends Component {
 }
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
-function AppInner({ user, session, onSignOut }) {
+function AppInner({ user, session, onSignOut, onRunOnboarding }) {
   const isMobile = useIsMobile()
   const { canInstall, isOnline, installApp, dismiss: dismissInstall } = usePwa()
   // ── API keys — loaded from localStorage, falling back to .env ────────────
@@ -184,7 +187,7 @@ function AppInner({ user, session, onSignOut }) {
 
   // Tee time & weather
   const [teeTime,  setTeeTime]  = useState('10:00')
-  const [teeDate,  setTeeDate]  = useState(() => new Date().toISOString().slice(0, 10))
+  const [teeDate,  setTeeDate]  = useState(() => todayLocalIso())
   const [pace,     setPace]     = useState(11)
   const [timezone] = useState(Intl.DateTimeFormat().resolvedOptions().timeZone)
   const [weather,        setWeather]        = useState(null)
@@ -219,6 +222,10 @@ function AppInner({ user, session, onSignOut }) {
   })
   const [holeScores,  setHoleScores]  = useState({})
   const [expandedBrief, setExpandedBrief] = useState(null)
+  // Rec-log id of the most recently generated brief. Surfaced to the Prep
+  // tab so the in-flow BriefRating widget can save a rating without waiting
+  // for the user to go to History.
+  const [lastRecLogId, setLastRecLogId] = useState(null)
 
   const setScore = (holeNum, val) => setHoleScores(s => ({ ...s, [holeNum]: Math.max(1, val) }))
   const clearScores = () => setHoleScores({})
@@ -770,15 +777,17 @@ function AppInner({ user, session, onSignOut }) {
   // have to guess at it. Original buildPrompt kept below as buildPromptLegacy
   // for fallback comparison (unused).
   const buildPrompt = useCallback(() => {
+    const priorRound = getLatestPostRoundForCourse(savedBriefs, course?.name)
     const { prompt } = buildRecommendationPrompt({
       playerInfo, clubs, course, holeTimes, holeWeather,
       teeTime, teeDate, pace,
       scoringHistory,
       style: planStyle,
+      priorRound,
       nowMs: Date.now(),
     })
     return prompt
-  }, [clubs, course, playerInfo, holeWeather, holeTimes, teeTime, teeDate, pace, scoringHistory, planStyle])
+  }, [clubs, course, playerInfo, holeWeather, holeTimes, teeTime, teeDate, pace, scoringHistory, planStyle, savedBriefs])
 
   // Legacy inline builder — preserved (unused) for diffing against the new
   // module-based path during rollout. Safe to delete after a few releases.
@@ -1059,13 +1068,14 @@ Be direct. No filler. ALL 18 HOLES.`
     setPlanLoading(false); setPlanPhase('')
   }
 
-  const generate = async () => {
+  const generate = async (options = {}) => {
+    const { bypassCache = false } = options
     const authToken = session?.access_token || ''
     if (!authToken) { setPlanError('Please sign in to generate a game plan.'); return }
     if (abortRef.current) abortRef.current.abort()
     const ctrl = new AbortController()
     abortRef.current = ctrl
-    setPlanLoading(true); setPlanPhase('Analyzing scoring history'); setPlanError(''); setPlanValidationBanner(''); setPlan(''); setTab('prep'); setPrepStep(4)
+    setPlanLoading(true); setPlanPhase('Analyzing scoring history'); setPlanError(''); setPlanValidationBanner(''); setPlan(''); setLastRecLogId(null); setTab('prep'); setPrepStep(4)
     let capturedRecLogId = null
     // Reset + start the generation tracker. The implicit 'strategy' phase is
     // running from the first byte; markers advance the machine from there.
@@ -1091,13 +1101,51 @@ Be direct. No filler. ALL 18 HOLES.`
         endsAt:   { ...p.endsAt, [prev]: ts },
       }))
     }
+
+    // Cache lookup — key is a stable hash of (prompt, model, style). Same
+    // course + player + bag + weather → same key. On a hit we replay the
+    // cached plan into the same rendering pipeline the streaming path uses,
+    // so the UI treats it identically (companion mode, hole cards, saved-to-
+    // history banner). Bypass path is wired to the ↺ Regenerate button below.
+    const promptText = buildPrompt()
+    let cacheKey = null
+    try { cacheKey = await planCacheKey({ prompt: promptText, model: selectedModel, style: planStyle }) } catch {}
+    if (!bypassCache && cacheKey) {
+      const hit = getCachedPlan(cacheKey)
+      if (hit?.plan) {
+        setPlan(hit.plan)
+        setPlanLoading(false)
+        abortRef.current = null
+        const endTs = Date.now()
+        setGenProgress({
+          states: Object.fromEntries(GENERATION_PHASE_IDS.map(id => [id, STEP_STATES.DONE])),
+          startsAt: Object.fromEntries(GENERATION_PHASE_IDS.map(id => [id, genStartedAt])),
+          endsAt: Object.fromEntries(GENERATION_PHASE_IDS.map(id => [id, endTs])),
+          errors: {},
+        })
+        // Still validate + record in history so the user's per-course list is
+        // consistent whether the brief was fresh or cached.
+        if (course.name) {
+          const v = validatePlanContract(hit.plan)
+          setPlanValidationBanner(v.ok ? '' : (v.banner || 'Plan validation failed.'))
+        }
+        const entry = { course: course.name || 'Profile brief', date: todayLocalIso(), plan: hit.plan, tee: course.selectedTee || '', rec_log_id: null, cached: true }
+        setSavedBriefs(prev => {
+          const updated = [entry, ...prev].slice(0, 10)
+          try { localStorage.setItem('golf_saved_briefs', JSON.stringify(updated)) } catch {}
+          return updated
+        })
+        return
+      }
+    }
+
     const payload = {
       model: selectedModel,
       max_tokens: 16000,
       stream: true,
       messages: [{
         role: 'user',
-        content: [{ type: 'text', text: buildPrompt(), cache_control: { type: 'ephemeral' } }],
+        content: [{ type: 'text', text: promptText, cache_control: { type: 'ephemeral' } }],
       }],
     }
     try {
@@ -1146,6 +1194,7 @@ Be direct. No filler. ALL 18 HOLES.`
             // Final event emitted by the edge function after rec_log insert.
             if (j.type === 'metadata' && j.rec_log_id) {
               capturedRecLogId = j.rec_log_id
+              setLastRecLogId(j.rec_log_id)
             }
           } catch {}
         }
@@ -1172,15 +1221,23 @@ Be direct. No filler. ALL 18 HOLES.`
       if (p) {
         // Validate plan against the output contract — surfaces silent
         // truncation, missing sections, malformed green-json.
+        let contractOk = true
         if (course.name) {
           const v = validatePlanContract(p)
+          contractOk = v.ok
           if (!v.ok) {
             setPlanValidationBanner(v.banner || 'Plan validation failed.')
           } else {
             setPlanValidationBanner('')
           }
         }
-        const entry = { course: course.name || 'Profile brief', date: new Date().toISOString().slice(0, 10), plan: p, tee: course.selectedTee || '', rec_log_id: capturedRecLogId || null }
+        // Cache the plan so a second Generate with identical inputs is
+        // instant. Only cache validated plans — replaying a malformed brief
+        // isn't a win for the user.
+        if (cacheKey && contractOk) {
+          try { putCachedPlan(cacheKey, p) } catch {}
+        }
+        const entry = { course: course.name || 'Profile brief', date: todayLocalIso(), plan: p, tee: course.selectedTee || '', rec_log_id: capturedRecLogId || null }
         setSavedBriefs(prev => {
           const updated = [entry, ...prev].slice(0, 10)
           try { localStorage.setItem('golf_saved_briefs', JSON.stringify(updated)) } catch {}
@@ -1288,7 +1345,7 @@ Be direct. No filler. ALL 18 HOLES.`
 
   const renderPlan = (text) => (
     <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
-      {text}
+      {stripStreamingArtifacts(text)}
     </ReactMarkdown>
   )
 
@@ -1473,6 +1530,8 @@ Be direct. No filler. ALL 18 HOLES.`
           <PrepTab
             isMobile={isMobile}
             session={session}
+            user={user}
+            lastRecLogId={lastRecLogId}
             prepStep={prepStep}
             setPrepStep={setPrepStep}
             course={course}
@@ -1512,6 +1571,7 @@ Be direct. No filler. ALL 18 HOLES.`
             setScore={setScore}
             displayGeo={displayGeo}
             contributedHoleSet={contributedHoleSet}
+            clubs={clubs}
             parsedHoles={parsedHoles}
             generate={generate}
             cancelGenerate={cancelGenerate}
@@ -1587,6 +1647,7 @@ Be direct. No filler. ALL 18 HOLES.`
             setTab={setTab}
             setPrepStep={setPrepStep}
             applyScorecard={applyScorecard}
+            onRunOnboarding={onRunOnboarding}
           />
         )}
 
@@ -1670,6 +1731,11 @@ function AuthGate() {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session)
       setUser(session?.user ?? null)
+      // Any authenticated user without a saved profile gets the wizard —
+      // covers existing accounts that predate onboarding and signups that
+      // bailed mid-wizard. localStorage `gse_onboarding_dismissed` lets
+      // a user opt out permanently (Settings toggle).
+      if (session?.user) maybeOfferOnboarding(session.user)
     })
 
     // Listen for auth changes (login, logout, token refresh, password recovery)
@@ -1680,6 +1746,21 @@ function AuthGate() {
     })
     return () => subscription.unsubscribe()
   }, [])
+
+  // Show the wizard when the user has zero saved profiles AND hasn't opted
+  // out. Called on session establishment; a returning user with a full
+  // profile never sees this.
+  const maybeOfferOnboarding = async (u) => {
+    try {
+      if (localStorage.getItem('gse_onboarding_dismissed') === '1') return
+      const profiles = await loadUserProfiles(u.id)
+      const hasAny = profiles && Object.keys(profiles).length > 0
+      if (!hasAny) setNeedsOnboarding(true)
+    } catch (e) {
+      // Non-fatal — the user can still open the wizard from Settings.
+      console.warn('[onboarding] profile check failed:', e.message)
+    }
+  }
 
   // Handle AuthScreen completion
   const handleAuth = async (type) => {
@@ -1718,6 +1799,10 @@ function AuthGate() {
     if (trySampleCourse) {
       try { localStorage.setItem('gse_onboarding_sample_course', '1') } catch {}
     }
+    // Remember that the wizard was completed so we don't offer it again on
+    // every future session (even if the profile write to Supabase races or
+    // gets rolled back).
+    try { localStorage.setItem('gse_onboarding_dismissed', '1') } catch {}
     setNeedsOnboarding(false)
   }
 
@@ -1759,7 +1844,17 @@ function AuthGate() {
   }
 
   // Authenticated — show main app
-  return <AppInner user={user} session={session} onSignOut={handleSignOut} />
+  return <AppInner
+    user={user}
+    session={session}
+    onSignOut={handleSignOut}
+    onRunOnboarding={() => {
+      // Explicit re-open: clear the "dismissed" flag so a fresh Finish
+      // sticks, then flip the wizard on.
+      try { localStorage.removeItem('gse_onboarding_dismissed') } catch {}
+      setNeedsOnboarding(true)
+    }}
+  />
 }
 
 export default function App() {

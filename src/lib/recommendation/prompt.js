@@ -13,12 +13,13 @@
 // content adds pre-computed math the LLM no longer has to guess at.
 
 import { buildBagSection } from '../promptSections.js'
-import { decomposeWind } from './wind.js'
+import { decomposeWind, windDistanceAdjustmentYds } from './wind.js'
 import { effectiveYardage } from './elevation.js'
 import { tee_shot_overlaps, formatOverlapLine } from './dispersion.js'
 import { holeConfidence, rollupConfidence } from './confidence.js'
 import { summarizeHistory, renderHistoryBlock } from './history.js'
 import { formatDistancesLine } from '../courseGeometry.js'
+import { renderPriorRoundBlock } from '../postRound.js'
 
 const windCompassFromDeg = (deg) => {
   if (!Number.isFinite(deg)) return ''
@@ -97,6 +98,16 @@ function buildHoleLine(i, h, ctx) {
     ? ` (plays ${eff.effectiveYds}y — ${eff.label})`
     : ''
 
+  // Wind-adjusted "plays" delta on top of raw yardage. Uses the elevation-
+  // adjusted yardage as the base so wind stacks with elevation the way a
+  // caddy actually thinks about it. Only surface deltas ≥3y — anything
+  // smaller is inside the model's shot dispersion and reads as noise.
+  const baseYds = eff?.effectiveYds || rawYds
+  const windDelta = (wind && baseYds) ? windDistanceAdjustmentYds(wind.headMph, baseYds) : 0
+  const windPlaysStr = Math.abs(windDelta) >= 3
+    ? ` (wind: plays ${windDelta > 0 ? '+' : ''}${windDelta}y ${windDelta > 0 ? 'longer' : 'shorter'})`
+    : ''
+
   // Design data string (osm > yardage-book > web)
   let designStr = ''
   if (h.osmDesign) {
@@ -173,7 +184,7 @@ function buildHoleLine(i, h, ctx) {
 
   const elevHdr = h.elevation ? ` | Elev: ${h.elevation}` : ''
 
-  return `H${i+1}: Par ${h.par}, ${h.yardage || '?'}y${effStr}, HCP ${h.handicap}${elevHdr}${confStr}${designStr}${nStr}${wStr}${yardageBookText}${overlapStr}`
+  return `H${i+1}: Par ${h.par}, ${h.yardage || '?'}y${effStr}${windPlaysStr}, HCP ${h.handicap}${elevHdr}${confStr}${designStr}${nStr}${wStr}${yardageBookText}${overlapStr}`
 }
 
 /**
@@ -193,8 +204,10 @@ export function buildRecommendationPrompt(inputs) {
     pace,
     scoringHistory,
     style = 'balanced',           // 'balanced' | 'conservative' | 'aggressive'
+    priorRound = null,            // { date, scores, notes, generalNotes } — post-round hindsight
     nowMs,
   } = inputs
+  const priorRoundBlock = renderPriorRoundBlock(priorRound)
 
   const clubList = buildBagSection(clubs)
   const summary = summarizeHistory(scoringHistory, { nowMs })
@@ -286,10 +299,12 @@ ${isPractice ? 'Practice round — frame around learning, not score.' : ''}${isM
 ${course.notes ? `Notes: ${course.notes}` : ''}
 Tee: ${teeTime} (${teeDate}), ${pace} min/hole
 ${historyBlock}
+${priorRoundBlock}
 
 PRE-COMPUTED HINTS (USE THESE — do not redo the math):
 - "plays Xy" = elevation-adjusted effective yardage. Pick clubs off this number.
 - "(NNmph headwind, NNmph L→R cross)" = wind already decomposed against the hole bearing.
+- "(wind: plays +Xy longer/shorter)" = wind-adjusted distance delta on top of raw yardage. When this appears, your Tee/Approach line MUST reflect it: name the club change ("one more club — 6-iron", "half-club less"), and adjust the aim for the crosswind. Do not fold this back into the raw yardage silently.
 - "Risk: <club> dispersion overlaps: <hazard> ~XX%" = player's statistical chance of landing in that hazard with that tee club. Treat ≥30% as serious; ≥20% as worth a layup discussion.
 - "conf:overall/hazards" = data confidence per hole. If hazards is "low" or "none", do NOT invent hazards; recommend a default-safe line.
 

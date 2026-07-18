@@ -101,7 +101,7 @@ export default function HistoryTab({
                     </div>
                     <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
                       <span style={{ fontSize: 12, color: C.textMuted }}>Generated: {b.date || 'Unknown date'}</span>
-                      {b.plan && <span style={{ fontSize: 11, color: C.textFaint }}>{(b.plan.match(/###?\s*Hole/gi) || []).length} holes covered</span>}
+                      {b.plan && <span style={{ fontSize: 11, color: C.textFaint }}>{(b.plan.match(/###?\s*Hole\s+\d+/gi) || []).length} holes covered</span>}
                     </div>
                   </div>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -189,8 +189,17 @@ export default function HistoryTab({
                   </div>
                 )}
 
-                {/* Notes for refining AI */}
-                <div style={{ borderTop: ratingState !== null ? `1px solid ${C.border}` : undefined, paddingTop: ratingState !== null ? 10 : 0 }}>
+                {/* Post-round capture — per-hole score + one-line "what went wrong".
+                    This feeds getLatestPostRoundForCourse → prompt so the next
+                    brief for this course can reference the miss concretely. */}
+                <PostRoundEditor
+                  brief={b}
+                  index={i}
+                  setSavedBriefs={setSavedBriefs}
+                />
+
+                {/* Freeform notes for AI refinement (legacy field — still surfaced) */}
+                <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 10, marginTop: 10 }}>
                   <label style={{ ...lbl, marginBottom: 6 }}>Notes for AI refinement</label>
                   <textarea
                     style={{ ...inp, height: 48, resize: 'vertical', fontSize: 12 }}
@@ -212,6 +221,99 @@ export default function HistoryTab({
               </div>
             )
           })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Structured per-hole capture. 18 tiny score inputs + optional one-line
+// "what went wrong" per hole, plus a general-notes field. Persisted to
+// savedBriefs[index].postRound so getLatestPostRoundForCourse can find it
+// on the next Round Prep for the same course.
+function PostRoundEditor({ brief, index, setSavedBriefs }) {
+  const [open, setOpen] = useState(false)
+  const [draft, setDraft] = useState(() => ({
+    scores: brief.postRound?.scores || {},
+    notes:  brief.postRound?.notes  || {},
+    generalNotes: brief.postRound?.generalNotes || '',
+  }))
+  const holesLogged = Object.keys(draft.scores).filter(k => Number.isFinite(draft.scores[k])).length
+  const notesLogged = Object.values(draft.notes).filter(Boolean).length
+
+  function persist(next) {
+    setDraft(next)
+    setSavedBriefs(prev => prev.map((bb, j) => j === index ? { ...bb, postRound: next } : bb))
+    try {
+      const ls = JSON.parse(localStorage.getItem('golf_saved_briefs') || '[]')
+      if (ls[index]) { ls[index].postRound = next; localStorage.setItem('golf_saved_briefs', JSON.stringify(ls)) }
+    } catch {}
+  }
+
+  return (
+    <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 10 }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{
+          background: 'transparent', border: 'none', padding: 0, cursor: 'pointer',
+          display: 'flex', alignItems: 'center', gap: 6, fontFamily: F, color: C.text,
+        }}
+      >
+        <span style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', color: C.textMuted }}>
+          Post-round
+        </span>
+        {(holesLogged > 0 || notesLogged > 0) && (
+          <Badge label={`${holesLogged}/18 · ${notesLogged} note${notesLogged === 1 ? '' : 's'}`} bg={C.accentMuted} fg={C.accent} />
+        )}
+        <span style={{ fontSize: 12, color: C.textMuted }}>{open ? '▾' : '▸'}</span>
+      </button>
+      {open && (
+        <div style={{ marginTop: 10 }}>
+          <p style={{ fontSize: 11, color: C.textFaint, margin: '0 0 8px' }}>
+            Log actual scores per hole and what went wrong. The next brief for {brief.course} will reference these directly.
+          </p>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: 8 }}>
+            {Array.from({ length: 18 }, (_, k) => k + 1).map(n => (
+              <div key={n} style={{ background: C.bgInput, borderRadius: 6, padding: '6px 8px', border: `1px solid ${C.border}` }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 11, color: C.textMuted, minWidth: 22, fontWeight: 600 }}>H{n}</span>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    aria-label={`Hole ${n} score`}
+                    value={Number.isFinite(draft.scores[n]) ? draft.scores[n] : ''}
+                    onChange={e => {
+                      const v = e.target.value === '' ? undefined : parseInt(e.target.value, 10)
+                      const scores = { ...draft.scores }
+                      if (Number.isFinite(v)) scores[n] = v
+                      else delete scores[n]
+                      persist({ ...draft, scores })
+                    }}
+                    style={{ width: 42, height: 24, background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, padding: '0 4px', fontSize: 12, fontFamily: F, textAlign: 'center' }}
+                  />
+                </div>
+                <input
+                  aria-label={`Hole ${n} note`}
+                  value={draft.notes[n] || ''}
+                  onChange={e => {
+                    const notes = { ...draft.notes }
+                    if (e.target.value) notes[n] = e.target.value
+                    else delete notes[n]
+                    persist({ ...draft, notes })
+                  }}
+                  placeholder="what went wrong…"
+                  style={{ width: '100%', boxSizing: 'border-box', marginTop: 4, height: 22, background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, padding: '0 6px', fontSize: 11, fontFamily: F }}
+                />
+              </div>
+            ))}
+          </div>
+          <label style={{ ...lbl, marginTop: 10, marginBottom: 4, display: 'block' }}>General round notes</label>
+          <textarea
+            style={{ ...inp, height: 40, resize: 'vertical', fontSize: 12 }}
+            value={draft.generalNotes}
+            onChange={e => persist({ ...draft, generalNotes: e.target.value })}
+            placeholder="Overall — wind was stronger than forecast; putts felt fast."
+          />
         </div>
       )}
     </div>

@@ -3,6 +3,7 @@ import {
   GENERATION_PHASE_IDS,
   GENERATION_STEPS,
   stripPhaseMarkers,
+  stripStreamingArtifacts,
   findPhaseMarkers,
   recordPhaseDurations,
 } from './generationPhases.js'
@@ -31,6 +32,28 @@ describe('stripPhaseMarkers', () => {
   it('handles null / empty gracefully', () => {
     expect(stripPhaseMarkers('')).toBe('')
     expect(stripPhaseMarkers(null)).toBe(null)
+  })
+})
+
+describe('stripStreamingArtifacts', () => {
+  it('drops closed green-json fenced blocks in place', () => {
+    const inp = '### Hole 1\nTee: driver\n```green-json\n{"depth_y":28}\n```\nApproach: 8i'
+    expect(stripStreamingArtifacts(inp)).toBe('### Hole 1\nTee: driver\nApproach: 8i')
+  })
+  it('drops an unclosed green-json fenced block at the streaming edge', () => {
+    const inp = '### Hole 1\nTee: driver\n```green-json\n{"depth_y":28,"width_y":24,"shape":"oval"'
+    expect(stripStreamingArtifacts(inp)).toBe('### Hole 1\nTee: driver\n')
+  })
+  it('strips phase markers alongside the fenced block', () => {
+    const inp = '[[PHASE: holes]]\n### Hole 1\n```green-json\n{"a":1}\n```\nbody'
+    expect(stripStreamingArtifacts(inp)).toBe('### Hole 1\nbody')
+  })
+  it('is a no-op when there is nothing to strip', () => {
+    expect(stripStreamingArtifacts('## Round strategy\nplain prose')).toBe('## Round strategy\nplain prose')
+  })
+  it('handles null / empty gracefully', () => {
+    expect(stripStreamingArtifacts('')).toBe('')
+    expect(stripStreamingArtifacts(null)).toBe(null)
   })
 })
 
