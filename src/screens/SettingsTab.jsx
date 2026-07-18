@@ -16,6 +16,7 @@ export default function SettingsTab({
   setCacheVersion,
   setTab, setPrepStep,
   applyScorecard,
+  onRunOnboarding,
 }) {
   const cache = loadCourseCache()
   const entries = Object.values(cache).sort((a, b) => (b._cachedAt || 0) - (a._cachedAt || 0))
@@ -172,6 +173,14 @@ export default function SettingsTab({
           </div>
         )}
       </div>
+
+      {/* ── Setup wizard ── */}
+      {onRunOnboarding && (
+        <div style={{ ...card, marginBottom: 16 }}>
+          {sectionHead('Setup wizard', 'Re-run the guided first-time setup: player profile → bag → recent rounds → sample brief.')}
+          <button style={btnG} onClick={onRunOnboarding}>Run setup wizard →</button>
+        </div>
+      )}
 
       {/* ── AI Model ── */}
       <div style={{ ...card, marginBottom: 16 }}>

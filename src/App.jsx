@@ -72,7 +72,7 @@ class ErrorBoundary extends Component {
 }
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
-function AppInner({ user, session, onSignOut }) {
+function AppInner({ user, session, onSignOut, onRunOnboarding }) {
   const isMobile = useIsMobile()
   const { canInstall, isOnline, installApp, dismiss: dismissInstall } = usePwa()
   // ── API keys — loaded from localStorage, falling back to .env ────────────
@@ -1587,6 +1587,7 @@ Be direct. No filler. ALL 18 HOLES.`
             setTab={setTab}
             setPrepStep={setPrepStep}
             applyScorecard={applyScorecard}
+            onRunOnboarding={onRunOnboarding}
           />
         )}
 
@@ -1670,6 +1671,11 @@ function AuthGate() {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session)
       setUser(session?.user ?? null)
+      // Any authenticated user without a saved profile gets the wizard —
+      // covers existing accounts that predate onboarding and signups that
+      // bailed mid-wizard. localStorage `gse_onboarding_dismissed` lets
+      // a user opt out permanently (Settings toggle).
+      if (session?.user) maybeOfferOnboarding(session.user)
     })
 
     // Listen for auth changes (login, logout, token refresh, password recovery)
@@ -1680,6 +1686,21 @@ function AuthGate() {
     })
     return () => subscription.unsubscribe()
   }, [])
+
+  // Show the wizard when the user has zero saved profiles AND hasn't opted
+  // out. Called on session establishment; a returning user with a full
+  // profile never sees this.
+  const maybeOfferOnboarding = async (u) => {
+    try {
+      if (localStorage.getItem('gse_onboarding_dismissed') === '1') return
+      const profiles = await loadUserProfiles(u.id)
+      const hasAny = profiles && Object.keys(profiles).length > 0
+      if (!hasAny) setNeedsOnboarding(true)
+    } catch (e) {
+      // Non-fatal — the user can still open the wizard from Settings.
+      console.warn('[onboarding] profile check failed:', e.message)
+    }
+  }
 
   // Handle AuthScreen completion
   const handleAuth = async (type) => {
@@ -1718,6 +1739,10 @@ function AuthGate() {
     if (trySampleCourse) {
       try { localStorage.setItem('gse_onboarding_sample_course', '1') } catch {}
     }
+    // Remember that the wizard was completed so we don't offer it again on
+    // every future session (even if the profile write to Supabase races or
+    // gets rolled back).
+    try { localStorage.setItem('gse_onboarding_dismissed', '1') } catch {}
     setNeedsOnboarding(false)
   }
 
@@ -1759,7 +1784,17 @@ function AuthGate() {
   }
 
   // Authenticated — show main app
-  return <AppInner user={user} session={session} onSignOut={handleSignOut} />
+  return <AppInner
+    user={user}
+    session={session}
+    onSignOut={handleSignOut}
+    onRunOnboarding={() => {
+      // Explicit re-open: clear the "dismissed" flag so a fresh Finish
+      // sticks, then flip the wizard on.
+      try { localStorage.removeItem('gse_onboarding_dismissed') } catch {}
+      setNeedsOnboarding(true)
+    }}
+  />
 }
 
 export default function App() {
