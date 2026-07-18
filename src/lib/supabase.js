@@ -377,3 +377,15 @@ export async function savePrepSession(userId, profileName, state) {
     )
   if (error) throw error
 }
+
+// Wipes the saved prep slice for (user, profile) so the next mount / other
+// device starts blank instead of restoring the previous course.
+export async function clearPrepSession(userId, profileName = 'Default') {
+  if (!userId) return
+  const { error } = await supabase
+    .from('prep_sessions')
+    .delete()
+    .eq('user_id', userId)
+    .eq('profile_name', profileName || 'Default')
+  if (error) throw error
+}
