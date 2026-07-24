@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef, useMemo, Component } from 'react'
-import { supabase, loadUserProfiles, saveUserProfile, deleteUserProfile, loadUserHistory, saveUserHistory, loadUserSettings, saveUserSettings, getCachedCourseDB, setCachedCourseDB, getAllCachedCoursesDB, deleteCachedCourseDB, loadSavedPlans, savePlan, deleteSavedPlan, loadCourseHazards, listCoursePdfs, uploadCoursePdfToBucket, deleteAllCoursePdfs, deleteCourseHazards, clearCachedScorecardPdfRef, listCanonicalCacheKeys, listAliasKeys, loadPrepSession, savePrepSession } from './lib/supabase.js'
+import { supabase, loadUserProfiles, saveUserProfile, deleteUserProfile, loadUserHistory, saveUserHistory, loadUserSettings, saveUserSettings, getCachedCourseDB, setCachedCourseDB, getAllCachedCoursesDB, deleteCachedCourseDB, loadSavedPlans, savePlan, deleteSavedPlan, loadCourseHazards, listCoursePdfs, uploadCoursePdfToBucket, deleteAllCoursePdfs, deleteCourseHazards, clearCachedScorecardPdfRef, listCanonicalCacheKeys, listAliasKeys, loadPrepSession, savePrepSession, clearPrepSession } from './lib/supabase.js'
 import { buildBagSection } from './lib/promptSections.js'
 import { buildRecommendationPrompt } from './lib/recommendation/prompt.js'
 import { validatePlanContract } from './lib/recommendation/planContract.js'
@@ -103,6 +103,9 @@ function AppInner({ user, session, onSignOut, onRunOnboarding }) {
 
   // ── Prep flow step ───────────────────────────────────────────────────────
   const [prepStep, setPrepStep] = useState(1)
+  // Bumped by resetPrep so CourseSearch (which owns its own query/results
+  // state) remounts and clears the prior search input.
+  const [courseSearchResetKey, setCourseSearchResetKey] = useState(0)
 
   // ── Admin state ───────────────────────────────────────────────────────────
   const [isAdmin, setIsAdmin] = useState(null)  // null = unknown (not yet checked)
@@ -375,7 +378,19 @@ function AppInner({ user, session, onSignOut, onRunOnboarding }) {
     setCurrentHole(0)
     setHoleScores({})
     setPrepStep(1)
-  }, [])
+    // Force CourseSearch to remount so its typed query and any stale
+    // scorecard-detail card clear along with the parent state.
+    setCourseSearchResetKey(k => k + 1)
+    // Wipe the persisted prep_sessions row so the next mount / other device
+    // doesn't restore the course we just cleared. Marking this session as
+    // "already restored" prevents the load effect from racing us.
+    prepRestoreRef.current = true
+    if (user?.id) {
+      clearPrepSession(user.id, currentProfile).catch(e =>
+        console.warn('[prep_sessions] clear:', e.message)
+      )
+    }
+  }, [user?.id, currentProfile])
 
   const applyScorecard = useCallback((r) => {
     setCourse(prev => ({
@@ -1579,6 +1594,7 @@ Be direct. No filler. ALL 18 HOLES.`
             printPlan={printPlan}
             applyScorecard={applyScorecard}
             resetPrep={resetPrep}
+            courseSearchResetKey={courseSearchResetKey}
             renderPlan={renderPlan}
             handleHoleContribution={handleHoleContribution}
             setTab={setTab}
