@@ -6,6 +6,8 @@
 
 import { validateAuth, isAdminUser } from './_lib/admin.js'
 import { parseJsonFromText } from './_lib/extractJson.js'
+import { buildScorecardTeesMessages, buildHazardDesignMessages } from './_lib/pdfParseMessages.js'
+import { computeHazardCoverage, validateHazardDesignBatch } from './_lib/hazardCoverage.js'
 
 export const config = { maxDuration: 300 }
 
@@ -231,74 +233,8 @@ Return ONLY this JSON:
   }]
 }
 
-function buildPdfParseMessages(pdfUrl, courseName, location) {
-  return [{
-    role: 'user',
-    content: [
-      { type: 'document', source: { type: 'url', url: pdfUrl } },
-      { type: 'text', text: `This PDF is the official yardage book / scorecard for "${courseName}"${location ? ` in ${location}` : ''}.
-
-Extract FIVE things and return them in ONE JSON payload:
-
-(1) EVERY tee option printed on the scorecard as a "tees" array. A scorecard typically lists 3-6 tee sets across men's/women's rows (Black, Blue, White, Gold, Red, Green, Championship, Member, Forward, etc.). For EACH tee capture:
-   - "name": the tee label as printed ("Black", "Blue", "White", "Gold", "Championship", "Ladies", etc.)
-   - "color": lowercase color word if the tee is color-coded on the scorecard ("black", "blue", "white", "gold", "red", "green", "silver", "copper"), else null
-   - "yardage": total yards from this tee (integer)
-   - "rating": course rating for this tee (float), or null if not printed
-   - "slope": slope rating for this tee (integer), or null if not printed
-   - "par": par total for this tee if printed (usually same as course par)
-   - "holes": array of 18 entries {par, yardage, handicap} with the per-hole values FROM THIS SPECIFIC TEE — the yardage column that corresponds to this tee row. handicap (stroke index) is shared across tees on most scorecards.
-   Also populate the top-level "selectedTee" with the LONGEST tee's name (Championship / Tournament / Black / Tips) — this is the default view.
-
-(2) The top-level scorecard fields (yardage, rating, slope, par, holes[]) MUST mirror the entry in tees[] whose name equals selectedTee — this is what renders when a user hasn't switched tees yet.
-
-(3) Per-hole hazards and design features from the diagrams. For each hole 1-18, look at the hole illustration and pull every visible hazard, dogleg, and green note.
-
-(4) **Per-hole written content from the PDF text.** For each hole 1-18, also capture:
-   - "holeName": the caddie/marketing nickname for the hole if one is printed near the hole number (e.g. "Mind the Gap", "All of Texas", "Cascades"). Use null if no nickname exists.
-   - "description": the full prose paragraph that describes the hole's strategy / design / approach. Capture it VERBATIM from the PDF — do not paraphrase or shorten. This is the caddie-style write-up usually printed under the hole title. Use null if absent.
-   - "greenDepth": the printed green depth in yards (often shown as "DEPTH = 31"). Integer. Use null if absent.
-
-(5) **Visual analysis of the hole diagram (the picture).** For each hole 1-18, study the actual hole illustration / overhead diagram and extract observations a caddie would make from looking at the image — things not necessarily in the prose. Capture as:
-   - "visualNotes": 2-4 concise observations as a single string, semicolon-separated. Focus on (a) distance numbers visible on the diagram that aren't covered by hazards/carry_yards — sprinkler-to-landmark yardages, distances to bunker centers, distance to forced carries; (b) fairway shape — pinches, widening, doglegs visible from the overhead; (c) green shape and orientation (kidney, round, peanut, angled L-R, etc.); (d) elevation / cross-slope cues if drawn (downhill arrows, shading). Example: "FW pinches to 25y wide at 240y carry; cross-bunker 35y short of green; green angled left-to-right, ~38y deep; sprinkler at 150 reads as 156 to back pin." Use null if the diagram has no visible markers worth noting.
-   - "distanceMarkers": array of {label, yards} for sprinkler/landmark distances clearly readable on the diagram (e.g. {"label":"sprinkler to back of green","yards":85}). Empty array if none readable.
-
-Each hazard (in hazards[]):
-- "type": "bunker" | "water" | "creek" | "native" | "OB" | "trees"
-- "side": "L" | "R" | "C" | "front" | "back"
-- "carry_yards": carry distance from back tee if labeled, else null
-- "notes": short positional label ("fairway 240-260", "greenside", etc.)
-
-CRITICAL: never guess. If a number isn't in the PDF, leave null and lower confidence. Capture the description paragraph EXACTLY as printed — do not summarize. Confidence rubric: "high" only when every hole was matched against the document; "medium" when most were; "low" when partial.
-
-Return ONLY this JSON (no markdown):
-{
-  "name": "Full course name",
-  "location": "City, State",
-  "yardage": <int total>,
-  "rating": <float>,
-  "slope": <int>,
-  "par": <int total>,
-  "selectedTee": "Championship",
-  "source": "PDF (uploaded yardage book)",
-  "_confidence": "high|medium|low",
-  "tees": [
-    {"name":"Black","color":"black","yardage":7150,"rating":74.2,"slope":140,"par":72,"holes":[{"par":4,"yardage":410,"handicap":7}, ...all 18]},
-    {"name":"Blue","color":"blue","yardage":6620,"rating":71.8,"slope":135,"par":72,"holes":[{"par":4,"yardage":382,"handicap":7}, ...all 18]},
-    {"name":"White","color":"white","yardage":6100,"rating":69.5,"slope":128,"par":72,"holes":[{"par":4,"yardage":351,"handicap":7}, ...all 18]},
-    {"name":"Gold","color":"gold","yardage":5480,"rating":66.9,"slope":121,"par":72,"holes":[{"par":4,"yardage":312,"handicap":7}, ...all 18]}
-  ],
-  "holes": [{"par":4,"yardage":379,"handicap":7}, ...all 18],
-  "hazardsByHole": [
-    {"hole":1,"holeName":"Outward Right","description":"This medium-length, dogleg right plays along…","greenDepth":31,"visualNotes":"FW narrows to ~28y at 240; cross-bunker carved into inside corner; green angled left-to-right with hollow short-left","distanceMarkers":[{"label":"sprinkler to front green","yards":62},{"label":"sprinkler to back","yards":108}],"dogleg":"left|right|straight","hazards":[{"type":"bunker","side":"R","carry_yards":235,"notes":"fairway"}],"green_notes":"","recommended_line":""},
-    ...all 18
-  ]
-}
-
-If the PDF doesn't contain a usable scorecard: {"error":"PDF did not contain a parseable scorecard"}` },
-    ],
-  }]
-}
+// buildScorecardTeesMessages / buildHazardDesignMessages (api/_lib/pdfParseMessages.js)
+// replace the old single-call buildPdfParseMessages — see parsePdfAndPersist below.
 
 function validateScorecardJson(parsed) {
   const issues = []
@@ -329,31 +265,6 @@ function validateScorecardJson(parsed) {
     const set = new Set(hcps)
     if (set.size !== 18) issues.push('handicap_duplicates')
     for (let i = 1; i <= 18; i++) if (!set.has(i)) { issues.push('handicap_set_incomplete'); break }
-  }
-
-  // Hazard array structure if present
-  const hazardsByHole = Array.isArray(parsed.hazardsByHole) ? parsed.hazardsByHole : []
-  for (const hz of hazardsByHole) {
-    if (!hz || !Number.isFinite(parseInt(hz.hole))) continue
-    if (hz.greenDepth != null && (hz.greenDepth < 15 || hz.greenDepth > 50)) {
-      issues.push('green_depth_out_of_range'); break
-    }
-    if (Array.isArray(hz.hazards)) {
-      for (const z of hz.hazards) {
-        if (!z || typeof z !== 'object') continue
-        if (z.type && !/^(bunker|water|creek|native|OB|trees)$/i.test(z.type)) {
-          issues.push('hazard_bad_type'); break
-        }
-        if (z.side && !/^(L|R|C|front|back)$/i.test(z.side)) {
-          issues.push('hazard_bad_side'); break
-        }
-        const cy = Number(z.carry_yards)
-        const holeY = parseInt(holes[parseInt(hz.hole) - 1]?.yardage) || 0
-        if (Number.isFinite(cy) && holeY && cy > holeY) {
-          issues.push('hazard_carry_past_hole'); break
-        }
-      }
-    }
   }
 
   return issues
@@ -426,14 +337,14 @@ async function handleRequest(req) {
     },
   })
 
-  async function parsePdfAndPersist(pdfUrl) {
-    const messages = buildPdfParseMessages(pdfUrl, courseName, location || '')
-    // 12000 tokens budget: scorecard (~1.5k) + per-tee 18-hole rows (~1.5k for
-    // 4 tees) + 18 verbatim descriptions (~3–5k) + hazards + per-hole visual
-    // analysis from the diagrams (~2k).
-    const text = await callClaude(messages, 12000, false, undefined, MODEL_FAST)
+  // Call 1 — scorecard + tees. Mechanical extraction, fast model, existing
+  // validation gate. This is the part that's been reliable; kept unchanged
+  // in behavior, just scoped to a smaller prompt.
+  async function parseAndPersistScorecard(pdfUrl) {
+    const messages = buildScorecardTeesMessages(pdfUrl, courseName, location || '')
+    const text = await callClaude(messages, 6000, false, undefined, MODEL_FAST)
     const r = parseJsonFromText(text)
-    if (!r.ok) throw new Error(`No JSON in PDF parse response (${r.error}).`)
+    if (!r.ok) throw new Error(`No JSON in PDF scorecard response (${r.error}).`)
     const parsed = r.value
     if (parsed.error) throw new Error(parsed.error)
 
@@ -451,7 +362,6 @@ async function handleRequest(req) {
 
     if (persist !== false && !tooBroken && course_key && supabaseUrl && supabaseServiceKey) {
       const scorecardOnly = { ...parsed }
-      delete scorecardOnly.hazardsByHole
       scorecardOnly._source = 'yardage_book'
       scorecardOnly._sourcePdf = pdfUrl
 
@@ -489,33 +399,82 @@ async function handleRequest(req) {
         console.error(`[course_cache] persist failed (${upsertRes.status}): ${detail}`)
         parsed._cachePersistError = `course_cache persist failed (${upsertRes.status}). ${detail}`
       }
-
-      const rows = (parsed.hazardsByHole || [])
-        .filter(h => h && h.hole)
-        .map(h => ({
-          course_key,
-          hole_ref: Number(h.hole),
-          hazards: h,
-          source: 'pdf_vision',
-          image_path: pdfUrl,
-          confidence: parsed._confidence || 'medium',
-          updated_at: new Date().toISOString(),
-        }))
-      if (rows.length) {
-        const hzRes = await supabaseRest('course_hole_hazards?on_conflict=course_key,hole_ref', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates' },
-          body: JSON.stringify(rows),
-        }).catch(e => ({ ok: false, status: 0, _err: e?.message }))
-        if (!hzRes.ok) {
-          const detail = hzRes._err || (await hzRes.text?.().catch(() => '')) || ''
-          console.error(`[course_hole_hazards] persist failed (${hzRes.status}): ${detail}`)
-          parsed._hazardPersistError = `course_hole_hazards persist failed (${hzRes.status}). ${detail}`
-        }
-      }
     }
 
     parsed._sourcePdf = pdfUrl
+    return parsed
+  }
+
+  // Call 2 — hazards, dogleg, descriptions, and visual-diagram analysis.
+  // Vision-heavy: reads 18 separate hole illustrations, so it gets the full
+  // model and its own token budget instead of sharing one call with the
+  // scorecard. Always persists whatever holes come back (partial is fine —
+  // course_hole_hazards is keyed per-hole); never blocks on completeness,
+  // but reports a coverage count so incompleteness is visible rather than
+  // silent. Independent of Call 1: a failure here never blocks the
+  // scorecard from persisting.
+  async function parseAndPersistHazards(pdfUrl, scorecardConfidence) {
+    const emptyCoverage = computeHazardCoverage([])
+    try {
+      const messages = buildHazardDesignMessages(pdfUrl, courseName, location || '')
+      const text = await callClaude(messages, 8000, false, undefined, MODEL)
+      const r = parseJsonFromText(text)
+      if (!r.ok) throw new Error(`No JSON in PDF hazard response (${r.error}).`)
+      const parsed = r.value
+      if (parsed.error) throw new Error(parsed.error)
+
+      const hazardsByHole = Array.isArray(parsed.hazardsByHole) ? parsed.hazardsByHole : []
+      const hazardIssues = validateHazardDesignBatch(hazardsByHole)
+      const coverage = computeHazardCoverage(hazardsByHole)
+
+      if (persist !== false && course_key && supabaseUrl && supabaseServiceKey) {
+        const rows = hazardsByHole
+          .filter(h => h && Number.isInteger(h.hole) && h.hole >= 1 && h.hole <= 18)
+          .map(h => ({
+            course_key,
+            hole_ref: Number(h.hole),
+            hazards: h,
+            source: 'pdf_vision',
+            image_path: pdfUrl,
+            // Coverage below the "mostly complete" bar (16/18) is a signal the
+            // model struggled with this document, independent of per-field
+            // validation issues — don't let a clean partial parse claim the
+            // same confidence as a clean complete one.
+            confidence: coverage.covered >= 16 ? (scorecardConfidence || 'medium') : 'low',
+            updated_at: new Date().toISOString(),
+          }))
+        if (rows.length) {
+          const hzRes = await supabaseRest('course_hole_hazards?on_conflict=course_key,hole_ref', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates' },
+            body: JSON.stringify(rows),
+          }).catch(e => ({ ok: false, status: 0, _err: e?.message }))
+          if (!hzRes.ok) {
+            const detail = hzRes._err || (await hzRes.text?.().catch(() => '')) || ''
+            console.error(`[course_hole_hazards] persist failed (${hzRes.status}): ${detail}`)
+            return { coverage, validationIssues: hazardIssues, persistError: `course_hole_hazards persist failed (${hzRes.status}). ${detail}` }
+          }
+        }
+      }
+
+      return { coverage, hazardsByHole, validationIssues: hazardIssues, persistError: null }
+    } catch (e) {
+      console.error(`[hazard-design] extraction failed: ${e.message}`)
+      return { coverage: emptyCoverage, hazardsByHole: [], validationIssues: [], extractError: e.message }
+    }
+  }
+
+  async function parsePdfAndPersist(pdfUrl) {
+    const parsed = await parseAndPersistScorecard(pdfUrl)
+    const hazardResult = await parseAndPersistHazards(pdfUrl, parsed._confidence)
+    parsed.hazardCoverage = hazardResult.coverage
+    // Raw hazardsByHole travels with the response (not just the coverage
+    // summary) so a caller that deferred persistence (persist:false — the
+    // admin reparse queue's "run" step) can upsert it itself once approved.
+    parsed.hazardsByHole = hazardResult.hazardsByHole || []
+    if (hazardResult.validationIssues?.length) parsed._hazardValidationIssues = hazardResult.validationIssues
+    if (hazardResult.persistError) parsed._hazardPersistError = hazardResult.persistError
+    if (hazardResult.extractError) parsed._hazardExtractError = hazardResult.extractError
     return parsed
   }
 

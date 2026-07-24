@@ -114,16 +114,23 @@ export default async function handler(req) {
       // Mark as running
       await patch({ status: 'running', started_at: new Date().toISOString() })
 
-      // Call the existing admin-course PDF parse endpoint
+      // Call the real PDF-parse endpoint (api/course-ai.js's
+      // parse-yardage-book-pdf — the same one the direct admin-upload path
+      // uses). persist:false so this "run" step only produces a result to
+      // review — the queue's own "approve" step is the persistence gate,
+      // not the parse step. (Previously this called /api/admin-course with
+      // action:'parsePdf', which doesn't exist — every run failed with
+      // "Unknown action" and the queue never actually worked.)
       try {
-        const parseRes = await fetch(`${new URL(req.url).origin}/api/admin-course`, {
+        const parseRes = await fetch(`${new URL(req.url).origin}/api/course-ai`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            action: 'parsePdf',
+            action: 'parse-yardage-book-pdf',
             courseName: item.course_name,
             location:   item.location,
-            pdfUrl:     item.pdf_url,
+            pdf_url:    item.pdf_url,
+            persist:    false,
           }),
         })
         if (!parseRes.ok) {
@@ -131,7 +138,12 @@ export default async function handler(req) {
           await patch({ status: 'error', error_msg: err.slice(0, 500), finished_at: new Date().toISOString() })
           return json({ error: `Parse failed: ${err}` }, 500)
         }
-        const result = await parseRes.json()
+        const body = await parseRes.json()
+        const result = body.result
+        if (!result) {
+          await patch({ status: 'error', error_msg: 'Parse returned no result.', finished_at: new Date().toISOString() })
+          return json({ error: 'Parse returned no result.' }, 502)
+        }
         await patch({
           status:      'pending_approval',
           result_data: result,
@@ -146,13 +158,54 @@ export default async function handler(req) {
 
     if (action === 'approve') {
       if (!item.result_data) return json({ error: 'No result to approve — run the parse first.' }, 400)
-      // The result_data is the updated course_data from parsePdf; write it to course_cache
-      const cacheRes = await fetch(`${base}/course_cache?cache_key=eq.${encodeURIComponent(item.course_key)}`, {
-        method: 'PATCH',
-        headers: svcH,
-        body: JSON.stringify({ course_data: item.result_data, source: 'yardage_book' }),
+
+      // hazardsByHole/hazardCoverage travel alongside the scorecard fields in
+      // result_data (see api/course-ai.js's parsePdfAndPersist) but don't
+      // belong in course_cache.course_data — same convention as the direct
+      // upload path. Split them off before writing.
+      const { hazardsByHole, hazardCoverage, ...courseDataOnly } = item.result_data
+      courseDataOnly._source = 'yardage_book'
+
+      // Upsert, not PATCH — the course may not have a course_cache row yet
+      // (this queue's whole purpose is onboarding courses that aren't cached
+      // yet). PATCH silently no-ops on a missing row, so approving a new
+      // course previously did nothing.
+      const cacheRes = await fetch(`${base}/course_cache?on_conflict=cache_key`, {
+        method: 'POST',
+        headers: { ...svcH, Prefer: 'resolution=merge-duplicates' },
+        body: JSON.stringify({
+          cache_key: item.course_key,
+          course_data: courseDataOnly,
+          source: 'yardage_book',
+          cached_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          updated_by: requester.id,
+        }),
       })
       if (!cacheRes.ok) return json({ error: `Cache update failed: ${await cacheRes.text()}` }, 500)
+
+      if (Array.isArray(hazardsByHole) && hazardsByHole.length) {
+        const hzRows = hazardsByHole
+          .filter(h => h && Number.isInteger(h.hole) && h.hole >= 1 && h.hole <= 18)
+          .map(h => ({
+            course_key: item.course_key,
+            hole_ref: Number(h.hole),
+            hazards: h,
+            source: 'pdf_vision',
+            image_path: item.pdf_url,
+            confidence: (hazardCoverage?.covered ?? 0) >= 16 ? 'medium' : 'low',
+            updated_at: new Date().toISOString(),
+          }))
+        if (hzRows.length) {
+          const hzRes = await fetch(`${base}/course_hole_hazards?on_conflict=course_key,hole_ref`, {
+            method: 'POST',
+            headers: { ...svcH, Prefer: 'resolution=merge-duplicates' },
+            body: JSON.stringify(hzRows),
+          })
+          if (!hzRes.ok) console.error(`[course_hole_hazards] approve-time persist failed: ${await hzRes.text().catch(() => '')}`)
+        }
+      }
+
       await patch({ status: 'approved', approved_by: requester.id, approved_at: new Date().toISOString() })
       return json({ ok: true })
     }
