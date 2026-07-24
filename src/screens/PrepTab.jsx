@@ -466,6 +466,9 @@ export default function PrepTab({
                           }
                           return out
                         })()}
+                        hazardMappedHoles={course?.hazardsLoaded ? new Set(
+                          (course?.holes || []).filter(h => h?.hzDesign).map(h => h.ref || h.num)
+                        ) : undefined}
                         selectedHole={num}
                         onSelectHole={(n) => {
                           const idx = parsedHoles.holes.findIndex(h => h.num === n)

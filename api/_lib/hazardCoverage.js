@@ -1,3 +1,8 @@
+// Coverage at or above this bar counts as "the model didn't struggle with
+// this document" — below it, persisted rows are marked low-confidence
+// regardless of how confident the scorecard parse itself was.
+const MOSTLY_COMPLETE_HOLES = 16
+
 export function computeHazardCoverage(hazardsByHole, totalHoles = 18) {
   const present = new Set()
   for (const entry of hazardsByHole) {
@@ -54,4 +59,23 @@ export function validateHazardDesignBatch(parsed, { totalHoles = 18 } = {}) {
   }
 
   return issues
+}
+
+// Shape a raw hazardsByHole array into course_hole_hazards rows. Shared by
+// every caller that persists PDF/vision-extracted hazard data (direct
+// upload, auto web-search discovery, admin reparse, the reparse queue) so
+// the confidence rule and row shape can't drift between them.
+export function buildHazardRows(hazardsByHole, { courseKey, pdfUrl = null, coverage, baseConfidence, source = 'pdf_vision', totalHoles = 18 } = {}) {
+  const confidence = coverage.covered >= MOSTLY_COMPLETE_HOLES ? (baseConfidence || 'medium') : 'low'
+  return hazardsByHole
+    .filter(h => h && Number.isInteger(h.hole) && h.hole >= 1 && h.hole <= totalHoles)
+    .map(h => ({
+      course_key: courseKey,
+      hole_ref: Number(h.hole),
+      hazards: h,
+      source,
+      image_path: pdfUrl,
+      confidence,
+      updated_at: new Date().toISOString(),
+    }))
 }

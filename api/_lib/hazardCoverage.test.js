@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { computeHazardCoverage, validateHazardDesignBatch } from './hazardCoverage.js'
+import { computeHazardCoverage, validateHazardDesignBatch, buildHazardRows } from './hazardCoverage.js'
 
 describe('computeHazardCoverage', () => {
   it('reports zero coverage for an empty array', () => {
@@ -99,5 +99,47 @@ describe('validateHazardDesignBatch', () => {
   it('treats null/absent optional fields as valid (nothing to report)', () => {
     const minimal = { hole: 1 }
     expect(validateHazardDesignBatch([minimal])).toEqual([])
+  })
+})
+
+describe('buildHazardRows', () => {
+  const coverageFull = { covered: 18, total: 18, missingHoles: [] }
+  const coverageSparse = { covered: 10, total: 18, missingHoles: [11, 12, 13, 14, 15, 16, 17, 18] }
+
+  it('builds one row per valid hole, shaped for course_hole_hazards', () => {
+    const hazardsByHole = [{ hole: 1, dogleg: 'left' }, { hole: 2, dogleg: 'right' }]
+    const rows = buildHazardRows(hazardsByHole, {
+      courseKey: 'ravines|michigan', pdfUrl: 'https://example.com/book.pdf', coverage: coverageFull, baseConfidence: 'high',
+    })
+    expect(rows).toEqual([
+      { course_key: 'ravines|michigan', hole_ref: 1, hazards: { hole: 1, dogleg: 'left' }, source: 'pdf_vision', image_path: 'https://example.com/book.pdf', confidence: 'high', updated_at: expect.any(String) },
+      { course_key: 'ravines|michigan', hole_ref: 2, hazards: { hole: 2, dogleg: 'right' }, source: 'pdf_vision', image_path: 'https://example.com/book.pdf', confidence: 'high', updated_at: expect.any(String) },
+    ])
+  })
+
+  it('drops entries with an invalid hole number', () => {
+    const hazardsByHole = [{ hole: 1 }, { hole: 0 }, { hole: 19 }, {}]
+    const rows = buildHazardRows(hazardsByHole, { courseKey: 'k', coverage: coverageFull, baseConfidence: 'high' })
+    expect(rows).toHaveLength(1)
+  })
+
+  it('uses baseConfidence when coverage is at or above the mostly-complete threshold (16/18)', () => {
+    const rows = buildHazardRows([{ hole: 1 }], { courseKey: 'k', coverage: coverageFull, baseConfidence: 'high' })
+    expect(rows[0].confidence).toBe('high')
+  })
+
+  it('defaults to medium when coverage is complete but no baseConfidence was given', () => {
+    const rows = buildHazardRows([{ hole: 1 }], { courseKey: 'k', coverage: coverageFull })
+    expect(rows[0].confidence).toBe('medium')
+  })
+
+  it('downgrades to low when coverage is below the mostly-complete threshold, regardless of baseConfidence', () => {
+    const rows = buildHazardRows([{ hole: 1 }], { courseKey: 'k', coverage: coverageSparse, baseConfidence: 'high' })
+    expect(rows[0].confidence).toBe('low')
+  })
+
+  it('defaults source to pdf_vision but allows an override', () => {
+    const rows = buildHazardRows([{ hole: 1 }], { courseKey: 'k', coverage: coverageFull, source: 'vision' })
+    expect(rows[0].source).toBe('vision')
   })
 })

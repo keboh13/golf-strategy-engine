@@ -3,12 +3,15 @@
 // GET    /api/admin-reparse-queue              → list all queue items
 // POST   /api/admin-reparse-queue              → enqueue { courseKey, pdfUrl, courseName, location }
 // PATCH  /api/admin-reparse-queue              → { id, action: 'run'|'approve'|'reject' }
-//   run:     calls /api/admin-course to re-parse the PDF, stores the diff
-//   approve: patches the diff result into course_cache, marks done
+//   run:     calls /api/course-ai's parse-yardage-book-pdf (persist:false) to
+//            re-parse the PDF, stores the raw result for review
+//   approve: upserts the reviewed result into course_cache + course_hole_hazards
 //   reject:  marks item as rejected without updating course_cache
 // DELETE /api/admin-reparse-queue { id }       → remove item from queue
 //
 // Backed by course_reparse_queue table (see schema). Admin-gated.
+
+import { computeHazardCoverage, buildHazardRows } from './_lib/hazardCoverage.js'
 
 export const config = { runtime: 'edge' }
 
@@ -185,17 +188,15 @@ export default async function handler(req) {
       if (!cacheRes.ok) return json({ error: `Cache update failed: ${await cacheRes.text()}` }, 500)
 
       if (Array.isArray(hazardsByHole) && hazardsByHole.length) {
-        const hzRows = hazardsByHole
-          .filter(h => h && Number.isInteger(h.hole) && h.hole >= 1 && h.hole <= 18)
-          .map(h => ({
-            course_key: item.course_key,
-            hole_ref: Number(h.hole),
-            hazards: h,
-            source: 'pdf_vision',
-            image_path: item.pdf_url,
-            confidence: (hazardCoverage?.covered ?? 0) >= 16 ? 'medium' : 'low',
-            updated_at: new Date().toISOString(),
-          }))
+        const hzRows = buildHazardRows(hazardsByHole, {
+          courseKey: item.course_key,
+          pdfUrl: item.pdf_url,
+          coverage: hazardCoverage || computeHazardCoverage(hazardsByHole),
+          // Inherit the scorecard's own confidence, same as the direct
+          // upload path (api/course-ai.js) — previously hardcoded 'medium'
+          // regardless of how confident the scorecard parse actually was.
+          baseConfidence: courseDataOnly._confidence,
+        })
         if (hzRows.length) {
           const hzRes = await fetch(`${base}/course_hole_hazards?on_conflict=course_key,hole_ref`, {
             method: 'POST',

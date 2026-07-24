@@ -7,7 +7,7 @@
 import { validateAuth, isAdminUser } from './_lib/admin.js'
 import { parseJsonFromText } from './_lib/extractJson.js'
 import { buildScorecardTeesMessages, buildHazardDesignMessages } from './_lib/pdfParseMessages.js'
-import { computeHazardCoverage, validateHazardDesignBatch } from './_lib/hazardCoverage.js'
+import { computeHazardCoverage, validateHazardDesignBatch, buildHazardRows } from './_lib/hazardCoverage.js'
 
 export const config = { maxDuration: 300 }
 
@@ -428,21 +428,7 @@ async function handleRequest(req) {
       const coverage = computeHazardCoverage(hazardsByHole)
 
       if (persist !== false && course_key && supabaseUrl && supabaseServiceKey) {
-        const rows = hazardsByHole
-          .filter(h => h && Number.isInteger(h.hole) && h.hole >= 1 && h.hole <= 18)
-          .map(h => ({
-            course_key,
-            hole_ref: Number(h.hole),
-            hazards: h,
-            source: 'pdf_vision',
-            image_path: pdfUrl,
-            // Coverage below the "mostly complete" bar (16/18) is a signal the
-            // model struggled with this document, independent of per-field
-            // validation issues — don't let a clean partial parse claim the
-            // same confidence as a clean complete one.
-            confidence: coverage.covered >= 16 ? (scorecardConfidence || 'medium') : 'low',
-            updated_at: new Date().toISOString(),
-          }))
+        const rows = buildHazardRows(hazardsByHole, { courseKey: course_key, pdfUrl, coverage, baseConfidence: scorecardConfidence })
         if (rows.length) {
           const hzRes = await supabaseRest('course_hole_hazards?on_conflict=course_key,hole_ref', {
             method: 'POST',
