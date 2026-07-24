@@ -123,7 +123,13 @@ export default function AdminCoursesPanel({ authToken, onEditCourse }) {
         pdfUrl: url,
       })
       const conf = result?._confidence || 'medium'
-      setMsg(`✓ Scorecard updated for ${c.name} (confidence: ${conf}). Visible to all users.`)
+      const cov = result?.hazardCoverage
+      const covMsg = cov
+        ? cov.covered === cov.total
+          ? ` Hazards: ${cov.covered}/${cov.total} holes.`
+          : ` Hazards: ${cov.covered}/${cov.total} holes — missing ${cov.missingHoles.join(', ')}.`
+        : ''
+      setMsg(`✓ Scorecard updated for ${c.name} (confidence: ${conf}).${covMsg} Visible to all users.`)
       await load()
     } catch (e) {
       setMsg(`Error: ${e.message}`)

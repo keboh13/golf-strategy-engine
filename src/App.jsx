@@ -736,13 +736,21 @@ function AppInner({ user, session, onSignOut, onRunOnboarding }) {
       markStep(ENRICH_STEP_IDS.HAZARDS, STEP_STATES.RUNNING, { startedAt: Date.now() })
       try {
         const hazardsByRef = await loadCourseHazards(course.name, course.location)
-        if (myId === enrichLoadIdRef.current && hazardsByRef && Object.keys(hazardsByRef).length) {
+        // hazardsLoaded flips to true whenever the fetch itself succeeded —
+        // including a genuinely empty result. It means "we checked", not
+        // "we found something"; the UI (CourseHoleMap's hazardMappedHoles)
+        // depends on that distinction to show "no hazard data" instead of
+        // staying silent forever on a course with zero coverage.
+        if (myId === enrichLoadIdRef.current) {
+          const hasAny = hazardsByRef && Object.keys(hazardsByRef).length > 0
           setCourse(prev => ({
             ...prev,
-            holes: prev.holes.map((h, i) => {
-              const hz = hazardsByRef[i + 1]
-              return hz ? { ...h, hzDesign: hz } : h
-            }),
+            holes: hasAny
+              ? prev.holes.map((h, i) => {
+                  const hz = hazardsByRef[i + 1]
+                  return hz ? { ...h, hzDesign: hz } : h
+                })
+              : prev.holes,
             hazardsLoaded: true,
           }))
         }
