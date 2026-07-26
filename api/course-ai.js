@@ -5,30 +5,15 @@
 // Required env vars: ANTHROPIC_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 
 import { validateAuth, isAdminUser } from './_lib/admin.js'
+import { CORS_HEADERS, jsonResponse } from './_lib/middleware.js'
 import { parseJsonFromText } from './_lib/extractJson.js'
 import { buildScorecardTeesMessages, buildHazardDesignMessages } from './_lib/pdfParseMessages.js'
 import { computeHazardCoverage, validateHazardDesignBatch, buildHazardRows } from './_lib/hazardCoverage.js'
 
 export const config = { maxDuration: 300 }
 
-const CORS_HEADERS = {
-  'Access-Control-Allow-Origin':  process.env.ALLOWED_ORIGIN || '*',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-}
-
 const MODEL = 'claude-sonnet-4-6'
-// PDF / image vision extraction uses Haiku — ~5–10× faster than Sonnet for
-// structured JSON extraction off a document, well within the quality bar for
-// scorecard fields. Keep Sonnet for web-search and hole-design reasoning.
 const MODEL_FAST = 'claude-haiku-4-5-20251001'
-
-function jsonResponse(body, status) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-  })
-}
 
 function makeCacheKey(name, location) {
   return `${(name || '').toLowerCase().trim()}|${(location || '').toLowerCase().trim()}`

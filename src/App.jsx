@@ -1,24 +1,18 @@
 import { useState, useCallback, useEffect, useRef, useMemo, Component } from 'react'
-import { supabase, loadUserProfiles, saveUserProfile, deleteUserProfile, loadUserHistory, saveUserHistory, loadUserSettings, saveUserSettings, getCachedCourseDB, setCachedCourseDB, getAllCachedCoursesDB, deleteCachedCourseDB, loadSavedPlans, savePlan, deleteSavedPlan, loadCourseHazards, listCoursePdfs, uploadCoursePdfToBucket, deleteAllCoursePdfs, deleteCourseHazards, clearCachedScorecardPdfRef, listCanonicalCacheKeys, listCanonicalCacheVersions, listAliasKeys, loadPrepSession, savePrepSession, clearPrepSession } from './lib/supabase.js'
-import { buildBagSection } from './lib/promptSections.js'
+import { supabase, loadUserProfiles, saveUserProfile, deleteUserProfile, loadUserHistory, saveUserHistory, loadUserSettings, saveUserSettings, getCachedCourseDB, setCachedCourseDB, getAllCachedCoursesDB, deleteCachedCourseDB, loadSavedPlans, deleteSavedPlan, listCoursePdfs, uploadCoursePdfToBucket, deleteAllCoursePdfs, deleteCourseHazards, clearCachedScorecardPdfRef, listCanonicalCacheKeys, listCanonicalCacheVersions, listAliasKeys, loadPrepSession, savePrepSession, clearPrepSession } from './lib/supabase.js'
 import { buildRecommendationPrompt } from './lib/recommendation/prompt.js'
-import { validatePlanContract } from './lib/recommendation/planContract.js'
-import { fetchOSMCourseData, enrichHolesWithOSM, exportCourseGeoJSON, classifyTier, computeCoverage } from './lib/osmCourseData.js'
-import { computeHoleDistances, formatDistancesLine, simplifyAndTrimGeoJSON } from './lib/courseGeometry.js'
-import { getCachedGeo, setCachedGeo } from './lib/courseGeoCache.js'
-import { getContrib, saveContrib, mergeContribIntoGeojson } from './lib/holeContributions.js'
+import { saveContrib } from './lib/holeContributions.js'
 import { C, F, card, inp, lbl, btnP, btnG } from './theme.js'
 import { useIsMobile, Badge, Spin, SectionHead, InfoBox, computeDataTier } from './components/ui.jsx'
 import UserMenu from './components/UserMenu.jsx'
-import { computeHoleTimes, getWeatherAtHour, windDir } from './lib/weather.js'
-import { fetchHoleDesignViaSearch, mergeDesignDataIntoHoles, searchGolfCourseAPI, normalizeGolfCourseAPICourse, geocodeViaClaudeSearch } from './lib/courseApi.js'
-import { ENRICH_STEP_IDS } from './lib/enrichSteps.js'
-import { STEP_STATES } from './lib/progress.js'
-import { GENERATION_PHASE_IDS, stripPhaseMarkers, stripStreamingArtifacts, findPhaseMarkers } from './lib/generationPhases.js'
+import { computeHoleTimes, getWeatherAtHour } from './lib/weather.js'
+import { searchGolfCourseAPI, normalizeGolfCourseAPICourse } from './lib/courseApi.js'
 import { todayLocalIso } from './lib/localDate.js'
-import { planCacheKey, getCachedPlan, putCachedPlan } from './lib/planCache.js'
 import { getLatestPostRoundForCourse } from './lib/postRound.js'
 import { useProfile } from './lib/useProfile.js'
+import { PrepContext } from './lib/PrepContext.js'
+import { useEnrichment } from './lib/useEnrichment.js'
+import { useGeneration } from './lib/useGeneration.js'
 import { usePwa } from './lib/usePwa.js'
 import PwaBanner from './components/PwaBanner.jsx'
 import { loadCourseCache, getCachedCourse, setCachedCourse, cacheKey, saveCourseCache, removeCachedCourseByKey, purgeOrphanedLocalEntries } from './lib/courseCache.js'
@@ -32,8 +26,6 @@ import SettingsTab from './screens/SettingsTab.jsx'
 import PrepTab from './screens/PrepTab.jsx'
 import AdminTab from './screens/AdminTab.jsx'
 import LibraryTab from './screens/LibraryTab.jsx'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 import {
   ENV_MAPS_KEY,
   LS_PLAYER, LS_HISTORY, LS_KEYS, LS_PROFILES, LS_CURRENT_PROFILE, LS_COURSE_CACHE, LS_MODEL,
@@ -198,25 +190,12 @@ function AppInner({ user, session, onSignOut, onRunOnboarding }) {
   const [coords,         setCoords]         = useState(null)
   const [cacheVersion,   setCacheVersion]   = useState(0)
 
-  // Enrichment loading state. `enriching` is the legacy boolean kept for the
-  // existing render sites; `enrichProgress` is the structured state consumed
-  // by the new ProgressTracker (Part 0.2 + 0.3 of the optimization plan).
-  const [enriching,      setEnriching]      = useState(false)
-  const [enrichStatus,   setEnrichStatus]   = useState('')
-  const [enrichProgress, setEnrichProgress] = useState({ states: {}, startsAt: {}, endsAt: {}, errors: {} })
+  const { enriching, enrichStatus, enrichProgress, displayGeo, contributedHoleSet } = useEnrichment({
+    course, coords, setCourse, setCoords, session,
+  })
 
   // Game plan
-  const [plan,        setPlan]        = useState('')
-  const [planLoading, setPlanLoading] = useState(false)
-  const [planPhase,   setPlanPhase]   = useState('')
-  const [planError,   setPlanError]   = useState('')
-  const [planValidationBanner, setPlanValidationBanner] = useState('')
-  // Structured generation progress driven by [[PHASE: id]] markers in the
-  // streamed response (Part 0.2 + 0.3 of the optimization plan). Replaces the
-  // brittle heading-substring detection that used to set `planPhase`.
-  const [genProgress, setGenProgress] = useState({ states: {}, startsAt: {}, endsAt: {}, errors: {} })
-  const [planStyle,   setPlanStyle]   = useState('balanced')  // 'balanced' | 'conservative' | 'aggressive'
-  const abortRef = useRef(null)
+  const [planStyle,   setPlanStyle]   = useState('balanced')
   const [planView,    setPlanView]    = useState('companion')
   const [currentHole, setCurrentHole] = useState(0)
   const [copied,      setCopied]      = useState(false)
@@ -225,10 +204,6 @@ function AppInner({ user, session, onSignOut, onRunOnboarding }) {
   })
   const [holeScores,  setHoleScores]  = useState({})
   const [expandedBrief, setExpandedBrief] = useState(null)
-  // Rec-log id of the most recently generated brief. Surfaced to the Prep
-  // tab so the in-flow BriefRating widget can save a rating without waiting
-  // for the user to go to History.
-  const [lastRecLogId, setLastRecLogId] = useState(null)
 
   const setScore = (holeNum, val) => setHoleScores(s => ({ ...s, [holeNum]: Math.max(1, val) }))
   const clearScores = () => setHoleScores({})
@@ -512,280 +487,6 @@ function AppInner({ user, session, onSignOut, onRunOnboarding }) {
     })()
   }, [applyScorecard])
 
-  // Auto-geocode at pick-time so OSM enrichment can start without waiting for
-  // the user to reach the Weather step. Part 0.2 of the optimization plan —
-  // shaves the geocode round-trip off the perceived enrichment latency for
-  // every Tier-3-feeling course whose scorecard came without coords.
-  const geocodeRef = useRef(null)
-  useEffect(() => {
-    if (!course.name || coords?.lat || coords?.lng) return
-    const authToken = session?.access_token || ''
-    if (!authToken) return
-    // Don't re-fire for the same (name, location) — Claude geocoding costs
-    // tokens and the user may have already declined a result.
-    const key = `${course.name}|${course.location || ''}`
-    if (geocodeRef.current === key) return
-    geocodeRef.current = key
-    const startedAt = Date.now()
-    setEnrichProgress(prev => ({
-      ...prev,
-      states:   { ...prev.states,   [ENRICH_STEP_IDS.GEOCODE]: STEP_STATES.RUNNING },
-      startsAt: { ...prev.startsAt, [ENRICH_STEP_IDS.GEOCODE]: startedAt },
-    }))
-    let cancelled = false
-    ;(async () => {
-      try {
-        const c = await geocodeViaClaudeSearch(authToken, course.name, course.location || '')
-        if (cancelled) return
-        if (c?.lat && c?.lng) {
-          setCoords({ lat: c.lat, lng: c.lng })
-          setEnrichProgress(prev => ({
-            ...prev,
-            states: { ...prev.states, [ENRICH_STEP_IDS.GEOCODE]: STEP_STATES.DONE },
-            endsAt: { ...prev.endsAt, [ENRICH_STEP_IDS.GEOCODE]: Date.now() },
-          }))
-        }
-      } catch (e) {
-        if (cancelled) return
-        setEnrichProgress(prev => ({
-          ...prev,
-          states: { ...prev.states, [ENRICH_STEP_IDS.GEOCODE]: STEP_STATES.ERROR },
-          endsAt: { ...prev.endsAt, [ENRICH_STEP_IDS.GEOCODE]: Date.now() },
-          errors: { ...prev.errors, [ENRICH_STEP_IDS.GEOCODE]: e.message },
-        }))
-      }
-    })()
-    return () => { cancelled = true }
-  }, [course.name, course.location, coords?.lat, coords?.lng, session])
-
-  // Enrich course with OSM/web design data (parallelized with retry + UI feedback)
-  const enrichLoadIdRef = useRef(0)
-  // Helper: record per-step state for the ProgressTracker. Pure-ish — only
-  // affects enrichProgress; the rest of the enrichment effect stays unchanged.
-  const markStep = useCallback((id, state, patch = {}) => {
-    setEnrichProgress(prev => ({
-      states:   { ...prev.states,   [id]: state },
-      startsAt: patch.startedAt != null ? { ...prev.startsAt, [id]: patch.startedAt } : prev.startsAt,
-      endsAt:   patch.endedAt   != null ? { ...prev.endsAt,   [id]: patch.endedAt }   : prev.endsAt,
-      errors:   patch.error     != null ? { ...prev.errors,   [id]: patch.error }     : prev.errors,
-    }))
-  }, [])
-
-  useEffect(() => {
-    if (!course.name || !coords?.lat || !coords?.lng || course.osmEnriched) return
-    const myId = ++enrichLoadIdRef.current
-    const ctrl = new AbortController()
-    setEnriching(true)
-    setEnrichStatus('Loading course design data...')
-    // Reset the tracker. Whatever happened on the prior course is no longer
-    // interesting; the geocode step is marked DONE here because by the time
-    // this effect fires we already have coords (either supplied or geocoded).
-    setEnrichProgress({
-      states:   { [ENRICH_STEP_IDS.GEOCODE]: STEP_STATES.DONE },
-      startsAt: {},
-      endsAt:   {},
-      errors:   {},
-    })
-    ;(async () => {
-      let osmWorked = false
-
-      // Phase 1: OSM enrichment + geometry export (Tier 1/2/3 classifier)
-      setEnrichStatus('Fetching hazard data from OpenStreetMap...')
-      markStep(ENRICH_STEP_IDS.OSM, STEP_STATES.RUNNING, { startedAt: Date.now() })
-      // Cached geometry first — avoid a second Overpass hit on the same course.
-      let cachedGeo = null
-      try { cachedGeo = await getCachedGeo(course.name, course.location) } catch {}
-      if (cachedGeo?.geojson || cachedGeo?.tier === 3) {
-        setCourse(prev => ({
-          ...prev,
-          geojson: cachedGeo.geojson || null,
-          bboxByHole: cachedGeo.bboxByHole || null,
-          coverage: cachedGeo.coverage || null,
-          tier: cachedGeo.tier,
-        }))
-      }
-      let osmLastError = null
-      for (let attempt = 0; attempt < 2; attempt++) {
-        if (ctrl.signal.aborted || myId !== enrichLoadIdRef.current) return
-        try {
-          const osmData = await fetchOSMCourseData(coords.lat, coords.lng)
-          if (myId !== enrichLoadIdRef.current) return
-          if (osmData) {
-            const { holes: enrichedHoles, hasDesignData } = enrichHolesWithOSM(course.holes, osmData)
-            const rawGeojson = exportCourseGeoJSON(osmData, course.holes)
-            // Phase 6 polish: simplify polygons + trim coords before stashing
-            // and persisting. Distances/classifier/coverage all read the
-            // simplified version so what we compute matches what we render.
-            const geojson = simplifyAndTrimGeoJSON(rawGeojson)
-            geojson.bboxByHole = rawGeojson.bboxByHole
-            const tier = classifyTier(geojson, course.holes)
-            const coverage = computeCoverage(geojson, course.holes)
-            const bboxByHole = geojson.bboxByHole
-
-            // Compute verified distances per hole (Tier 1 holes get tee→pin,
-            // front/center/back of green, and carry-to-hazard from the tee).
-            const distancesByRef = {}
-            for (const h of enrichedHoles) {
-              const ref = course.holes.indexOf(h) + 1 // enrichedHoles preserves order
-              const d = computeHoleDistances(geojson, ref)
-              if (d) distancesByRef[ref] = d
-            }
-
-            if (hasDesignData || tier <= 2) osmWorked = true
-            setCourse(prev => {
-              const merged = prev.holes.map((h, i) => {
-                const eh = enrichedHoles[i]
-                const dist = distancesByRef[i + 1] || null
-                return {
-                  ...h,
-                  notes: h.notes || eh?.notes || '',
-                  osmDesign: eh?.osmDesign
-                    ? { ...eh.osmDesign, distances: dist }
-                    : (dist ? { source: 'OpenStreetMap', distances: dist } : null),
-                }
-              })
-              const updated = { ...prev, holes: merged, osmEnriched: true, geojson: geojson.features?.length ? geojson : null, bboxByHole, coverage, tier }
-              setCachedCourse(updated)
-              // Write-through: persist the enriched course shape to Supabase
-              // so the next client (or session) hits this row instantly rather
-              // than re-running the OSM ladder. Part 0.2 of the optimization
-              // plan. Fire-and-forget; local cache already succeeded.
-              setCachedCourseDB(updated).catch(() => {})
-              return updated
-            })
-            // Persist geometry separately (course_cache stores the AI-facing
-            // course shape; course_geo stores the rendering geometry).
-            try {
-              await setCachedGeo(course.name, course.location, {
-                tier,
-                geojson: geojson.features?.length ? geojson : null,
-                bboxByHole,
-                coverage,
-                source: 'osm',
-              })
-            } catch {}
-          }
-          break
-        } catch (e) {
-          osmLastError = e
-          if (attempt === 0) setEnrichStatus('Retrying OSM data...')
-        }
-      }
-      markStep(
-        ENRICH_STEP_IDS.OSM,
-        osmWorked ? STEP_STATES.DONE : (osmLastError ? STEP_STATES.ERROR : STEP_STATES.SKIPPED),
-        { endedAt: Date.now(), error: osmLastError ? osmLastError.message : undefined },
-      )
-
-      // Phase 2: Web search enrichment (if OSM coverage is sparse)
-      const authToken = session?.access_token || ''
-      const holesWithDesign = course.holes.filter(h => h.osmDesign?.hazards?.length > 0 || h.notes).length
-      if (holesWithDesign < 9 && authToken) {
-        setEnrichStatus('Searching for hole design details...')
-        markStep(ENRICH_STEP_IDS.DESIGN, STEP_STATES.RUNNING, { startedAt: Date.now() })
-        let designDone = false, designErr = null
-        for (let attempt = 0; attempt < 2; attempt++) {
-          if (ctrl.signal.aborted || myId !== enrichLoadIdRef.current) return
-          try {
-            const designData = await fetchHoleDesignViaSearch(authToken, course.name, course.location)
-            if (myId !== enrichLoadIdRef.current) return
-            if (designData?.holes?.length) {
-              setCourse(prev => {
-                const mergedHoles = mergeDesignDataIntoHoles(prev.holes, designData)
-                const updated = { ...prev, holes: mergedHoles, webDesignSource: designData.source || 'web search', osmEnriched: true }
-                setCachedCourse(updated)
-                // Write-through to Supabase so the next user skips this
-                // 5–6 s Claude call entirely. Part 0.2.
-                setCachedCourseDB(updated).catch(() => {})
-                return updated
-              })
-              designDone = true
-            }
-            break
-          } catch (e) {
-            designErr = e
-            if (attempt === 0) setEnrichStatus('Retrying design search...')
-          }
-        }
-        markStep(
-          ENRICH_STEP_IDS.DESIGN,
-          designDone ? STEP_STATES.DONE : (designErr ? STEP_STATES.ERROR : STEP_STATES.SKIPPED),
-          { endedAt: Date.now(), error: designErr ? designErr.message : undefined },
-        )
-      } else {
-        markStep(ENRICH_STEP_IDS.DESIGN, STEP_STATES.SKIPPED)
-      }
-
-      if (!osmWorked && myId === enrichLoadIdRef.current) {
-        setCourse(prev => ({ ...prev, osmEnriched: true }))
-      }
-
-      // Phase 3: User-contributed hole pins. We always try this — it's the
-      // only data source for many Tier 3 courses, and a cheap LS/Supabase
-      // lookup. Contributions flow into the rendered geojson via the memo
-      // below; nothing else needs to know about them.
-      markStep(ENRICH_STEP_IDS.CONTRIB, STEP_STATES.RUNNING, { startedAt: Date.now() })
-      try {
-        const contrib = await getContrib(course.name, course.location)
-        if (myId === enrichLoadIdRef.current && contrib && Object.keys(contrib).length) {
-          setCourse(prev => ({ ...prev, contribByRef: contrib }))
-        }
-        markStep(ENRICH_STEP_IDS.CONTRIB, STEP_STATES.DONE, { endedAt: Date.now() })
-      } catch (e) {
-        markStep(ENRICH_STEP_IDS.CONTRIB, STEP_STATES.ERROR, { endedAt: Date.now(), error: e.message })
-      }
-
-      // Phase 4: Per-hole hazard intelligence (yardage-book vision pass).
-      // Cheap structured lookup — vision was paid once per course upstream.
-      markStep(ENRICH_STEP_IDS.HAZARDS, STEP_STATES.RUNNING, { startedAt: Date.now() })
-      try {
-        const hazardsByRef = await loadCourseHazards(course.name, course.location)
-        // hazardsLoaded flips to true whenever the fetch itself succeeded —
-        // including a genuinely empty result. It means "we checked", not
-        // "we found something"; the UI (CourseHoleMap's hazardMappedHoles)
-        // depends on that distinction to show "no hazard data" instead of
-        // staying silent forever on a course with zero coverage.
-        if (myId === enrichLoadIdRef.current) {
-          const hasAny = hazardsByRef && Object.keys(hazardsByRef).length > 0
-          setCourse(prev => ({
-            ...prev,
-            holes: hasAny
-              ? prev.holes.map((h, i) => {
-                  const hz = hazardsByRef[i + 1]
-                  return hz ? { ...h, hzDesign: hz } : h
-                })
-              : prev.holes,
-            hazardsLoaded: true,
-          }))
-        }
-        markStep(ENRICH_STEP_IDS.HAZARDS, STEP_STATES.DONE, { endedAt: Date.now() })
-      } catch (e) {
-        markStep(ENRICH_STEP_IDS.HAZARDS, STEP_STATES.ERROR, { endedAt: Date.now(), error: e.message })
-      }
-
-      if (myId === enrichLoadIdRef.current) {
-        setEnriching(false)
-        setEnrichStatus('')
-      }
-    })()
-    return () => ctrl.abort()
-  }, [course.name, coords?.lat, coords?.lng, course.osmEnriched, session])
-
-  // Memoized: merge OSM geojson + user contributions for rendering. We never
-  // mutate course.geojson with contributions (keeps the persisted OSM cache
-  // honest) — instead the map consumes this derived value.
-  const displayGeo = useMemo(() => {
-    if (!course?.contribByRef || !Object.keys(course.contribByRef).length) {
-      return { geojson: course?.geojson || null, bboxByHole: course?.bboxByHole || null }
-    }
-    return mergeContribIntoGeojson(course.geojson, course.bboxByHole, course.contribByRef)
-  }, [course?.geojson, course?.bboxByHole, course?.contribByRef])
-
-  const contributedHoleSet = useMemo(
-    () => new Set(Object.keys(course?.contribByRef || {}).map(n => parseInt(n))),
-    [course?.contribByRef]
-  )
-
   // Handler passed to CourseHoleMap. Persists the tee/pin pair locally + to
   // Supabase, then merges it into state so distances light up immediately.
   const handleHoleContribution = useCallback(async ({ ref, teeLng, teeLat, pinLng, pinLat }) => {
@@ -816,467 +517,14 @@ function AppInner({ user, session, onSignOut, onRunOnboarding }) {
     return prompt
   }, [clubs, course, playerInfo, holeWeather, holeTimes, teeTime, teeDate, pace, scoringHistory, planStyle, savedBriefs])
 
-  // Legacy inline builder — preserved (unused) for diffing against the new
-  // module-based path during rollout. Safe to delete after a few releases.
-  // eslint-disable-next-line no-unused-vars
-  const buildPromptLegacy = useCallback(() => {
-    // ── Shared: club list ──
-    const clubList = buildBagSection(clubs)
-
-    // ── Shared: history analytics block ──
-    const validRounds = scoringHistory.filter(r => r.course && r.score)
-    let historyBlock = ''
-    if (validRounds.length > 0) {
-      const toNum = r => r.toPar === 'E' ? 0 : parseFloat(r.toPar)
-      const tournament = validRounds.filter(r => r.roundType === 'Tournament' || r.roundType === 'Qualifier')
-      const casual     = validRounds.filter(r => r.roundType === 'Casual' || r.roundType === 'Practice round')
-      const avgOf = arr => arr.length ? (arr.reduce((a,b)=>a+b,0)/arr.length).toFixed(1) : null
-      const allNums = validRounds.map(toNum).filter(n => !isNaN(n))
-      const tourNums = tournament.map(toNum).filter(n => !isNaN(n))
-      const casNums  = casual.map(toNum).filter(n => !isNaN(n))
-
-      // Par type averages
-      const byPar = (par) => {
-        const holes = validRounds.flatMap(r => (r.holes || []).filter(h => h.par === par && h.score))
-        if (!holes.length) return null
-        return (holes.reduce((a,h) => a + (h.score - h.par), 0) / holes.length).toFixed(2)
-      }
-      const p3avg = byPar(3), p4avg = byPar(4), p5avg = byPar(5)
-
-      // Front/back pattern
-      const frontAvg = avgOf(validRounds.flatMap(r => {
-        if (!r.holes) return []
-        const front = r.holes.slice(0,9).filter(h=>h.score&&h.par)
-        return front.length===9 ? [front.reduce((a,h)=>a+(h.score-h.par),0)] : []
-      }))
-      const backAvg = avgOf(validRounds.flatMap(r => {
-        if (!r.holes) return []
-        const back = r.holes.slice(9).filter(h=>h.score&&h.par)
-        return back.length===9 ? [back.reduce((a,h)=>a+(h.score-h.par),0)] : []
-      }))
-
-      const fmt = n => n === 0 ? 'E' : n > 0 ? `+${n}` : String(n)
-      const fmtF = n => n == null ? null : parseFloat(n) === 0 ? 'E' : parseFloat(n) > 0 ? `+${n}` : String(n)
-
-      historyBlock = '\n\nSCORING HISTORY ANALYSIS:\n'
-      if (allNums.length) historyBlock += `Overall avg: ${fmtF(avgOf(allNums))} (${allNums.length} rounds)\n`
-      if (tourNums.length) historyBlock += `Tournament avg: ${fmtF(avgOf(tourNums))} (${tourNums.length} rounds)\n`
-      if (casNums.length)  historyBlock += `Casual avg: ${fmtF(avgOf(casNums))} (${casNums.length} rounds)\n`
-      if (p3avg) historyBlock += `Par 3 avg: ${fmtF(p3avg)} vs par\n`
-      if (p4avg) historyBlock += `Par 4 avg: ${fmtF(p4avg)} vs par\n`
-      if (p5avg) historyBlock += `Par 5 avg: ${fmtF(p5avg)} vs par\n`
-      if (frontAvg && backAvg) historyBlock += `Front 9 avg: ${fmtF(frontAvg)} | Back 9 avg: ${fmtF(backAvg)} vs par\n`
-
-      historyBlock += '\nRecent rounds:\n'
-      historyBlock += validRounds.map(r => {
-        let line = `${r.date ? r.date + ' — ' : ''}${r.course}${r.location ? ' (' + r.location + ')' : ''}: ${r.score}${r.toPar ? ' (' + r.toPar + ')' : ''}${r.roundType ? ' [' + r.roundType + ']' : ''}${r.conditions ? ', ' + r.conditions : ''}${r.notes ? ' | ' + r.notes : ''}`
-        if (r.courseData?.holes) {
-          const holeStr = r.courseData.holes.map((h, i) =>
-            `H${i+1}(Par${h.par}${h.yardage ? ','+h.yardage+'y' : ''}${h.handicap ? ',HCP'+h.handicap : ''})`
-          ).join(' ')
-          line += `\n  Scorecard: ${holeStr}`
-          if (r.courseData.rating) line += ` | Rating ${r.courseData.rating} / Slope ${r.courseData.slope}`
-        }
-        return line
-      }).join('\n')
-      historyBlock += '\n\nKey instruction: use tournament vs casual split to assess pressure performance. Use par-type averages to identify leaking patterns. Where scorecard data is available for a past round, reference specific hole characteristics to identify patterns (e.g. struggles on long par 4s, leaks on dog-legs). Weight most recent rounds highest.'
-    }
-
-    // ── Course Handicap calculation ──
-    const handicapIndex = parseFloat(playerInfo.handicap) || 0
-    const slopeVal = parseFloat(course.slope) || 113
-    const ratingVal = parseFloat(course.rating) || 72
-    const coursePar = course.par || 72
-    const courseHandicap = Math.round(handicapIndex * (slopeVal / 113) + (ratingVal - coursePar))
-    const isLefty = (playerInfo.handedness || 'Right') === 'Left'
-    const handLabel = isLefty ? 'LEFT-HANDED' : 'RIGHT-HANDED'
-
-    // ── Player profile block (cache-friendly prefix) ──
-    const playerBlock = `PLAYER: ${playerInfo.name || 'Player'}, ${handLabel} golfer
-Handicap Index: ${playerInfo.handicap} (USGA/GHIN — portable number, NOT strokes given)${course.name ? `\nCourse Handicap: ${courseHandicap} (Index × Slope÷113 + Rating−Par)` : ''}
-Miss tendency: ${playerInfo.miss} | Ball flight: ${playerInfo.ballFlight}
-${playerInfo.swingNotes ? `Swing notes: ${playerInfo.swingNotes}` : ''}
-${playerInfo.goals ? `Goals: ${playerInfo.goals}` : ''}
-${playerInfo.strengths ? `Strengths: ${playerInfo.strengths}` : ''}
-
-CRITICAL — HANDEDNESS: This player is ${handLabel}. All shot shape references MUST account for this:
-${isLefty
-  ? `• A FADE for a lefty curves LEFT (away from target on right-to-left holes)\n• A DRAW for a lefty curves RIGHT (toward the target on right-to-left holes)\n• "Working the ball left" = the natural fade shape for this lefty\n• "Working the ball right" = a draw for this lefty`
-  : `• A FADE for a righty curves RIGHT\n• A DRAW for a righty curves LEFT\n• Standard right-handed shot shape references apply`}
-When recommending shot shapes, ALWAYS specify what the ball will do in the air relative to the fairway/target (e.g. "draw — ball will move right to left for you" for a righty, or "draw — ball will move left to right for you" for a lefty). DO NOT default to only recommending fades/cuts — use draws, fades, and straight shots based on the hole shape and player's bag.
-
-BAG (carry distances):
-${clubList}`
-
-    // ── Profile-only mode (no course loaded) ──
-    if (!course.name) {
-      return `You are an elite Tour caddy. The player has no course loaded — give a profile-only brief.
-
-${playerBlock}
-${historyBlock}
-
-## Current form
-Where the game is now. Use actual numbers.
-
-## Where shots are leaking
-2-3 sources of dropped shots from par-type averages and tendencies.
-
-## Pattern to watch
-Front/back splits, pressure patterns, recent trends.
-
-## Focus areas for next round
-2-3 specific actionable points tied to actual data.
-
-## Pre-shot questions
-3-4 strategic questions for this player's tendencies.
-
-Be direct. Short sentences. No filler.`
-    }
-
-    // ── Course-loaded mode: full pre-round brief ──
-    const isPractice = course.roundType === 'Practice round'
-    const isMatchPlay = course.roundType === 'Match play'
-    const hasOSMData = course.osmEnriched && course.holes.some(h => h.osmDesign)
-    const hasWebDesign = course.holes.some(h => h.webDesign)
-    const hasHazardData = course.holes.some(h => h.hzDesign)
-    const designNote = [
-      hasOSMData ? 'OSM' : null,
-      hasWebDesign ? 'web' : null,
-      hasHazardData ? 'yardage-book vision' : null,
-    ].filter(Boolean).length
-      ? ' + design data (' + [hasOSMData && 'OSM', hasWebDesign && 'web', hasHazardData && 'yardage-book vision'].filter(Boolean).join(' + ') + ')'
-      : ''
-    const sourceNote = course.source === 'GolfCourseAPI' ? `Verified — GolfCourseAPI${designNote}`
-      : course.source === 'OpenGolfAPI'    ? `Partial — OpenGolfAPI (par/HCP only, yardages from web)${designNote}`
-      : course.source                      ? `Unverified — via web search (${course.source}).${designNote}`
-      : 'Manual entry'
-    const holesData = course.holes.map((h, i) => {
-      const w    = holeWeather[i]
-      const time = holeTimes[i]?.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      const wStr = w ? ` | ~${time}: ${Math.round(w.temp)}°F, ${windDir(w.windDir)} ${Math.round(w.windSpeed)}mph, ${w.precip}% rain` : ''
-      const eStr = h.elevation ? ` | Elev: ${h.elevation}` : ''
-
-      // Build design data string from OSM, web search, or user notes
-      let designStr = ''
-      if (h.osmDesign) {
-        const parts = []
-        if (h.osmDesign.dogleg) parts.push(`dogleg ${h.osmDesign.dogleg}`)
-        if (h.osmDesign.bearingDeg != null) parts.push(`bearing ${h.osmDesign.bearingDeg}°`)
-        if (h.osmDesign.hazards?.length) {
-          parts.push('hazards: ' + h.osmDesign.hazards.map(hz => `${hz.type} ${hz.loc}`).join(', '))
-        }
-        if (h.osmDesign.greenWidth) parts.push(`green ~${h.osmDesign.greenWidth}y wide × ${h.osmDesign.greenDepth}y deep`)
-        if (h.osmDesign.distances) {
-          const d = h.osmDesign.distances
-          parts.push(`tee→pin ${d.teeToPin}y`)
-          const distLine = formatDistancesLine(d)
-          if (distLine) parts.push(distLine)
-        }
-        if (parts.length) designStr = ` | Design (OSM verified): ${parts.join('; ')}`
-      } else if (h.webDesign) {
-        const parts = []
-        if (h.webDesign.dogleg && h.webDesign.dogleg !== 'straight') parts.push(`dogleg ${h.webDesign.dogleg}`)
-        if (h.webDesign.water) parts.push(`water: ${h.webDesign.water}`)
-        if (h.webDesign.bunkers) parts.push(`bunkers: ${h.webDesign.bunkers}`)
-        if (h.webDesign.ob) parts.push(`OB ${h.webDesign.ob}`)
-        if (h.webDesign.green_notes) parts.push(`green: ${h.webDesign.green_notes}`)
-        if (parts.length) designStr = ` | Design (web search — use with moderate confidence): ${parts.join('; ')}`
-      }
-
-      // Yardage-book vision hazards: structured per-hole, treat as verified-by-image.
-      let yardageBookText = ''
-      if (h.hzDesign) {
-        const hz = h.hzDesign
-        const parts = []
-        if (hz.dogleg && hz.dogleg !== 'straight') parts.push(`dogleg ${hz.dogleg}`)
-        if (Array.isArray(hz.hazards) && hz.hazards.length) {
-          parts.push('hazards: ' + hz.hazards.map(z => {
-            const carry = z.carry_yards ? ` carry ${z.carry_yards}y` : ''
-            const note = z.notes ? ` (${z.notes})` : ''
-            return `${z.type} ${z.side}${carry}${note}`
-          }).join(', '))
-        }
-        if (hz.greenDepth) parts.push(`green depth ${hz.greenDepth}y`)
-        if (hz.green_notes) parts.push(`green: ${hz.green_notes}`)
-        if (hz.recommended_line) parts.push(`line: ${hz.recommended_line}`)
-        if (parts.length) {
-          const confLabel = hz._confidence === 'high' ? 'high confidence' : hz._confidence === 'low' ? 'low confidence' : 'verified-by-image'
-          designStr += ` | Design (yardage book — ${confLabel}): ${parts.join('; ')}`
-        }
-        // Caddie nickname + verbatim description from the printed yardage book.
-        // These reflect the architect's intent; lean on them when shaping shot calls.
-        if (hz.holeName) yardageBookText += ` | "${hz.holeName}"`
-        if (hz.description) yardageBookText += `\n   Book: ${hz.description}`
-        // Visual observations from the hole diagram — caddie-eye reading of
-        // the picture (fairway shape, green orientation, distance markers).
-        if (hz.visualNotes) yardageBookText += `\n   Diagram: ${hz.visualNotes}`
-        if (Array.isArray(hz.distanceMarkers) && hz.distanceMarkers.length) {
-          yardageBookText += `\n   Distances: ${hz.distanceMarkers.map(d => `${d.label} ${d.yards}y`).join('; ')}`
-        }
-      }
-      const nStr = h.notes ? ` | Note: ${h.notes}` : (!designStr ? ' | Note: no design data — do not assume hazards' : '')
-      return `H${i+1}: Par ${h.par}, ${h.yardage || '?'}y, HCP ${h.handicap}${eStr}${designStr}${nStr}${wStr}${yardageBookText}`
-    }).join('\n')
-
-    return `You are an elite Tour caddy. Generate a concise game plan. IMPORTANT: You MUST cover ALL 18 holes — do not stop early.
-
-${playerBlock}
-
-COURSE: ${course.name}${course.selectedTee ? ` (${course.selectedTee} tees)` : ''}, ${course.yardage}y, Rating ${course.rating} / Slope ${course.slope}, Par ${course.par}
-Course Handicap: ${courseHandicap} | Data: ${sourceNote}
-${course.roundType} | Target: ${course.targetScore || 'under par'} | Conditions: ${course.conditions}
-${course.elevation ? `Course elevation: ${course.elevation}ft — factor into club selection (higher altitude = more carry)` : ''}
-${course.architect ? `Architect: ${course.architect}` : ''}
-${course.greensType ? `Greens: ${course.greensType}` : ''}
-${course.region ? `Region: ${course.region}` : ''}
-${Array.isArray(course.tags) && course.tags.length ? `Style tags: ${course.tags.join(', ')}` : ''}
-${course.defaultConditions && !course.conditions ? `Typical conditions: ${course.defaultConditions}` : ''}
-${isPractice ? 'Practice round — frame around learning, not score.' : ''}${isMatchPlay ? 'Match play — adjust risk for hole-by-hole context.' : ''}
-${course.notes ? `Notes: ${course.notes}` : ''}
-Tee: ${teeTime} (${teeDate}), ${pace} min/hole
-${historyBlock}
-
-HOLES:
-${holesData}
-
-IMPORTANT RULES:
-1. Cover ALL 18 holes. Do not stop at hole 11 or 12.
-2. Recommend draws AND fades AND straight shots — match shape to hole, not just one shape.
-3. Remember this is a ${handLabel} player — shot shapes curve differently.
-4. Keep caddy notes SHORT (1 sentence max, like a real caddy would say it, not AI-sounding).
-5. Be concise throughout — every word should earn its place.
-
-DATA ACCURACY — CRITICAL:
-${hasOSMData || hasWebDesign || hasHazardData
-  ? `Some holes have design data from ${[
-      hasOSMData ? 'OpenStreetMap (marked "Design (OSM verified)")' : null,
-      hasWebDesign ? 'web search (marked "Design (web search)")' : null,
-      hasHazardData ? 'the course yardage book parsed by vision (marked "Design (yardage book)")' : null,
-    ].filter(Boolean).join(', ')}. OSM data and yardage-book data are treated as verified (the yardage-book hazards came from the official course diagram). Web search data is moderately reliable — use it but don't over-rely on specific details. For holes WITHOUT any design data, follow the strict rules below.`
-  : `You only have scorecard data (par, yardage, handicap) for each hole. You do NOT have verified hole design data (hazard locations, water, OB, doglegs, fairway shape, green surrounds).`}
-Follow these rules strictly:
-- Do NOT invent or guess specific hazard placements (bunkers, water, OB) unless explicitly provided in a hole's data (via "Design (OSM verified)", "Design (web search)", or a user "Note:"). If none exist — do NOT fabricate hazards.
-- Do NOT recommend shot shapes to "avoid" hazards you are not certain exist. Base tee shot shape recommendations on: the player's ball flight and miss tendency, the par/yardage, and wind — NOT on assumed hole layouts.
-- For green-json: set "hazards" to an EMPTY array [] unless a hole's design data or note explicitly describes a specific hazard near the green. Do NOT guess bunker or water locations.
-- For green-json: when a hole has "Design (OSM verified)" or "Design (yardage book)" data, use those hazards with "confidence":"verified". When a hole has "Design (web search)" data, use with "confidence":"uncertain". When a hole has NO design data, set "hazards":[] and use generic values.
-- For tee shot strategy: when a hole has design data including dogleg direction, use that to inform shot shape. When a hole has bearing data, factor in wind direction vs hole bearing. Otherwise, recommend shape based on the player's natural ball flight and miss tendency — do NOT fabricate doglegs or fairway shapes.
-- When a hole's "Design (OSM verified)" data includes specific distances (e.g. "tee→pin 425y", "green 142/158/168y (F/C/B)", "carry Bunker R 235y"), use those exact numbers when discussing carry distances, club choices, and lay-up targets. They are surveyed from OSM and accurate within ~±5 yards. Do NOT round them to "about 240" — say "235y carry over the right fairway bunker" and pick the club that matches. Carry distances are measured FROM THE TEE along the centerline.
-- When in doubt, say "standard approach" rather than inventing hazards to avoid.
-- When a hole has a "Book:" line, that's the verbatim yardage-book description written by the course/architect. Treat it as authoritative caddie context — the strategy hints there (where to land, what to avoid, ideal line) reflect the architect's intent. Lean on it when shaping shot calls, but DON'T quote it verbatim back in your output — translate it into a player-facing caddie line.
-- When a hole has a "Diagram:" line, that's a caddie-eye reading of the hole's overhead picture from the yardage book — treat the observations (fairway pinches, green shape/angle, elevation cues) as verified-by-image. Combine with "Book:" prose and "Distances:" numbers to pick a landing zone and club. Distance markers from the diagram are typically accurate within ±5y.
-
-## Round strategy
-2-3 sentences. Approach for today.
-
-## Scoring roadmap
-One line per hole: "H[N] Par [X] [Yds]y — 🟢/🟡/🔴 — reason"
-
-## Hole-by-hole
-### Hole [N] — Par [X] — [Yds]y — HCP [N]
-- **Tee**: Club, target, shape (specify ball flight direction for this ${isLefty ? 'lefty' : 'righty'})
-- **Approach**: Club, distance, landing zone
-- **Caddy**: One short sentence. Sound like a human, not a manual.
-\`\`\`green-json
-{"depth_y":28,"width_y":24,"shape":"oval","pin":"center","slope":"flat","tiers":0,"tier_desc":"","green_notes":"","confidence":"uncertain","hazards":[]}
-\`\`\`
-Green-json rules: "hazards" must be [] unless a hole note explicitly mentions a hazard near the green. "confidence" must be "uncertain" unless you have high-confidence verified knowledge of this specific green. Only populate non-default values (shape, slope, tiers, pin, green_notes) when you have specific data — do NOT guess.
-
-## Weather
-Club adjustments for key holes only.
-
-## Pressure
-${historyBlock ? 'Use tournament vs casual data. ' : ''}Pre-shot anchor. How to handle bogeys.
-
-Be direct. No filler. ALL 18 HOLES.`
-  }, [clubs, course, playerInfo, holeWeather, holeTimes, teeTime, teeDate, pace, scoringHistory])
-
-  const cancelGenerate = () => {
-    if (abortRef.current) { abortRef.current.abort(); abortRef.current = null }
-    setPlanLoading(false); setPlanPhase('')
-  }
-
-  const generate = async (options = {}) => {
-    const { bypassCache = false } = options
-    const authToken = session?.access_token || ''
-    if (!authToken) { setPlanError('Please sign in to generate a game plan.'); return }
-    if (abortRef.current) abortRef.current.abort()
-    const ctrl = new AbortController()
-    abortRef.current = ctrl
-    setPlanLoading(true); setPlanPhase('Analyzing scoring history'); setPlanError(''); setPlanValidationBanner(''); setPlan(''); setLastRecLogId(null); setTab('prep'); setPrepStep(4)
-    let capturedRecLogId = null
-    // Reset + start the generation tracker. The implicit 'strategy' phase is
-    // running from the first byte; markers advance the machine from there.
-    const genStartedAt = Date.now()
-    const seenPhases = new Set()
-    setGenProgress({
-      states:   { strategy: STEP_STATES.RUNNING },
-      startsAt: { strategy: genStartedAt },
-      endsAt:   {},
-      errors:   {},
-    })
-    const advancePhase = (id, ts) => {
-      if (seenPhases.has(id)) return
-      seenPhases.add(id)
-      const ids = GENERATION_PHASE_IDS
-      const idx = ids.indexOf(id)
-      if (idx < 1) return
-      const prev = ids[idx - 1]
-      setGenProgress(p => ({
-        ...p,
-        states:   { ...p.states, [prev]: STEP_STATES.DONE, [id]: STEP_STATES.RUNNING },
-        startsAt: { ...p.startsAt, [id]: ts },
-        endsAt:   { ...p.endsAt, [prev]: ts },
-      }))
-    }
-
-    // Cache lookup — key is a stable hash of (prompt, model, style). Same
-    // course + player + bag + weather → same key. On a hit we replay the
-    // cached plan into the same rendering pipeline the streaming path uses,
-    // so the UI treats it identically (companion mode, hole cards, saved-to-
-    // history banner). Bypass path is wired to the ↺ Regenerate button below.
-    const promptText = buildPrompt()
-    let cacheKey = null
-    try { cacheKey = await planCacheKey({ prompt: promptText, model: selectedModel, style: planStyle }) } catch {}
-    if (!bypassCache && cacheKey) {
-      const hit = getCachedPlan(cacheKey)
-      if (hit?.plan) {
-        setPlan(hit.plan)
-        setPlanLoading(false)
-        abortRef.current = null
-        const endTs = Date.now()
-        setGenProgress({
-          states: Object.fromEntries(GENERATION_PHASE_IDS.map(id => [id, STEP_STATES.DONE])),
-          startsAt: Object.fromEntries(GENERATION_PHASE_IDS.map(id => [id, genStartedAt])),
-          endsAt: Object.fromEntries(GENERATION_PHASE_IDS.map(id => [id, endTs])),
-          errors: {},
-        })
-        // Still validate + record in history so the user's per-course list is
-        // consistent whether the brief was fresh or cached.
-        if (course.name) {
-          const v = validatePlanContract(hit.plan)
-          setPlanValidationBanner(v.ok ? '' : (v.banner || 'Plan validation failed.'))
-        }
-        const entry = { course: course.name || 'Profile brief', date: todayLocalIso(), plan: hit.plan, tee: course.selectedTee || '', rec_log_id: null, cached: true }
-        setSavedBriefs(prev => {
-          const updated = [entry, ...prev].slice(0, 10)
-          try { localStorage.setItem('golf_saved_briefs', JSON.stringify(updated)) } catch {}
-          return updated
-        })
-        return
-      }
-    }
-
-    const payload = {
-      model: selectedModel,
-      max_tokens: 16000,
-      stream: true,
-      messages: [{
-        role: 'user',
-        content: [{ type: 'text', text: promptText, cache_control: { type: 'ephemeral' } }],
-      }],
-    }
-    try {
-      const res = await fetch('/api/generate', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${authToken}`,
-        },
-        body: JSON.stringify(payload),
-        signal: ctrl.signal,
-      })
-      if (!res.ok) {
-        const errText = await res.text()
-        let errMsg = `API ${res.status}: ${errText}`
-        try { const j = JSON.parse(errText); if (j.error) errMsg = j.error } catch {}
-        throw new Error(errMsg)
-      }
-      const reader = res.body.getReader()
-      const dec    = new TextDecoder()
-      let buf = ''
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buf += dec.decode(value, { stream: true })
-        const lines = buf.split('\n'); buf = lines.pop()
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue
-          const d = line.slice(6).trim()
-          if (d === '[DONE]') continue
-          try {
-            const j = JSON.parse(d)
-            if (j.type === 'content_block_delta' && j.delta?.text) {
-              setPlan(p => {
-                const next = p + j.delta.text
-                // Advance the structured tracker on every newly-seen phase
-                // marker. Done inside setPlan so we read the freshest text.
-                const ts = Date.now()
-                for (const id of findPhaseMarkers(next)) advancePhase(id, ts)
-                // Strip markers from the rendered text so the user never sees
-                // them, but keep them in the stream-builder above so the
-                // marker can fire even if it's split across two chunks.
-                return stripPhaseMarkers(next)
-              })
-            }
-            // Final event emitted by the edge function after rec_log insert.
-            if (j.type === 'metadata' && j.rec_log_id) {
-              capturedRecLogId = j.rec_log_id
-              setLastRecLogId(j.rec_log_id)
-            }
-          } catch {}
-        }
-      }
-    } catch (e) {
-      if (e.name === 'AbortError') return
-      setPlanError(e.message)
-    }
-    setPlanLoading(false)
-    abortRef.current = null
-    // Stream is done — mark any still-running step as DONE and stamp every
-    // missing endsAt so the tracker shows final durations.
-    setGenProgress(p => {
-      const endTs = Date.now()
-      const states = { ...p.states }
-      const endsAt = { ...p.endsAt }
-      for (const id of GENERATION_PHASE_IDS) {
-        if (states[id] === STEP_STATES.RUNNING) states[id] = STEP_STATES.DONE
-        if (states[id] === STEP_STATES.DONE && endsAt[id] == null) endsAt[id] = endTs
-      }
-      return { ...p, states, endsAt }
-    })
-    setPlan(p => {
-      if (p) {
-        // Validate plan against the output contract — surfaces silent
-        // truncation, missing sections, malformed green-json.
-        let contractOk = true
-        if (course.name) {
-          const v = validatePlanContract(p)
-          contractOk = v.ok
-          if (!v.ok) {
-            setPlanValidationBanner(v.banner || 'Plan validation failed.')
-          } else {
-            setPlanValidationBanner('')
-          }
-        }
-        // Cache the plan so a second Generate with identical inputs is
-        // instant. Only cache validated plans — replaying a malformed brief
-        // isn't a win for the user.
-        if (cacheKey && contractOk) {
-          try { putCachedPlan(cacheKey, p) } catch {}
-        }
-        const entry = { course: course.name || 'Profile brief', date: todayLocalIso(), plan: p, tee: course.selectedTee || '', rec_log_id: capturedRecLogId || null }
-        setSavedBriefs(prev => {
-          const updated = [entry, ...prev].slice(0, 10)
-          try { localStorage.setItem('golf_saved_briefs', JSON.stringify(updated)) } catch {}
-          return updated
-        })
-        if (user) {
-          savePlan(user.id, entry.course, p, entry.tee).catch(e => console.warn('[supabase] plan save:', e.message))
-        }
-      }
-      return p
-    })
-  }
+  const {
+    plan, setPlan,
+    planLoading, planPhase, planError,
+    planValidationBanner,
+    genProgress,
+    lastRecLogId,
+    generate, cancelGenerate,
+  } = useGeneration({ session, buildPrompt, selectedModel, planStyle, course, user, setSavedBriefs, setTab, setPrepStep })
 
   const copyPlan = async () => {
     await navigator.clipboard.writeText(plan)
@@ -1340,41 +588,6 @@ Be direct. No filler. ALL 18 HOLES.`
     const w = window.open(url, '_blank')
     w?.addEventListener('load', () => { w.print(); URL.revokeObjectURL(url) })
   }
-
-  const mdComponents = useMemo(() => ({
-    h2: ({ children }) => <h2 style={{ fontSize: 16, fontWeight: 600, color: C.text, margin: '1.4rem 0 0.4rem', borderBottom: `1px solid ${C.border}`, paddingBottom: 6 }}>{children}</h2>,
-    h3: ({ children }) => {
-      const text = typeof children === 'string' ? children : Array.isArray(children) ? children.join('') : ''
-      return <h3 style={{ fontSize: 13, fontWeight: 600, color: /Hole/i.test(text) ? C.accent : C.amber, margin: '1rem 0 3px' }}>{children}</h3>
-    },
-    p: ({ children }) => <p style={{ fontSize: 13, color: C.textMuted, lineHeight: 1.7, margin: '3px 0' }}>{children}</p>,
-    strong: ({ children }) => <strong style={{ color: C.text }}>{children}</strong>,
-    li: ({ children }) => (
-      <div style={{ display: 'flex', gap: 8, marginBottom: 3, paddingLeft: 6 }}>
-        <span style={{ color: C.accentDim, flexShrink: 0, marginTop: 2 }}>▸</span>
-        <span style={{ fontSize: 13, color: C.textMuted, lineHeight: 1.65 }}>{children}</span>
-      </div>
-    ),
-    ul: ({ children }) => <div style={{ margin: '4px 0' }}>{children}</div>,
-    ol: ({ children }) => <div style={{ margin: '4px 0' }}>{children}</div>,
-    hr: () => <hr style={{ border: 'none', borderTop: `1px solid ${C.border}`, margin: '1.5rem 0' }} />,
-    table: ({ children }) => (
-      <div style={{ overflowX: 'auto', margin: '12px 0', WebkitOverflowScrolling: 'touch' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, minWidth: 480 }}>{children}</table>
-      </div>
-    ),
-    thead: ({ children }) => <thead style={{ borderBottom: `2px solid ${C.border}` }}>{children}</thead>,
-    th: ({ children }) => <th style={{ padding: '8px 10px', textAlign: 'left', color: C.text, fontWeight: 600, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>{children}</th>,
-    td: ({ children }) => <td style={{ padding: '7px 10px', borderBottom: `1px solid ${C.border}`, color: C.textMuted, verticalAlign: 'top' }}>{children}</td>,
-    tr: ({ children }) => <tr style={{ }}>{children}</tr>,
-    code: ({ children }) => <code style={{ background: C.bgInput, padding: '1px 5px', borderRadius: 4, fontSize: '0.9em' }}>{children}</code>,
-  }), [])
-
-  const renderPlan = (text) => (
-    <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
-      {stripStreamingArtifacts(text)}
-    </ReactMarkdown>
-  )
 
   const parsedHoles = useMemo(() => {
     if (!plan) return { preamble: '', holes: [], postamble: '' }
@@ -1554,64 +767,30 @@ Be direct. No filler. ALL 18 HOLES.`
             Sequential steps: Course → Tees → Scorecard → Weather → Generate
            ══════════════════════════════════════════════════════════════════ */}
         {tab === 'prep' && (
-          <PrepTab
-            isMobile={isMobile}
-            session={session}
-            user={user}
-            lastRecLogId={lastRecLogId}
-            prepStep={prepStep}
-            setPrepStep={setPrepStep}
-            course={course}
-            setCourse={setCourse}
-            coords={coords}
-            setCoords={setCoords}
-            teeTime={teeTime}
-            setTeeTime={setTeeTime}
-            teeDate={teeDate}
-            setTeeDate={setTeeDate}
-            pace={pace}
-            setPace={setPace}
-            timezone={timezone}
-            weather={weather}
-            setWeather={setWeather}
-            weatherLoading={weatherLoading}
-            setWeatherLoading={setWeatherLoading}
-            plan={plan}
-            planLoading={planLoading}
-            planPhase={planPhase}
-            genProgress={genProgress}
-            planError={planError}
-            planValidationBanner={planValidationBanner}
-            planStyle={planStyle}
-            setPlanStyle={setPlanStyle}
-            planView={planView}
-            setPlanView={setPlanView}
-            enriching={enriching}
-            enrichStatus={enrichStatus}
-            enrichProgress={enrichProgress}
-            selectedModel={selectedModel}
-            setSelectedModel={setSelectedModel}
-            copied={copied}
-            currentHole={currentHole}
-            setCurrentHole={setCurrentHole}
-            holeScores={holeScores}
-            setScore={setScore}
-            displayGeo={displayGeo}
-            contributedHoleSet={contributedHoleSet}
-            clubs={clubs}
-            parsedHoles={parsedHoles}
-            generate={generate}
-            cancelGenerate={cancelGenerate}
-            copyPlan={copyPlan}
-            printPlan={printPlan}
-            applyScorecard={applyScorecard}
-            resetPrep={resetPrep}
-            courseSearchResetKey={courseSearchResetKey}
-            renderPlan={renderPlan}
-            handleHoleContribution={handleHoleContribution}
-            setTab={setTab}
-            setExpandedBrief={setExpandedBrief}
-          />
+          <PrepContext.Provider value={{
+            isMobile, session, user, lastRecLogId,
+            prepStep, setPrepStep,
+            course, setCourse, coords, setCoords,
+            teeTime, setTeeTime, teeDate, setTeeDate,
+            pace, setPace, timezone,
+            weather, setWeather, weatherLoading, setWeatherLoading,
+            plan, planLoading, planPhase, genProgress,
+            planError, planValidationBanner,
+            planStyle, setPlanStyle, planView, setPlanView,
+            enriching, enrichStatus, enrichProgress,
+            selectedModel, setSelectedModel,
+            copied, currentHole, setCurrentHole,
+            holeScores, setScore,
+            displayGeo, contributedHoleSet,
+            clubs, parsedHoles,
+            generate, cancelGenerate,
+            copyPlan, printPlan,
+            applyScorecard, resetPrep,
+            courseSearchResetKey, handleHoleContribution,
+            setTab, setExpandedBrief,
+          }}>
+            <PrepTab />
+          </PrepContext.Provider>
         )}
         {/* ══════════════════════════════════════════════════════════════════
             SECTION 3: HISTORY
@@ -1633,7 +812,6 @@ Be direct. No filler. ALL 18 HOLES.`
             setTab={setTab}
             setPrepStep={setPrepStep}
             setPlan={setPlan}
-            renderPlan={renderPlan}
           />
         )}
 
