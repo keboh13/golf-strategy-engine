@@ -256,6 +256,25 @@ export async function adminRenameCourse(authToken, { old_key, new_name, new_loca
   return data
 }
 
+// Admin-only: purge a course from the shared cache. Server uses the service
+// role to also clear course_geo / course_hole_hazards / course_hole_contrib
+// (which have no RLS delete policy for authenticated users) plus any PDFs in
+// storage. Caller is expected to invalidate its own localStorage cache too.
+export async function adminDeleteCourse(authToken, { course_key }) {
+  if (!course_key) throw new Error('Missing course_key')
+  const res = await fetch('/api/admin-course', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+    },
+    body: JSON.stringify({ action: 'delete-course', course_key }),
+  })
+  const data = await res.json()
+  if (!res.ok || data.error) throw new Error(data.error || `delete failed (HTTP ${res.status})`)
+  return data
+}
+
 // Admin-only: re-run Claude vision parse against the course's stored PDF.
 // Returns { parsed, diff, pdfUrl } — admin reviews diff, accepts selected
 // fields via adminUpdateMetadata.

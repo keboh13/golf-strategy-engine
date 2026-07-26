@@ -19,7 +19,7 @@ const ADMIN_SUBS = [
   { id: 'orgs',     label: 'Orgs',     icon: '🏢' },
 ]
 
-export default function AdminTab({ isMobile, authToken, currentUserId, onEditCourse, activeOrgId, onOrgChange }) {
+export default function AdminTab({ isMobile, authToken, currentUserId, onEditCourse, onCourseChanged, activeOrgId, onOrgChange }) {
   const [sub, setSub] = useState('overview')
 
   // AdminOverviewPanel emits 'admin:sub' events so its quick-link buttons can
@@ -61,7 +61,7 @@ export default function AdminTab({ isMobile, authToken, currentUserId, onEditCou
 
       {sub === 'overview' && <AdminOverviewPanel authToken={authToken} />}
       {sub === 'users'    && <AdminUsersPanel    authToken={authToken} currentUserId={currentUserId} />}
-      {sub === 'courses'  && <AdminCoursesPanel  authToken={authToken} onEditCourse={onEditCourse} />}
+      {sub === 'courses'  && <AdminCoursesPanel  authToken={authToken} onEditCourse={onEditCourse} onCourseChanged={onCourseChanged} />}
       {sub === 'data'     && <AdminDataPanel     onNavigate={setSub} />}
       {sub === 'usage'    && <AdminUsagePanel    authToken={authToken} />}
       {sub === 'audit'    && <AdminAuditPanel    authToken={authToken} />}

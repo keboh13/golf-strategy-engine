@@ -193,6 +193,74 @@ async function handleRequest(req) {
       return jsonResponse({ course_data: merged, edit_version: nextVersion }, 200)
     }
 
+    // ── delete-course ──────────────────────────────────────────────────────
+    // Atomically purge a course from the shared cache. Service role bypasses
+    // RLS so tables lacking authenticated-delete policies (course_geo,
+    // course_hole_hazards) are actually cleared instead of silently failing.
+    // Also removes any stored PDFs from the course-art bucket.
+    if (action === 'delete-course') {
+      const { course_key } = body
+      if (!course_key) return jsonResponse({ error: 'Missing course_key.' }, 400)
+
+      // Load course_data so we can derive the storage prefix for PDF cleanup
+      // before the row is deleted.
+      const cur = await supabaseRest(
+        `course_cache?cache_key=eq.${encodeURIComponent(course_key)}&select=course_data`,
+        { method: 'GET' }
+      )
+      let courseData = {}
+      if (cur.ok) {
+        const rows = await cur.json().catch(() => [])
+        if (Array.isArray(rows) && rows[0]?.course_data) courseData = rows[0].course_data
+      }
+      const slug = courseKeySlug(courseData.name || '', courseData.location || '')
+
+      // Delete related rows first. course_aliases cascades from course_cache,
+      // but course_geo / hazards / contrib do not — hit them explicitly.
+      await Promise.all([
+        supabaseRest(`course_geo?course_key=eq.${encodeURIComponent(course_key)}`, { method: 'DELETE' }).catch(() => {}),
+        supabaseRest(`course_hole_hazards?course_key=eq.${encodeURIComponent(course_key)}`, { method: 'DELETE' }).catch(() => {}),
+        supabaseRest(`course_hole_contrib?course_key=eq.${encodeURIComponent(course_key)}`, { method: 'DELETE' }).catch(() => {}),
+      ])
+
+      // Nuke every PDF (and any other artifact) stored under this course's
+      // prefix. list → remove; empty prefixes are harmless.
+      if (slug) {
+        try {
+          const listRes = await fetch(`${supabaseUrl}/storage/v1/object/list/course-art`, {
+            method: 'POST',
+            headers: { ...svcHeaders, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prefix: slug, limit: 100 }),
+          })
+          if (listRes.ok) {
+            const objs = await listRes.json()
+            const paths = (objs || []).filter(o => o?.name).map(o => `${slug}/${o.name}`)
+            if (paths.length) {
+              await fetch(`${supabaseUrl}/storage/v1/object/course-art`, {
+                method: 'DELETE',
+                headers: { ...svcHeaders, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ prefixes: paths }),
+              }).catch(() => {})
+            }
+          }
+        } catch (e) {
+          console.warn('[admin-course delete-course] storage cleanup:', e.message)
+        }
+      }
+
+      // Finally, the course_cache row itself (cascades course_aliases).
+      const del = await supabaseRest(
+        `course_cache?cache_key=eq.${encodeURIComponent(course_key)}`,
+        { method: 'DELETE' }
+      )
+      if (!del.ok) {
+        const err = await del.text().catch(() => '')
+        return jsonResponse({ error: `course_cache delete failed: ${err}` }, 500)
+      }
+
+      return jsonResponse({ ok: true, course_key }, 200)
+    }
+
     // ── set-public ─────────────────────────────────────────────────────────
     // Toggle is_public flag on a course_cache row. Admins use this to curate
     // which courses appear in the public Library tab.

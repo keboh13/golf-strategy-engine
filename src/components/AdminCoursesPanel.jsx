@@ -3,15 +3,14 @@ import { C, F, card, inp, lbl, btnP, btnG } from '../theme.js'
 import { Badge } from './ui.jsx'
 import {
   getAllCachedCoursesDB,
-  deleteCachedCourseDB,
   listCoursePdfs,
   uploadCoursePdfToBucket,
   deleteAllCoursePdfs,
   deleteCourseHazards,
   clearCachedScorecardPdfRef,
 } from '../lib/supabase.js'
-import { deleteCachedGeoDB } from '../lib/courseGeoCache.js'
-import { adminUploadScorecardPdf } from '../lib/courseApi.js'
+import { removeCachedCourseByKey } from '../lib/courseCache.js'
+import { adminUploadScorecardPdf, adminDeleteCourse } from '../lib/courseApi.js'
 import AdminReparseQueue   from './AdminReparseQueue.jsx'
 import AdminBulkImport     from './AdminBulkImport.jsx'
 import AdminContributions  from './AdminContributions.jsx'
@@ -50,7 +49,7 @@ function sourceBadge(c) {
   return { label: c.source || '—', bg: C.bgInput, fg: C.textMuted }
 }
 
-export default function AdminCoursesPanel({ authToken, onEditCourse }) {
+export default function AdminCoursesPanel({ authToken, onEditCourse, onCourseChanged }) {
   const [sub, setSub] = useState('browser')
   const [rows, setRows] = useState(null)        // null = not loaded yet
   const [loading, setLoading] = useState(false)
@@ -123,13 +122,16 @@ export default function AdminCoursesPanel({ authToken, onEditCourse }) {
         pdfUrl: url,
       })
       const conf = result?._confidence || 'medium'
+      const teeCount = Array.isArray(result?.tees) ? result.tees.length : 0
       const cov = result?.hazardCoverage
       const covMsg = cov
         ? cov.covered === cov.total
           ? ` Hazards: ${cov.covered}/${cov.total} holes.`
           : ` Hazards: ${cov.covered}/${cov.total} holes — missing ${cov.missingHoles.join(', ')}.`
         : ''
-      setMsg(`✓ Scorecard updated for ${c.name} (confidence: ${conf}).${covMsg} Visible to all users.`)
+      removeCachedCourseByKey(c._cacheKey)
+      onCourseChanged?.(c._cacheKey)
+      setMsg(`✓ Scorecard updated for ${c.name} — ${teeCount} tee${teeCount === 1 ? '' : 's'} parsed (confidence: ${conf}).${covMsg} Visible to all users.`)
       await load()
     } catch (e) {
       setMsg(`Error: ${e.message}`)
@@ -162,6 +164,8 @@ export default function AdminCoursesPanel({ authToken, onEditCourse }) {
       const n = await deleteAllCoursePdfs(c.name, c.location)
       await deleteCourseHazards(c.name, c.location)
       await clearCachedScorecardPdfRef(c.name, c.location)
+      removeCachedCourseByKey(c._cacheKey)
+      onCourseChanged?.(c._cacheKey)
       setMsg(`✓ Removed ${n} PDF${n === 1 ? '' : 's'} + hazards for ${c.name}.`)
       await load()
     } catch (e) {
@@ -179,12 +183,14 @@ export default function AdminCoursesPanel({ authToken, onEditCourse }) {
     )) return
     setBusyKey(c._cacheKey); setMsg('')
     try {
-      await Promise.all([
-        deleteCachedCourseDB(c.name, c.location),
-        deleteCachedGeoDB(c.name, c.location).catch(() => {}), // geo row may not exist
-        deleteAllCoursePdfs(c.name, c.location).catch(() => {}),
-        deleteCourseHazards(c.name, c.location).catch(() => {}),
-      ])
+      // Route through the server so the service role can clear tables whose
+      // RLS blocks direct authenticated deletes (course_geo, hazards, contrib)
+      // + purge storage objects. Doing this via the anon client used to leave
+      // orphaned rows behind, and — because the storage bucket delete also
+      // silently failed — the course would re-appear on next reload.
+      await adminDeleteCourse(authToken, { course_key: c._cacheKey })
+      removeCachedCourseByKey(c._cacheKey)
+      onCourseChanged?.(c._cacheKey)
       setRows(prev => prev ? prev.filter(r => r._cacheKey !== c._cacheKey) : prev)
       setMsg(`✓ "${c.name}" removed from cache.`)
     } catch (e) {

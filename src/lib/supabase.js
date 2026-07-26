@@ -194,6 +194,16 @@ export async function listCanonicalCacheKeys() {
   return new Set((data || []).map(r => r.cache_key))
 }
 
+// Returns a Map<cache_key, edit_version> for every row in course_cache. Used
+// by the client on boot to detect stale localStorage entries — anything whose
+// local _editVersion is behind the DB's gets purged so the next lookup pulls
+// the fresh row (admin edits, PDF re-parses, etc.).
+export async function listCanonicalCacheVersions() {
+  const { data, error } = await supabase.from('course_cache').select('cache_key,edit_version')
+  if (error) return null
+  return new Map((data || []).map(r => [r.cache_key, Number(r.edit_version) || 0]))
+}
+
 export async function listAliasKeys() {
   const { data, error } = await supabase.from('course_aliases').select('alias_key, canonical_key')
   if (error) return null
