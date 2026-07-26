@@ -35,6 +35,21 @@ _Avoid_: "cache key" (that's the literal column name in `course_cache` only; `co
 A `low | medium | high` rating attached to a parsed/extracted result (scorecard or hazards), reflecting how much the source data matched validation expectations — not a measure of source trustworthiness (see provenance above for that axis).
 _Avoid_: "quality" (reserve for describing the fix/initiative itself, not a data attribute)
 
+### Enrichment pipeline
+
+The sequential background process that runs when a course is loaded for Round Prep, filling in data layers the scorecard doesn't carry: geocode → OSM geometry → hole design (web search) → community contributions → hazard intel. Each step is defined in `enrichSteps.js` with an `expectedMs` p50; the ProgressTracker surfaces latency warnings when a step exceeds its budget.
+_Avoid_: "loading steps" (enrichment is specifically data-layer augmentation, not UI loading)
+
+### edit_version
+
+An integer on `course_cache` rows, bumped by admin edits (metadata patch, PDF reparse approval, rename). Client-side localStorage entries carry `_editVersion`; on boot, `purgeOrphanedLocalEntries` compares every local entry against the DB and evicts any whose version trails. This is the staleness mechanism that propagates admin changes to all users without requiring a push channel.
+_Avoid_: "cache version" (that term is used for unrelated React state in App.jsx)
+
+### postRound
+
+The structured per-hole feedback a player records after completing a round: `{ scores: { [holeNum]: number }, notes: { [holeNum]: string }, generalNotes: string }`. Stored on `savedBriefs[].postRound` in localStorage. `getLatestPostRoundForCourse` selects the freshest entry for a course and `renderPriorRoundBlock` turns it into a prompt section so the next brief can reference specific prior-round mistakes. A separate `postRound_draft_{courseKey}` localStorage entry survives mobile tab eviction.
+_Avoid_: "round notes" (ambiguous with the legacy freeform `notes` field on the same brief)
+
 ### AI-generated green
 
 The `h.green` object attached to a hole by the recommendation response itself (pin position, slope, tier count) — invented fresh by the model on every plan generation, not derived from any real data source. Merged with `osmGreen` (real OSM polygon, when available) via `mergeGreen()` before rendering in `GreenView`. As of 2026-07-23, decided to stop displaying this fabricated layer — see [ADR-0001](./docs/adr/0001-suppress-fabricated-green-data.md).
