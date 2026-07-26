@@ -16,7 +16,7 @@ export const ENRICH_STEP_IDS = {
 export const ENRICH_STEPS = Object.freeze([
   { id: ENRICH_STEP_IDS.GEOCODE,  label: 'Resolving coordinates',  expectedMs: 1500 },
   { id: ENRICH_STEP_IDS.OSM,      label: 'OSM geometry',           expectedMs: 3000 },
-  { id: ENRICH_STEP_IDS.DESIGN,   label: 'Hole design',            expectedMs: 6000 },
+  { id: ENRICH_STEP_IDS.DESIGN,   label: 'Hole design',            expectedMs: 12000 },
   { id: ENRICH_STEP_IDS.CONTRIB,  label: 'Community contributions', expectedMs: 600 },
   { id: ENRICH_STEP_IDS.HAZARDS,  label: 'Hazard intel',           expectedMs: 600 },
 ])

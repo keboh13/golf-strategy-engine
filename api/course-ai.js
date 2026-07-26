@@ -53,7 +53,7 @@ function validateHazardsJson(h) {
   return issues
 }
 
-async function callClaude(messages, maxTokens, useWebSearch, extraTools, modelOverride) {
+async function callClaude(messages, maxTokens, useWebSearch, extraTools, modelOverride, opts = {}) {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not configured on server.')
 
@@ -63,19 +63,44 @@ async function callClaude(messages, maxTokens, useWebSearch, extraTools, modelOv
     messages,
   }
   const tools = []
-  if (useWebSearch) tools.push({ type: 'web_search_20250305', name: 'web_search' })
+  if (useWebSearch) {
+    // max_uses caps how many search queries the model can issue in one turn.
+    // Every search adds 3-6s of wall-clock, so a low ceiling keeps latency
+    // predictable for callers that only need one-shot lookup (hole-design,
+    // geocode). Callers can override via opts.webSearchMaxUses.
+    const searchTool = { type: 'web_search_20250305', name: 'web_search' }
+    if (opts.webSearchMaxUses != null) searchTool.max_uses = opts.webSearchMaxUses
+    tools.push(searchTool)
+  }
   if (Array.isArray(extraTools) && extraTools.length) tools.push(...extraTools)
   if (tools.length) body.tools = tools
 
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify(body),
-  })
+  // Hard wall-clock cap. Anthropic requests with web_search can occasionally
+  // hang on a slow search backend; without a fetch-level abort the caller
+  // just waits for the platform's own timeout. Default 45s; callers who need
+  // longer (large PDFs) pass their own.
+  const controller = new AbortController()
+  const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : 45000
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+  let res
+  try {
+    res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    })
+  } catch (e) {
+    clearTimeout(timer)
+    if (e?.name === 'AbortError') throw new Error(`Anthropic timeout after ${timeoutMs}ms`)
+    throw e
+  }
+  clearTimeout(timer)
 
   if (!res.ok) {
     const err = await res.text().catch(() => '')
@@ -147,18 +172,21 @@ If not found: {"error": "No verified scorecard found"}`,
 function buildHoleDesignMessages(courseName, location) {
   return [{
     role: 'user',
-    content: `Search for hole-by-hole design details for "${courseName}"${location ? ` in ${location}` : ''}.
+    content: `Find hole-by-hole design details for "${courseName}"${location ? ` in ${location}` : ''}.
 
-Look for course guides, flyover descriptions, or hole-by-hole breakdowns on the course website, greenskeeper.org, or golf review sites.
+Efficiency (this is the hot path — users are waiting):
+- Run ONE web_search: "${courseName}${location ? ' ' + location : ''} hole by hole guide". If the top 1-2 results have a hole-by-hole breakdown, extract from them and stop. Only issue a second search if the first returned nothing usable.
+- Prefer the course's own site, greenskeeper.org, bluegolf.com, and reputable review sites in that order.
+- Do NOT open more than 3 pages total.
 
-For EACH hole (1-18), find ONLY information you can verify from search results:
+For EACH hole (1-18), extract ONLY what's actually stated in the search results:
 - Dogleg direction (left, right, or straight)
 - Water hazards and their position relative to the fairway/green (left, right, front, etc.)
 - Key bunker positions near the green (greenside left, greenside right, front, etc.)
 - Whether there is OB and which side
-- Any notable green features mentioned (severely sloped, multi-tier, island green, etc.)
+- Notable green features (severely sloped, multi-tier, island green, etc.)
 
-CRITICAL: Only include information you found in search results. If you cannot find design details for a hole, set its entry to null. Do NOT guess or fabricate — accuracy is more important than completeness.
+CRITICAL: Include ONLY information you actually found. Any hole with no verified detail must be null. Do NOT guess or fabricate — accuracy over completeness.
 
 Return ONLY this JSON (no markdown):
 {
@@ -170,7 +198,7 @@ Return ONLY this JSON (no markdown):
   ]
 }
 
-If you cannot find any hole design info: {"error": "No hole design data found"}`,
+If nothing usable turned up: {"error": "No hole design data found"}`,
   }]
 }
 
@@ -727,14 +755,29 @@ If you cannot extract a verifiable scorecard: {"error":"…"}`,
     const ACTIONS = {
       'geocode': { build: buildGeocodeMessages, maxTokens: 200 },
       'scorecard-search': { build: buildScorecardMessages, maxTokens: 2500 },
-      'hole-design-search': { build: buildHoleDesignMessages, maxTokens: 4000 },
+      // hole-design-search is enrichment, not gating — the plan can generate
+      // without it. Optimised for latency: Haiku (~5× faster than Sonnet for
+      // this shallow JSON), 2000 tokens (18 holes × ~80 tokens each = ~1.5k
+      // real payload + slack), cap web_search at 2 calls, wall-clock 30s.
+      // Response schema is unchanged so mergeDesignDataIntoHoles / promptSections
+      // downstream see the same shape.
+      'hole-design-search': {
+        build: buildHoleDesignMessages,
+        maxTokens: 2000,
+        model: MODEL_FAST,
+        webSearchMaxUses: 2,
+        timeoutMs: 30000,
+      },
     }
 
     const spec = ACTIONS[action]
     if (!spec) return jsonResponse({ error: `Unknown action: ${action}` }, 400)
 
     const messages = spec.build(courseName, location || '')
-    const text = await callClaude(messages, spec.maxTokens, true)
+    const text = await callClaude(messages, spec.maxTokens, true, undefined, spec.model, {
+      webSearchMaxUses: spec.webSearchMaxUses,
+      timeoutMs: spec.timeoutMs,
+    })
 
     const aRes = parseJsonFromText(text)
     if (!aRes.ok) return jsonResponse({ error: `No JSON in AI response (${aRes.error}).` }, 502)
