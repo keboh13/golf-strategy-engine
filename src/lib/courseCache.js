@@ -70,8 +70,10 @@ export function isLocalCacheStale(name, location, dbEditVersion) {
 
 // Boot-time purge: drop any local entries whose key no longer exists in the
 // shared DB and isn't covered by an alias mapping. Caller passes the
-// authoritative sets (one DB round-trip on app boot).
-export function purgeOrphanedLocalEntries(canonicalKeys, aliasMap) {
+// authoritative sets (one DB round-trip on app boot). Also drops entries
+// whose local _editVersion trails the DB's — that's how admin edits (PDF
+// upload, metadata patch, reparse approve) propagate to every user.
+export function purgeOrphanedLocalEntries(canonicalKeys, aliasMap, versionMap) {
   if (!canonicalKeys) return 0
   const cache = loadCourseCache()
   const aliasLookup = new Map(
@@ -79,10 +81,20 @@ export function purgeOrphanedLocalEntries(canonicalKeys, aliasMap) {
   )
   let removed = 0
   for (const key of Object.keys(cache)) {
-    if (canonicalKeys.has(key)) continue
-    if (aliasLookup.has(key)) continue
-    delete cache[key]
-    removed++
+    if (!canonicalKeys.has(key) && !aliasLookup.has(key)) {
+      delete cache[key]
+      removed++
+      continue
+    }
+    if (versionMap) {
+      const canonKey = canonicalKeys.has(key) ? key : aliasLookup.get(key)
+      const dbV = Number(versionMap.get(canonKey) ?? 0)
+      const localV = Number(cache[key]?._editVersion ?? 0)
+      if (dbV > localV) {
+        delete cache[key]
+        removed++
+      }
+    }
   }
   if (removed) saveCourseCache(cache)
   return removed

@@ -121,9 +121,7 @@ export default async function handler(req) {
       // parse-yardage-book-pdf — the same one the direct admin-upload path
       // uses). persist:false so this "run" step only produces a result to
       // review — the queue's own "approve" step is the persistence gate,
-      // not the parse step. (Previously this called /api/admin-course with
-      // action:'parsePdf', which doesn't exist — every run failed with
-      // "Unknown action" and the queue never actually worked.)
+      // not the parse step.
       try {
         const parseRes = await fetch(`${new URL(req.url).origin}/api/course-ai`, {
           method: 'POST',
@@ -136,23 +134,25 @@ export default async function handler(req) {
             persist:    false,
           }),
         })
+        const parseText = await parseRes.text()
         if (!parseRes.ok) {
-          const err = await parseRes.text()
-          await patch({ status: 'error', error_msg: err.slice(0, 500), finished_at: new Date().toISOString() })
+          const err = parseText.slice(0, 500)
+          await patch({ status: 'error', error_msg: err, finished_at: new Date().toISOString() })
           return json({ error: `Parse failed: ${err}` }, 500)
         }
-        const body = await parseRes.json()
-        const result = body.result
-        if (!result) {
-          await patch({ status: 'error', error_msg: 'Parse returned no result.', finished_at: new Date().toISOString() })
-          return json({ error: 'Parse returned no result.' }, 502)
+        let parsed
+        try { parsed = JSON.parse(parseText) } catch {
+          const err = `Parser returned non-JSON: ${parseText.slice(0, 200)}`
+          await patch({ status: 'error', error_msg: err, finished_at: new Date().toISOString() })
+          return json({ error: err }, 502)
         }
+        const resultData = parsed?.result || parsed
         await patch({
           status:      'pending_approval',
-          result_data: result,
+          result_data: resultData,
           finished_at: new Date().toISOString(),
         })
-        return json({ ok: true, result })
+        return json({ ok: true, result: resultData })
       } catch (e) {
         await patch({ status: 'error', error_msg: e.message, finished_at: new Date().toISOString() })
         return json({ error: e.message }, 500)
@@ -163,38 +163,47 @@ export default async function handler(req) {
       if (!item.result_data) return json({ error: 'No result to approve — run the parse first.' }, 400)
 
       // hazardsByHole/hazardCoverage travel alongside the scorecard fields in
-      // result_data (see api/course-ai.js's parsePdfAndPersist) but don't
-      // belong in course_cache.course_data — same convention as the direct
-      // upload path. Split them off before writing.
+      // result_data but don't belong in course_cache.course_data. Split them
+      // off before writing. Bump edit_version so every client's stale
+      // localStorage entry gets refetched on next lookup.
       const { hazardsByHole, hazardCoverage, ...courseDataOnly } = item.result_data
       courseDataOnly._source = 'yardage_book'
+      courseDataOnly._sourcePdf = item.pdf_url
 
-      // Upsert, not PATCH — the course may not have a course_cache row yet
-      // (this queue's whole purpose is onboarding courses that aren't cached
-      // yet). PATCH silently no-ops on a missing row, so approving a new
-      // course previously did nothing.
+      let nextVersion = 1
+      try {
+        const cur = await fetch(
+          `${base}/course_cache?cache_key=eq.${encodeURIComponent(item.course_key)}&select=edit_version`,
+          { headers: svcH }
+        )
+        if (cur.ok) {
+          const rows = await cur.json()
+          if (Array.isArray(rows) && rows[0]?.edit_version != null) {
+            nextVersion = Number(rows[0].edit_version) + 1
+          }
+        }
+      } catch {}
+
       const cacheRes = await fetch(`${base}/course_cache?on_conflict=cache_key`, {
         method: 'POST',
         headers: { ...svcH, Prefer: 'resolution=merge-duplicates' },
         body: JSON.stringify({
-          cache_key: item.course_key,
-          course_data: courseDataOnly,
-          source: 'yardage_book',
-          cached_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-          updated_by: requester.id,
+          cache_key:    item.course_key,
+          course_data:  courseDataOnly,
+          source:       'yardage_book',
+          cached_at:    new Date().toISOString(),
+          updated_at:   new Date().toISOString(),
+          updated_by:   requester.id,
+          edit_version: nextVersion,
         }),
       })
-      if (!cacheRes.ok) return json({ error: `Cache update failed: ${await cacheRes.text()}` }, 500)
+      if (!cacheRes.ok) return json({ error: `Cache upsert failed: ${await cacheRes.text()}` }, 500)
 
       if (Array.isArray(hazardsByHole) && hazardsByHole.length) {
         const hzRows = buildHazardRows(hazardsByHole, {
           courseKey: item.course_key,
           pdfUrl: item.pdf_url,
           coverage: hazardCoverage || computeHazardCoverage(hazardsByHole),
-          // Inherit the scorecard's own confidence, same as the direct
-          // upload path (api/course-ai.js) — previously hardcoded 'medium'
-          // regardless of how confident the scorecard parse actually was.
           baseConfidence: courseDataOnly._confidence,
         })
         if (hzRows.length) {
@@ -208,7 +217,7 @@ export default async function handler(req) {
       }
 
       await patch({ status: 'approved', approved_by: requester.id, approved_at: new Date().toISOString() })
-      return json({ ok: true })
+      return json({ ok: true, edit_version: nextVersion })
     }
 
     if (action === 'reject') {
