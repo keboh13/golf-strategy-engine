@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { draftKey, draftHasContent, readDraft, DRAFT_TTL_MS } from './HistoryTab.jsx'
+import { draftKey, draftHasContent, readDraft, DRAFT_TTL_MS, briefPostRound, shouldRestoreDraft } from './HistoryTab.jsx'
 
 const mockStorage = {}
 vi.stubGlobal('localStorage', {
@@ -81,5 +81,43 @@ describe('readDraft', () => {
     mockStorage[draftKey('pine valley')] = JSON.stringify(draft)
     expect(readDraft('Pine Valley')).not.toBeNull()
     expect(readDraft('  PINE VALLEY  ')).not.toBeNull()
+  })
+})
+
+describe('briefPostRound', () => {
+  it('extracts scores/notes/generalNotes from brief', () => {
+    const brief = { postRound: { scores: { 1: 4 }, notes: { 1: 'ok' }, generalNotes: 'fine' } }
+    expect(briefPostRound(brief)).toEqual({ scores: { 1: 4 }, notes: { 1: 'ok' }, generalNotes: 'fine' })
+  })
+  it('returns empty defaults when no postRound', () => {
+    expect(briefPostRound({})).toEqual({ scores: {}, notes: {}, generalNotes: '' })
+  })
+})
+
+describe('shouldRestoreDraft', () => {
+  it('returns false when saved draft is null', () => {
+    expect(shouldRestoreDraft(null, { scores: {}, notes: {}, generalNotes: '' })).toBe(false)
+  })
+  it('returns false when saved draft has no content', () => {
+    expect(shouldRestoreDraft({ scores: {}, notes: {}, generalNotes: '' }, { scores: {}, notes: {}, generalNotes: '' })).toBe(false)
+  })
+  it('returns true when draft has content and brief is empty', () => {
+    const saved = { scores: { 1: 5 }, notes: {}, generalNotes: '', updatedAt: '2026-01-01T00:00:00Z' }
+    expect(shouldRestoreDraft(saved, { scores: {}, notes: {}, generalNotes: '' })).toBe(true)
+  })
+  it('returns true when draft is newer than brief (both have content)', () => {
+    const saved = { scores: { 1: 5, 7: 3 }, notes: {}, generalNotes: '', updatedAt: '2026-07-25T12:00:00Z' }
+    const fromBrief = { scores: { 1: 5 }, notes: {}, generalNotes: '', updatedAt: '2026-07-25T10:00:00Z' }
+    expect(shouldRestoreDraft(saved, fromBrief)).toBe(true)
+  })
+  it('returns false when brief is newer than draft', () => {
+    const saved = { scores: { 1: 5 }, notes: {}, generalNotes: '', updatedAt: '2026-07-25T10:00:00Z' }
+    const fromBrief = { scores: { 1: 5, 7: 3 }, notes: {}, generalNotes: '', updatedAt: '2026-07-25T12:00:00Z' }
+    expect(shouldRestoreDraft(saved, fromBrief)).toBe(false)
+  })
+  it('prefers draft when only draft has a timestamp', () => {
+    const saved = { scores: { 1: 5 }, notes: {}, generalNotes: '', updatedAt: '2026-07-25T12:00:00Z' }
+    const fromBrief = { scores: { 1: 4 }, notes: {}, generalNotes: '' }
+    expect(shouldRestoreDraft(saved, fromBrief)).toBe(true)
   })
 })

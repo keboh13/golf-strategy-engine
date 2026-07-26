@@ -252,18 +252,33 @@ export function readDraft(course) {
   } catch { return null }
 }
 
+export function briefPostRound(brief) {
+  return {
+    scores: brief.postRound?.scores || {},
+    notes:  brief.postRound?.notes  || {},
+    generalNotes: brief.postRound?.generalNotes || '',
+  }
+}
+
+export function shouldRestoreDraft(saved, fromBrief) {
+  if (!saved || !draftHasContent(saved)) return false
+  if (!draftHasContent(fromBrief)) return true
+  if (saved.updatedAt && fromBrief.updatedAt) return saved.updatedAt > fromBrief.updatedAt
+  if (saved.updatedAt) return true
+  return false
+}
+
 function PostRoundEditor({ brief, index, setSavedBriefs }) {
   const [open, setOpen] = useState(false)
-  const [restored, setRestored] = useState(false)
+  const [restored, setRestored] = useState(() => {
+    const saved = readDraft(brief.course)
+    return shouldRestoreDraft(saved, briefPostRound(brief))
+  })
 
   const [draft, setDraft] = useState(() => {
     const saved = readDraft(brief.course)
-    const fromBrief = {
-      scores: brief.postRound?.scores || {},
-      notes:  brief.postRound?.notes  || {},
-      generalNotes: brief.postRound?.generalNotes || '',
-    }
-    if (saved && draftHasContent(saved) && !draftHasContent(fromBrief)) {
+    const fromBrief = briefPostRound(brief)
+    if (shouldRestoreDraft(saved, fromBrief)) {
       return { scores: saved.scores || {}, notes: saved.notes || {}, generalNotes: saved.generalNotes || '' }
     }
     return fromBrief
@@ -273,30 +288,28 @@ function PostRoundEditor({ brief, index, setSavedBriefs }) {
   draftRef.current = draft
 
   useEffect(() => {
-    const saved = readDraft(brief.course)
-    const fromBrief = {
-      scores: brief.postRound?.scores || {},
-      notes:  brief.postRound?.notes  || {},
-      generalNotes: brief.postRound?.generalNotes || '',
-    }
-    if (saved && draftHasContent(saved) && !draftHasContent(fromBrief)) {
-      setRestored(true)
+    if (restored) {
       const timer = setTimeout(() => setRestored(false), 4000)
       return () => clearTimeout(timer)
     }
-  }, [])
+  }, [restored])
 
   useEffect(() => {
     const key = draftKey(brief.course)
-    function handlePageHide() {
+    function flushDraft() {
       try {
         if (draftHasContent(draftRef.current)) {
           localStorage.setItem(key, JSON.stringify({ ...draftRef.current, updatedAt: new Date().toISOString() }))
         }
       } catch {}
     }
-    window.addEventListener('pagehide', handlePageHide)
-    return () => window.removeEventListener('pagehide', handlePageHide)
+    function onVisChange() { if (document.visibilityState === 'hidden') flushDraft() }
+    window.addEventListener('pagehide', flushDraft)
+    window.addEventListener('visibilitychange', onVisChange)
+    return () => {
+      window.removeEventListener('pagehide', flushDraft)
+      window.removeEventListener('visibilitychange', onVisChange)
+    }
   }, [brief.course])
 
   const holesLogged = Object.keys(draft.scores).filter(k => Number.isFinite(draft.scores[k])).length
@@ -319,10 +332,18 @@ function PostRoundEditor({ brief, index, setSavedBriefs }) {
     } catch {}
   }
 
+  function handleToggle() {
+    const wasOpen = open
+    setOpen(o => !o)
+    if (wasOpen && draftHasContent(draftRef.current)) {
+      try { localStorage.removeItem(draftKey(brief.course)) } catch {}
+    }
+  }
+
   return (
     <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 10 }}>
       <button
-        onClick={() => setOpen(o => !o)}
+        onClick={handleToggle}
         style={{
           background: 'transparent', border: 'none', padding: 0, cursor: 'pointer',
           display: 'flex', alignItems: 'center', gap: 6, fontFamily: F, color: C.text,
