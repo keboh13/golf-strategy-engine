@@ -10,6 +10,10 @@
 // SUPABASE_SERVICE_ROLE_KEY.
 
 import { validateAuth, isAdminUser } from './_lib/admin.js'
+import { buildScorecardTeesMessages, buildHazardDesignMessages } from './_lib/pdfParseMessages.js'
+import { computeHazardCoverage, validateHazardDesignBatch } from './_lib/hazardCoverage.js'
+import { buildScorecardDiff } from './_lib/scorecardDiff.js'
+import { parseJsonFromText } from './_lib/extractJson.js'
 
 export const config = { maxDuration: 300 }
 
@@ -19,7 +23,11 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 }
 
-const MODEL = 'claude-haiku-4-5-20251001'  // PDF re-parse — Haiku is ~5–10× faster than Sonnet for structured extraction
+// Scorecard/tees re-parse — mechanical extraction, fast model.
+const MODEL_FAST = 'claude-haiku-4-5-20251001'
+// Hazards/descriptions/visual-diagram re-parse — vision-heavy, full model.
+// Mirrors the split in api/course-ai.js's parsePdfAndPersist.
+const MODEL_QUALITY = 'claude-sonnet-4-6'
 
 function jsonResponse(body, status) {
   return new Response(JSON.stringify(body), {
@@ -36,7 +44,7 @@ function courseKeySlug(name, location) {
   return makeCacheKey(name, location).replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
 }
 
-async function callClaude(messages, maxTokens) {
+async function callClaude(messages, maxTokens, modelOverride) {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not configured on server.')
   const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -46,7 +54,7 @@ async function callClaude(messages, maxTokens) {
       'x-api-key': apiKey,
       'anthropic-version': '2023-06-01',
     },
-    body: JSON.stringify({ model: MODEL, max_tokens: maxTokens, messages }),
+    body: JSON.stringify({ model: modelOverride || MODEL_FAST, max_tokens: maxTokens, messages }),
   })
   if (!res.ok) {
     const err = await res.text().catch(() => '')
@@ -56,102 +64,6 @@ async function callClaude(messages, maxTokens) {
   let text = ''
   for (const block of (data.content || [])) if (block.type === 'text') text += block.text
   return text
-}
-
-function buildReparseMessages(pdfUrl, courseName, location) {
-  return [{
-    role: 'user',
-    content: [
-      { type: 'document', source: { type: 'url', url: pdfUrl } },
-      { type: 'text', text: `This PDF is the official yardage book / scorecard for "${courseName}"${location ? ` in ${location}` : ''}.
-
-Extract EVERY tee option + scorecard + per-hole hazards + per-hole written content + per-hole visual analysis from the hole diagram.
-
-Tees (a scorecard usually prints 3-6 tee sets — Black/Blue/White/Gold/Red/Green/Championship/Ladies/etc.). For EACH tee capture:
-- "name": label as printed
-- "color": lowercase color word if color-coded ("black", "blue", "white", "gold", "red", "green", "silver", "copper"), else null
-- "yardage": total yards (int)
-- "rating": course rating (float) or null
-- "slope": slope (int) or null
-- "par": par total (int) or null
-- "holes": 18 entries {par, yardage, handicap} matching the yardage row for THIS tee. handicap (stroke index) is usually shared across tees.
-
-Also set top-level selectedTee to the LONGEST tee's name, and mirror its yardage/rating/slope/par/holes as the top-level scorecard fields.
-
-For each hole capture:
-- "holeName": caddie nickname if printed (e.g. "Mind the Gap"), else null
-- "description": the full prose paragraph describing the hole, VERBATIM, else null
-- "greenDepth": green depth in yards (e.g. "DEPTH = 31"), integer, else null
-- "visualNotes": 2-4 caddie-eye observations from the hole IMAGE/diagram itself (fairway shape/pinches, green shape & orientation, elevation cues, distance markers visible) as a semicolon-separated string. Complements the prose — capture what the picture shows that the text doesn't. Null if none.
-- "distanceMarkers": array of {label, yards} for sprinkler/landmark distances clearly readable on the diagram. Empty array if none.
-
-{
-  "name": "Full course name",
-  "location": "City, State",
-  "yardage": <int total>,
-  "rating": <float>,
-  "slope": <int>,
-  "par": <int total>,
-  "selectedTee": "Championship",
-  "_confidence": "high|medium|low",
-  "tees": [
-    {"name":"Black","color":"black","yardage":7150,"rating":74.2,"slope":140,"par":72,"holes":[{"par":4,"yardage":410,"handicap":7}, ...18]},
-    {"name":"Blue","color":"blue","yardage":6620,"rating":71.8,"slope":135,"par":72,"holes":[{"par":4,"yardage":382,"handicap":7}, ...18]}
-  ],
-  "holes": [{"par":4,"yardage":379,"handicap":7}, ...all 18],
-  "hazardsByHole": [
-    {"hole":1,"holeName":"Outward Right","description":"This medium-length…","greenDepth":31,"visualNotes":"FW narrows at 240; cross-bunker carved into inside corner; green angled L-R","distanceMarkers":[{"label":"sprinkler to front","yards":62}],"dogleg":"left|right|straight","hazards":[{"type":"bunker","side":"R","carry_yards":235,"notes":"fairway"}],"green_notes":"","recommended_line":""},
-    ...all 18
-  ]
-}
-
-Return ONLY JSON. If parse fails: {"error":"…"}.` },
-    ],
-  }]
-}
-
-// Build a JSON-Patch-ish diff: { field: { current, parsed } } for every field
-// where the new parse differs from what's already stored. Limited to the
-// canonical scorecard fields + hole-level par/yardage/handicap (admin can
-// drill into hazards via the editor).
-function buildScorecardDiff(current, parsed) {
-  const diff = {}
-  const FIELDS = ['name', 'location', 'yardage', 'rating', 'slope', 'par', 'selectedTee']
-  for (const f of FIELDS) {
-    const cur = current?.[f]
-    const next = parsed?.[f]
-    if (next != null && String(cur ?? '') !== String(next ?? '')) {
-      diff[f] = { current: cur ?? null, parsed: next }
-    }
-  }
-  // tees is an array of {name, color, yardage, rating, slope, par, holes[]} —
-  // hand the whole thing over as a single field diff. Editor's accept handler
-  // replaces the current tees[] wholesale.
-  if (Array.isArray(parsed?.tees) && parsed.tees.length > 0) {
-    const curTees = Array.isArray(current?.tees) ? current.tees : []
-    const summarize = t => `${t?.name || '?'}(${t?.yardage ?? '—'}y)`
-    const curSummary = curTees.map(summarize).join(', ') || '—'
-    const nextSummary = parsed.tees.map(summarize).join(', ')
-    if (JSON.stringify(curTees) !== JSON.stringify(parsed.tees)) {
-      diff.tees = { current: curSummary, parsed: nextSummary, _value: parsed.tees }
-    }
-  }
-  const holesDiff = []
-  const curHoles = Array.isArray(current?.holes) ? current.holes : []
-  const newHoles = Array.isArray(parsed?.holes) ? parsed.holes : []
-  for (let i = 0; i < Math.max(curHoles.length, newHoles.length); i++) {
-    const a = curHoles[i] || {}
-    const b = newHoles[i] || {}
-    const fields = {}
-    for (const k of ['par', 'yardage', 'handicap']) {
-      if (b[k] != null && String(a[k] ?? '') !== String(b[k] ?? '')) {
-        fields[k] = { current: a[k] ?? null, parsed: b[k] }
-      }
-    }
-    if (Object.keys(fields).length) holesDiff.push({ hole: i + 1, fields })
-  }
-  if (holesDiff.length) diff.holes = holesDiff
-  return diff
 }
 
 export default async function nodeHandler(nodeReq, nodeRes) {
@@ -478,12 +390,36 @@ async function handleRequest(req) {
       const pdfUrl = current._sourcePdf
       if (!pdfUrl) return jsonResponse({ error: 'No stored PDF for this course. Upload one first.' }, 422)
 
-      const text = await callClaude(buildReparseMessages(pdfUrl, current.name, current.location || ''), 12000)
-      const clean = text.replace(/```json|```/g, '').trim()
-      const m = clean.match(/\{[\s\S]*\}/)
-      if (!m) return jsonResponse({ error: 'No JSON in re-parse response.' }, 502)
-      const parsed = JSON.parse(m[0])
+      // Call 1 — scorecard + tees (fast model). Same split as
+      // api/course-ai.js's parsePdfAndPersist, so a reparse gets the same
+      // reliability as a fresh upload.
+      const scorecardText = await callClaude(
+        buildScorecardTeesMessages(pdfUrl, current.name, current.location || ''), 6000, MODEL_FAST
+      )
+      const scorecardRes = parseJsonFromText(scorecardText)
+      if (!scorecardRes.ok) return jsonResponse({ error: `No JSON in re-parse scorecard response (${scorecardRes.error}).` }, 502)
+      const parsed = scorecardRes.value
       if (parsed.error) return jsonResponse({ error: parsed.error }, 422)
+
+      // Call 2 — hazards + descriptions + visual analysis (full model).
+      // Independent failure: a bad hazard re-parse never blocks the
+      // scorecard diff from being reviewable.
+      let hazardsByHole = []
+      try {
+        const hazardText = await callClaude(
+          buildHazardDesignMessages(pdfUrl, current.name, current.location || ''), 8000, MODEL_QUALITY
+        )
+        const hazardRes = parseJsonFromText(hazardText)
+        if (!hazardRes.ok) throw new Error(`No JSON in re-parse hazard response (${hazardRes.error}).`)
+        const hazardParsed = hazardRes.value
+        if (hazardParsed.error) throw new Error(hazardParsed.error)
+        hazardsByHole = Array.isArray(hazardParsed.hazardsByHole) ? hazardParsed.hazardsByHole : []
+        parsed._hazardValidationIssues = validateHazardDesignBatch(hazardsByHole)
+      } catch (e) {
+        parsed._hazardExtractError = e.message
+      }
+      parsed.hazardsByHole = hazardsByHole
+      parsed.hazardCoverage = computeHazardCoverage(hazardsByHole)
 
       const diff = buildScorecardDiff(current, parsed)
       return jsonResponse({ parsed, diff, pdfUrl }, 200)

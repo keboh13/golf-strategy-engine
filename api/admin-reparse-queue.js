@@ -3,12 +3,15 @@
 // GET    /api/admin-reparse-queue              → list all queue items
 // POST   /api/admin-reparse-queue              → enqueue { courseKey, pdfUrl, courseName, location }
 // PATCH  /api/admin-reparse-queue              → { id, action: 'run'|'approve'|'reject' }
-//   run:     calls /api/admin-course to re-parse the PDF, stores the diff
-//   approve: patches the diff result into course_cache, marks done
+//   run:     calls /api/course-ai's parse-yardage-book-pdf (persist:false) to
+//            re-parse the PDF, stores the raw result for review
+//   approve: upserts the reviewed result into course_cache + course_hole_hazards
 //   reject:  marks item as rejected without updating course_cache
 // DELETE /api/admin-reparse-queue { id }       → remove item from queue
 //
 // Backed by course_reparse_queue table (see schema). Admin-gated.
+
+import { computeHazardCoverage, buildHazardRows } from './_lib/hazardCoverage.js'
 
 export const config = { runtime: 'edge' }
 
@@ -114,15 +117,17 @@ export default async function handler(req) {
       // Mark as running
       await patch({ status: 'running', started_at: new Date().toISOString() })
 
-      // Re-parse the queued PDF via course-ai. `persist: false` returns the
-      // parsed course_data without touching course_cache — the diff lives in
-      // result_data and only the `approve` step writes to the shared cache.
+      // Call the real PDF-parse endpoint (api/course-ai.js's
+      // parse-yardage-book-pdf — the same one the direct admin-upload path
+      // uses). persist:false so this "run" step only produces a result to
+      // review — the queue's own "approve" step is the persistence gate,
+      // not the parse step.
       try {
         const parseRes = await fetch(`${new URL(req.url).origin}/api/course-ai`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            action:     'parse-yardage-book-pdf',
+            action: 'parse-yardage-book-pdf',
             courseName: item.course_name,
             location:   item.location,
             pdf_url:    item.pdf_url,
@@ -141,8 +146,6 @@ export default async function handler(req) {
           await patch({ status: 'error', error_msg: err, finished_at: new Date().toISOString() })
           return json({ error: err }, 502)
         }
-        // course-ai returns { result: <course_data> }. Stash the course_data so
-        // that approve can write it directly into course_cache.course_data.
         const resultData = parsed?.result || parsed
         await patch({
           status:      'pending_approval',
@@ -158,16 +161,14 @@ export default async function handler(req) {
 
     if (action === 'approve') {
       if (!item.result_data) return json({ error: 'No result to approve — run the parse first.' }, 400)
-      // The parse result carries the full course_data (including tees[] and
-      // hazardsByHole). Split it: scorecard-ish fields go into course_cache,
-      // hazards go into course_hole_hazards. Bump edit_version so every
-      // client's stale localStorage entry gets refetched on next lookup.
-      const parsed = item.result_data || {}
-      const hazardsByHole = Array.isArray(parsed.hazardsByHole) ? parsed.hazardsByHole : []
-      const scorecardOnly = { ...parsed }
-      delete scorecardOnly.hazardsByHole
-      scorecardOnly._source = 'yardage_book'
-      scorecardOnly._sourcePdf = item.pdf_url
+
+      // hazardsByHole/hazardCoverage travel alongside the scorecard fields in
+      // result_data but don't belong in course_cache.course_data. Split them
+      // off before writing. Bump edit_version so every client's stale
+      // localStorage entry gets refetched on next lookup.
+      const { hazardsByHole, hazardCoverage, ...courseDataOnly } = item.result_data
+      courseDataOnly._source = 'yardage_book'
+      courseDataOnly._sourcePdf = item.pdf_url
 
       let nextVersion = 1
       try {
@@ -188,7 +189,7 @@ export default async function handler(req) {
         headers: { ...svcH, Prefer: 'resolution=merge-duplicates' },
         body: JSON.stringify({
           cache_key:    item.course_key,
-          course_data:  scorecardOnly,
+          course_data:  courseDataOnly,
           source:       'yardage_book',
           cached_at:    new Date().toISOString(),
           updated_at:   new Date().toISOString(),
@@ -198,24 +199,20 @@ export default async function handler(req) {
       })
       if (!cacheRes.ok) return json({ error: `Cache upsert failed: ${await cacheRes.text()}` }, 500)
 
-      if (hazardsByHole.length) {
-        const hzRows = hazardsByHole
-          .filter(h => h && h.hole)
-          .map(h => ({
-            course_key: item.course_key,
-            hole_ref:   Number(h.hole),
-            hazards:    h,
-            source:     'pdf_vision',
-            image_path: item.pdf_url,
-            confidence: parsed._confidence || 'medium',
-            updated_at: new Date().toISOString(),
-          }))
+      if (Array.isArray(hazardsByHole) && hazardsByHole.length) {
+        const hzRows = buildHazardRows(hazardsByHole, {
+          courseKey: item.course_key,
+          pdfUrl: item.pdf_url,
+          coverage: hazardCoverage || computeHazardCoverage(hazardsByHole),
+          baseConfidence: courseDataOnly._confidence,
+        })
         if (hzRows.length) {
-          await fetch(`${base}/course_hole_hazards?on_conflict=course_key,hole_ref`, {
+          const hzRes = await fetch(`${base}/course_hole_hazards?on_conflict=course_key,hole_ref`, {
             method: 'POST',
             headers: { ...svcH, Prefer: 'resolution=merge-duplicates' },
             body: JSON.stringify(hzRows),
-          }).catch(() => {})
+          })
+          if (!hzRes.ok) console.error(`[course_hole_hazards] approve-time persist failed: ${await hzRes.text().catch(() => '')}`)
         }
       }
 

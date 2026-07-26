@@ -123,12 +123,15 @@ export default function AdminCoursesPanel({ authToken, onEditCourse, onCourseCha
       })
       const conf = result?._confidence || 'medium'
       const teeCount = Array.isArray(result?.tees) ? result.tees.length : 0
-      // Purge the local cache entry so the next Prep/search lookup for this
-      // course picks up the fresh tees + scorecard from the shared DB instead
-      // of a stale localStorage snapshot.
+      const cov = result?.hazardCoverage
+      const covMsg = cov
+        ? cov.covered === cov.total
+          ? ` Hazards: ${cov.covered}/${cov.total} holes.`
+          : ` Hazards: ${cov.covered}/${cov.total} holes — missing ${cov.missingHoles.join(', ')}.`
+        : ''
       removeCachedCourseByKey(c._cacheKey)
       onCourseChanged?.(c._cacheKey)
-      setMsg(`✓ Scorecard updated for ${c.name} — ${teeCount} tee${teeCount === 1 ? '' : 's'} parsed (confidence: ${conf}). Visible to all users.`)
+      setMsg(`✓ Scorecard updated for ${c.name} — ${teeCount} tee${teeCount === 1 ? '' : 's'} parsed (confidence: ${conf}).${covMsg} Visible to all users.`)
       await load()
     } catch (e) {
       setMsg(`Error: ${e.message}`)

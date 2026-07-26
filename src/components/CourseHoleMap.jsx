@@ -85,6 +85,11 @@ export default function CourseHoleMap({
                       // carry-distance rings. Rings are a huge unlock on holes
                       // that only have a tee/pin (contribution or partial OSM)
                       // and no hazards to reference.
+  hazardMappedHoles,  // optional Set<number> — holes with a real hzDesign
+                      // entry (yardage-book vision extraction), regardless of
+                      // whether it found any hazards. Undefined = unknown
+                      // (caller hasn't loaded hazard data yet); don't show
+                      // anything in that case rather than claiming "no data".
 }) {
   const containerRef = useRef(null)
   const mapRef = useRef(null)
@@ -450,6 +455,14 @@ export default function CourseHoleMap({
             {!hasHoleGeometry && (
               <span style={{ fontSize: 10, color: C.amber, borderLeft: `1px solid ${C.border}`, paddingLeft: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                 satellite
+              </span>
+            )}
+            {hazardMappedHoles && !hazardMappedHoles.has(selectedHole) && (
+              <span
+                title="No yardage-book hazard/design data for this hole yet — dogleg, hazards, and notes below are from OSM or unverified sources only."
+                style={{ fontSize: 10, color: C.amber, borderLeft: `1px solid ${C.border}`, paddingLeft: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}
+              >
+                no hazard data
               </span>
             )}
           </div>

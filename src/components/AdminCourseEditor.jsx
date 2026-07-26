@@ -226,6 +226,14 @@ export default function AdminCourseEditor({ course, authToken, onClose, onSaved 
     } else if (field === 'tees' && Array.isArray(value)) {
       // Replace the tees[] state wholesale — server sends the full parsed set.
       setTees(value)
+    } else if (field === 'hazards' && Array.isArray(value)) {
+      // value is the raw hazardsByHole array from the re-parse. Merge onto
+      // each hole's hzDesign by hole number — handleSave already builds its
+      // hazardsByHole payload from h.hzDesign and persists it correctly.
+      setHoles(prev => prev.map((h, i) => {
+        const hz = value.find(z => z?.hole === i + 1)
+        return hz ? { ...h, hzDesign: hz } : h
+      }))
     } else {
       setDraft(prev => ({ ...prev, [field]: value }))
     }
@@ -235,7 +243,7 @@ export default function AdminCourseEditor({ course, authToken, onClose, onSaved 
     if (!reparse?.diff) return
     for (const [field, val] of Object.entries(reparse.diff)) {
       if (field === 'holes') acceptReparseField('holes', val)
-      else if (field === 'tees') acceptReparseField('tees', val._value)
+      else if (field === 'tees' || field === 'hazards') acceptReparseField(field, val._value)
       else acceptReparseField(field, val.parsed)
     }
     setReparse(null)
@@ -461,7 +469,7 @@ function ReparseDiffPanel({ diff, onAcceptField, onAcceptAll, onDismiss }) {
           <strong style={{ color: C.text }}>{field}</strong>
           <span style={{ color: C.textMuted }}>current: {String(val.current ?? '—')}</span>
           <span style={{ color: C.blue }}>parsed: {String(val.parsed ?? '—')}</span>
-          <button style={btnG} onClick={() => onAcceptField(field, field === 'tees' ? val._value : val.parsed)}>Accept</button>
+          <button style={btnG} onClick={() => onAcceptField(field, (field === 'tees' || field === 'hazards') ? val._value : val.parsed)}>Accept</button>
         </div>
       ))}
       {holesDiff.length > 0 && (
