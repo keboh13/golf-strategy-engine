@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { C, F, card, inp, lbl, btnP, btnG } from '../theme.js'
 import { Badge, SectionHead } from '../components/ui.jsx'
 import { deleteSavedPlan, saveRecQuality } from '../lib/supabase.js'
@@ -227,33 +227,123 @@ export default function HistoryTab({
   )
 }
 
-// Structured per-hole capture. 18 tiny score inputs + optional one-line
-// "what went wrong" per hole, plus a general-notes field. Persisted to
-// savedBriefs[index].postRound so getLatestPostRoundForCourse can find it
-// on the next Round Prep for the same course.
-function PostRoundEditor({ brief, index, setSavedBriefs }) {
-  const [open, setOpen] = useState(false)
-  const [draft, setDraft] = useState(() => ({
+export const DRAFT_TTL_MS = 7 * 24 * 60 * 60 * 1000
+
+export function draftKey(course) {
+  return `postRound_draft_${String(course || '').trim().toLowerCase()}`
+}
+
+export function draftHasContent(d) {
+  return (d.scores && Object.keys(d.scores).some(k => Number.isFinite(d.scores[k])))
+    || (d.notes && Object.values(d.notes).some(Boolean))
+    || !!d.generalNotes
+}
+
+export function readDraft(course) {
+  try {
+    const raw = localStorage.getItem(draftKey(course))
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    if (parsed.updatedAt && Date.now() - new Date(parsed.updatedAt).getTime() > DRAFT_TTL_MS) {
+      localStorage.removeItem(draftKey(course))
+      return null
+    }
+    return parsed
+  } catch { return null }
+}
+
+export function briefPostRound(brief) {
+  return {
     scores: brief.postRound?.scores || {},
     notes:  brief.postRound?.notes  || {},
     generalNotes: brief.postRound?.generalNotes || '',
-  }))
+  }
+}
+
+export function shouldRestoreDraft(saved, fromBrief) {
+  if (!saved || !draftHasContent(saved)) return false
+  if (!draftHasContent(fromBrief)) return true
+  if (saved.updatedAt && fromBrief.updatedAt) return saved.updatedAt > fromBrief.updatedAt
+  if (saved.updatedAt) return true
+  return false
+}
+
+function PostRoundEditor({ brief, index, setSavedBriefs }) {
+  const [open, setOpen] = useState(false)
+  const [restored, setRestored] = useState(() => {
+    const saved = readDraft(brief.course)
+    return shouldRestoreDraft(saved, briefPostRound(brief))
+  })
+
+  const [draft, setDraft] = useState(() => {
+    const saved = readDraft(brief.course)
+    const fromBrief = briefPostRound(brief)
+    if (shouldRestoreDraft(saved, fromBrief)) {
+      return { scores: saved.scores || {}, notes: saved.notes || {}, generalNotes: saved.generalNotes || '' }
+    }
+    return fromBrief
+  })
+
+  const draftRef = useRef(draft)
+  draftRef.current = draft
+
+  useEffect(() => {
+    if (restored) {
+      const timer = setTimeout(() => setRestored(false), 4000)
+      return () => clearTimeout(timer)
+    }
+  }, [restored])
+
+  useEffect(() => {
+    const key = draftKey(brief.course)
+    function flushDraft() {
+      try {
+        if (draftHasContent(draftRef.current)) {
+          localStorage.setItem(key, JSON.stringify({ ...draftRef.current, updatedAt: new Date().toISOString() }))
+        }
+      } catch {}
+    }
+    function onVisChange() { if (document.visibilityState === 'hidden') flushDraft() }
+    window.addEventListener('pagehide', flushDraft)
+    window.addEventListener('visibilitychange', onVisChange)
+    return () => {
+      window.removeEventListener('pagehide', flushDraft)
+      window.removeEventListener('visibilitychange', onVisChange)
+    }
+  }, [brief.course])
+
   const holesLogged = Object.keys(draft.scores).filter(k => Number.isFinite(draft.scores[k])).length
   const notesLogged = Object.values(draft.notes).filter(Boolean).length
 
   function persist(next) {
     setDraft(next)
+    draftRef.current = next
     setSavedBriefs(prev => prev.map((bb, j) => j === index ? { ...bb, postRound: next } : bb))
     try {
       const ls = JSON.parse(localStorage.getItem('golf_saved_briefs') || '[]')
       if (ls[index]) { ls[index].postRound = next; localStorage.setItem('golf_saved_briefs', JSON.stringify(ls)) }
     } catch {}
+    try {
+      if (draftHasContent(next)) {
+        localStorage.setItem(draftKey(brief.course), JSON.stringify({ ...next, updatedAt: new Date().toISOString() }))
+      } else {
+        localStorage.removeItem(draftKey(brief.course))
+      }
+    } catch {}
+  }
+
+  function handleToggle() {
+    const wasOpen = open
+    setOpen(o => !o)
+    if (wasOpen && draftHasContent(draftRef.current)) {
+      try { localStorage.removeItem(draftKey(brief.course)) } catch {}
+    }
   }
 
   return (
     <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 10 }}>
       <button
-        onClick={() => setOpen(o => !o)}
+        onClick={handleToggle}
         style={{
           background: 'transparent', border: 'none', padding: 0, cursor: 'pointer',
           display: 'flex', alignItems: 'center', gap: 6, fontFamily: F, color: C.text,
@@ -267,6 +357,11 @@ function PostRoundEditor({ brief, index, setSavedBriefs }) {
         )}
         <span style={{ fontSize: 12, color: C.textMuted }}>{open ? '▾' : '▸'}</span>
       </button>
+      {restored && (
+        <p style={{ fontSize: 11, color: C.green, margin: '4px 0 0' }}>
+          Restored unsaved feedback
+        </p>
+      )}
       {open && (
         <div style={{ marginTop: 10 }}>
           <p style={{ fontSize: 11, color: C.textFaint, margin: '0 0 8px' }}>
