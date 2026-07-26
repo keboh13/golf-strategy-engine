@@ -5,6 +5,8 @@
 //   SUPABASE_SERVICE_ROLE_KEY — from Supabase project settings (secret, never expose to browser)
 //   RATE_LIMIT_PER_DAY       — optional, defaults to 20
 
+import { CORS_HEADERS, jsonResponse } from './_lib/middleware.js'
+
 export const config = { runtime: 'edge' }
 
 // Phase marker helpers — duplicated here (rather than imported from src/lib)
@@ -33,12 +35,6 @@ function recordPhaseDurations({ startedAt, endedAt, markers = [] }) {
   }
   out[prevId] = Math.max(0, endedAt - prevTs)
   return out
-}
-
-const CORS_HEADERS = {
-  'Access-Control-Allow-Origin':  process.env.ALLOWED_ORIGIN || '*',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
 }
 
 const DAILY_LIMIT = parseInt(process.env.RATE_LIMIT_PER_DAY || '20', 10)

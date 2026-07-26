@@ -11,32 +11,18 @@
 //
 // Backed by course_reparse_queue table (see schema). Admin-gated.
 
+import { validateAuth, isAdminUser } from './_lib/admin.js'
+import { corsHeaders } from './_lib/middleware.js'
 import { computeHazardCoverage, buildHazardRows } from './_lib/hazardCoverage.js'
 
 export const config = { runtime: 'edge' }
 
-const CORS_HEADERS = {
-  'Access-Control-Allow-Origin':  process.env.ALLOWED_ORIGIN || '*',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-  'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
-}
+const CORS_HEADERS = corsHeaders('GET, POST, PATCH, DELETE, OPTIONS')
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
     status, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
   })
-}
-
-async function isAdmin(supabaseUrl, svcKey, userId) {
-  const [a, r] = await Promise.all([
-    fetch(`${supabaseUrl}/rest/v1/admins?user_id=eq.${userId}&select=user_id&limit=1`,
-      { headers: { apikey: svcKey, Authorization: `Bearer ${svcKey}` } }),
-    fetch(`${supabaseUrl}/rest/v1/user_roles?user_id=eq.${userId}&role=in.(admin,owner)&select=user_id&limit=1`,
-      { headers: { apikey: svcKey, Authorization: `Bearer ${svcKey}` } }),
-  ])
-  const ra = a.ok ? await a.json() : []
-  const rr = r.ok ? await r.json() : []
-  return (Array.isArray(ra) && ra.length > 0) || (Array.isArray(rr) && rr.length > 0)
 }
 
 export default async function handler(req) {
@@ -46,15 +32,9 @@ export default async function handler(req) {
   const svcKey      = process.env.SUPABASE_SERVICE_ROLE_KEY
   if (!supabaseUrl || !svcKey) return json({ error: 'Server not configured.' }, 500)
 
-  const token = (req.headers.get('Authorization') || '').replace('Bearer ', '')
-  if (!token) return json({ error: 'Unauthorized' }, 401)
-
-  const userRes = await fetch(`${supabaseUrl}/auth/v1/user`, {
-    headers: { Authorization: `Bearer ${token}`, apikey: svcKey },
-  })
-  if (!userRes.ok) return json({ error: 'Invalid or expired session.' }, 401)
-  const requester = await userRes.json()
-  if (!(await isAdmin(supabaseUrl, svcKey, requester.id))) return json({ error: 'Forbidden — admin access only.' }, 403)
+  const userId = await validateAuth(req)
+  if (!userId) return json({ error: 'Unauthorized' }, 401)
+  if (!(await isAdminUser(userId))) return json({ error: 'Forbidden — admin access only.' }, 403)
 
   const svcH = { apikey: svcKey, Authorization: `Bearer ${svcKey}`, 'Content-Type': 'application/json' }
   const base  = `${supabaseUrl}/rest/v1`

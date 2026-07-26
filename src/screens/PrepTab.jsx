@@ -1,3 +1,4 @@
+import PlanRenderer from '../components/PlanRenderer.jsx'
 import { rollupConfidence } from '../lib/recommendation/confidence.js'
 import { validateCourseTotals } from '../lib/recommendation/courseValidation.js'
 import { extractGreenForHole, mergeGreen } from '../lib/greenGeometry.js'
@@ -14,6 +15,7 @@ import CourseSearch from '../components/CourseSearch.jsx'
 import ScorecardPreview from '../components/ScorecardPreview.jsx'
 import WeatherPanel from '../components/WeatherPanel.jsx'
 import BriefRating from '../components/BriefRating.jsx'
+import { usePrepContext } from '../lib/PrepContext.js'
 
 const PREP_STEPS = [
   { num: 1, label: 'Select Course',    icon: '🔍' },
@@ -22,42 +24,36 @@ const PREP_STEPS = [
   { num: 4, label: 'Generate Report',  icon: '⚡' },
 ]
 
-export default function PrepTab({
-  isMobile,
-  session,
-  user,
-  lastRecLogId,
-  prepStep, setPrepStep,
-  course, setCourse,
-  coords, setCoords,
-  teeTime, setTeeTime,
-  teeDate, setTeeDate,
-  pace, setPace,
-  timezone,
-  weather, setWeather,
-  weatherLoading, setWeatherLoading,
-  plan, planLoading, planPhase, planError, planValidationBanner,
-  planStyle, setPlanStyle,
-  planView, setPlanView,
-  enriching, enrichStatus,
-  enrichProgress = { states: {}, startsAt: {}, endsAt: {}, errors: {} },
-  genProgress    = { states: {}, startsAt: {}, endsAt: {}, errors: {} },
-  selectedModel, setSelectedModel,
-  copied,
-  currentHole, setCurrentHole,
-  holeScores, setScore,
-  displayGeo,
-  contributedHoleSet,
-  clubs,
-  parsedHoles,
-  generate, cancelGenerate,
-  copyPlan, printPlan,
-  applyScorecard, resetPrep,
-  courseSearchResetKey = 0,
-  renderPlan,
-  handleHoleContribution,
-  setTab, setExpandedBrief,
-}) {
+const EMPTY_PROGRESS = { states: {}, startsAt: {}, endsAt: {}, errors: {} }
+
+export default function PrepTab() {
+  const {
+    isMobile, session, user, lastRecLogId,
+    prepStep, setPrepStep,
+    course, setCourse, coords, setCoords,
+    teeTime, setTeeTime, teeDate, setTeeDate,
+    pace, setPace, timezone,
+    weather, setWeather, weatherLoading, setWeatherLoading,
+    plan, planLoading, planPhase, planError, planValidationBanner,
+    planStyle, setPlanStyle, planView, setPlanView,
+    enriching, enrichStatus,
+    enrichProgress: enrichProgressRaw,
+    genProgress: genProgressRaw,
+    selectedModel, setSelectedModel,
+    copied, currentHole, setCurrentHole,
+    holeScores, setScore,
+    displayGeo, contributedHoleSet,
+    clubs, parsedHoles,
+    generate, cancelGenerate,
+    copyPlan, printPlan,
+    applyScorecard, resetPrep,
+    courseSearchResetKey: courseSearchResetKeyRaw,
+    handleHoleContribution,
+    setTab, setExpandedBrief,
+  } = usePrepContext()
+  const enrichProgress = enrichProgressRaw || EMPTY_PROGRESS
+  const genProgress = genProgressRaw || EMPTY_PROGRESS
+  const courseSearchResetKey = courseSearchResetKeyRaw ?? 0
   return (
     <div>
       <SectionHead title="Round Prep" sub="Set up your round step by step" />
@@ -356,7 +352,7 @@ export default function PrepTab({
               </div>
               {plan && (
                 <div style={{ textAlign: 'left' }}>
-                  {renderPlan(plan)}
+                  <PlanRenderer text={plan} />
                   <span style={{ display: 'inline-block', width: 7, height: 15, background: C.accent, animation: 'blink 0.8s step-end infinite', marginLeft: 2, verticalAlign: 'middle' }} />
                 </div>
               )}
@@ -444,8 +440,8 @@ export default function PrepTab({
                   )
                 })()}
                 <div style={card}>
-                  {currentHole === 0 && parsedHoles.preamble && <div style={{ marginBottom: 16, paddingBottom: 12, borderBottom: `1px solid ${C.border}` }}>{renderPlan(parsedHoles.preamble)}</div>}
-                  {renderPlan(parsedHoles.holes[currentHole]?.content || '')}
+                  {currentHole === 0 && parsedHoles.preamble && <div style={{ marginBottom: 16, paddingBottom: 12, borderBottom: `1px solid ${C.border}` }}><PlanRenderer text={parsedHoles.preamble} /></div>}
+                  <PlanRenderer text={parsedHoles.holes[currentHole]?.content || ''} />
                   {(() => {
                     const num = parsedHoles.holes[currentHole]?.num
                     if (num == null || !coords?.lat) return null
@@ -506,25 +502,25 @@ export default function PrepTab({
                   <button style={{ ...btnG, flex: 1, opacity: currentHole === 0 ? 0.4 : 1, textAlign: 'center' }} disabled={currentHole === 0} onClick={() => setCurrentHole(h => Math.max(0, h - 1))}>← Hole {parsedHoles.holes[currentHole - 1]?.num || ''}</button>
                   <button style={{ ...btnG, flex: 1, opacity: currentHole >= parsedHoles.holes.length - 1 ? 0.4 : 1, textAlign: 'center' }} disabled={currentHole >= parsedHoles.holes.length - 1} onClick={() => setCurrentHole(h => Math.min(parsedHoles.holes.length - 1, h + 1))}>Hole {parsedHoles.holes[currentHole + 1]?.num || ''} →</button>
                 </div>
-                {parsedHoles.postamble.trim() && <div style={{ ...card, marginTop: 12 }}>{renderPlan(parsedHoles.postamble)}</div>}
+                {parsedHoles.postamble.trim() && <div style={{ ...card, marginTop: 12 }}><PlanRenderer text={parsedHoles.postamble} /></div>}
               </div>
             ) : parsedHoles.holes.length > 0 ? (
               <div>
-                {parsedHoles.preamble.trim() && <div style={{ ...card, marginBottom: 12 }}>{renderPlan(parsedHoles.preamble)}</div>}
+                {parsedHoles.preamble.trim() && <div style={{ ...card, marginBottom: 12 }}><PlanRenderer text={parsedHoles.preamble} /></div>}
                 {parsedHoles.holes.map((h) => {
                   const osmGreen = extractGreenForHole(displayGeo.geojson, h.num)
                   return (
                     <div key={h.num} style={{ ...card, marginBottom: 12 }}>
-                      {renderPlan(h.content)}
+                      <PlanRenderer text={h.content} />
                       <GreenView green={mergeGreen(h.green, osmGreen)} holeNum={h.num} />
                     </div>
                   )
                 })}
-                {parsedHoles.postamble.trim() && <div style={{ ...card, marginTop: 0 }}>{renderPlan(parsedHoles.postamble)}</div>}
+                {parsedHoles.postamble.trim() && <div style={{ ...card, marginTop: 0 }}><PlanRenderer text={parsedHoles.postamble} /></div>}
               </div>
             ) : (
               <div style={card}>
-                {renderPlan(plan)}
+                <PlanRenderer text={plan} />
               </div>
             )}
           </>)}

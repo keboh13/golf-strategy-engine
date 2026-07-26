@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { C, F, card, inp, lbl, btnP, btnG } from '../theme.js'
 import { Badge, SectionHead } from '../components/ui.jsx'
 import { deleteSavedPlan, saveRecQuality } from '../lib/supabase.js'
+import PlanRenderer from '../components/PlanRenderer.jsx'
 
 // ── Star rating widget ────────────────────────────────────────────────────────
 // Renders 5 stars; hover preview, click to commit. After commit the stars are
@@ -57,7 +58,6 @@ export default function HistoryTab({
   setTab,
   setPrepStep,
   setPlan,
-  renderPlan,
 }) {
   // Per-brief rating state: { [rec_log_id]: { value: 1-5, saving: bool, saved: bool, error: '' } }
   const [ratings, setRatings] = useState({})
@@ -156,7 +156,7 @@ export default function HistoryTab({
                       <button style={btnG} onClick={() => { setPlan(b.plan); setTab('prep'); setPrepStep(4) }}>Open in Prep →</button>
                     </div>
                     <div style={{ background: C.bgInput, borderRadius: 10, padding: '16px 20px', maxHeight: 500, overflowY: 'auto' }}>
-                      {renderPlan(b.plan)}
+                      <PlanRenderer text={b.plan} />
                     </div>
                   </div>
                 )}

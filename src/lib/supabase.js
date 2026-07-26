@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import { cacheKey as makeCacheKey } from './courseCache.js'
 
 const SUPABASE_URL  = import.meta.env.VITE_SUPABASE_URL  || ''
 const SUPABASE_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY || ''
@@ -216,9 +217,6 @@ export async function deleteCachedCourseDB(name, location) {
   if (error) throw error
 }
 
-function makeCacheKey(name, location) {
-  return `${(name || '').toLowerCase().trim()}|${(location || '').toLowerCase().trim()}`
-}
 
 // ── Course hole hazards ──────────────────────────────────────────────────────
 

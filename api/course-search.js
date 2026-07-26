@@ -2,20 +2,9 @@
 // Moves the paid API key server-side so it's never exposed in the browser.
 // Required env var: GOLF_COURSE_API_KEY
 
+import { CORS_HEADERS, jsonResponse } from './_lib/middleware.js'
+
 export const config = { runtime: 'edge' }
-
-const CORS_HEADERS = {
-  'Access-Control-Allow-Origin':  process.env.ALLOWED_ORIGIN || '*',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-}
-
-function jsonResponse(body, status) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-  })
-}
 
 async function validateAuth(req) {
   const authHeader = req.headers.get('Authorization') || ''

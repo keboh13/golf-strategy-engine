@@ -30,13 +30,19 @@ export async function isAdminUser(userId) {
   const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
   if (!supabaseUrl || !supabaseServiceKey) return false
   try {
-    const res = await fetch(
-      `${supabaseUrl}/rest/v1/admins?user_id=eq.${userId}&select=user_id&limit=1`,
-      { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` } }
-    )
-    if (!res.ok) return false
-    const rows = await res.json()
-    return Array.isArray(rows) && rows.length > 0
+    const [adminsRes, rolesRes] = await Promise.all([
+      fetch(
+        `${supabaseUrl}/rest/v1/admins?user_id=eq.${userId}&select=user_id&limit=1`,
+        { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` } }
+      ),
+      fetch(
+        `${supabaseUrl}/rest/v1/user_roles?user_id=eq.${userId}&role=in.(admin,owner)&select=user_id&limit=1`,
+        { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` } }
+      ),
+    ])
+    const admins = adminsRes.ok ? await adminsRes.json() : []
+    const roles = rolesRes.ok ? await rolesRes.json() : []
+    return (Array.isArray(admins) && admins.length > 0) || (Array.isArray(roles) && roles.length > 0)
   } catch {
     return false
   }
