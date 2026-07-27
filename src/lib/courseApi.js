@@ -275,6 +275,24 @@ export async function adminDeleteCourse(authToken, { course_key }) {
   return data
 }
 
+// Admin-only: remove PDF + hazards from a course. Atomically clears PDF
+// storage objects, wipes PDF-related fields from course_data, deletes hazard
+// rows, and bumps edit_version. (#160, #165)
+export async function adminRemovePdf(authToken, { course_key }) {
+  if (!course_key) throw new Error('Missing course_key')
+  const res = await fetch('/api/admin-course', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+    },
+    body: JSON.stringify({ action: 'remove-pdf', course_key }),
+  })
+  const data = await res.json()
+  if (!res.ok || data.error) throw new Error(data.error || `remove-pdf failed (HTTP ${res.status})`)
+  return data
+}
+
 // Admin-only: re-run Claude vision parse against the course's stored PDF.
 // Returns { parsed, diff, pdfUrl } — admin reviews diff, accepts selected
 // fields via adminUpdateMetadata.

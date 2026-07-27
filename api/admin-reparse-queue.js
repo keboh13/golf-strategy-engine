@@ -36,6 +36,9 @@ export default async function handler(req) {
   if (!userId) return json({ error: 'Unauthorized' }, 401)
   if (!(await isAdminUser(userId))) return json({ error: 'Forbidden — admin access only.' }, 403)
 
+  // Extract the caller's Bearer token for forwarded requests (#164)
+  const token = (req.headers.get('Authorization') || '').replace('Bearer ', '')
+
   const svcH = { apikey: svcKey, Authorization: `Bearer ${svcKey}`, 'Content-Type': 'application/json' }
   const base  = `${supabaseUrl}/rest/v1`
 
@@ -65,7 +68,7 @@ export default async function handler(req) {
         course_name:  courseName || courseKey,
         location:     location   || '',
         status:       'pending',
-        submitted_by: requester.id,
+        submitted_by: userId,
       }),
     })
     if (!insertRes.ok) return json({ error: `Enqueue failed: ${await insertRes.text()}` }, 500)
@@ -150,20 +153,7 @@ export default async function handler(req) {
       courseDataOnly._source = 'yardage_book'
       courseDataOnly._sourcePdf = item.pdf_url
 
-      let nextVersion = 1
-      try {
-        const cur = await fetch(
-          `${base}/course_cache?cache_key=eq.${encodeURIComponent(item.course_key)}&select=edit_version`,
-          { headers: svcH }
-        )
-        if (cur.ok) {
-          const rows = await cur.json()
-          if (Array.isArray(rows) && rows[0]?.edit_version != null) {
-            nextVersion = Number(rows[0].edit_version) + 1
-          }
-        }
-      } catch {}
-
+      // Upsert course data without edit_version to avoid read-then-write race (#162)
       const cacheRes = await fetch(`${base}/course_cache?on_conflict=cache_key`, {
         method: 'POST',
         headers: { ...svcH, Prefer: 'resolution=merge-duplicates' },
@@ -173,11 +163,24 @@ export default async function handler(req) {
           source:       'yardage_book',
           cached_at:    new Date().toISOString(),
           updated_at:   new Date().toISOString(),
-          updated_by:   requester.id,
-          edit_version: nextVersion,
+          updated_by:   userId,
         }),
       })
       if (!cacheRes.ok) return json({ error: `Cache upsert failed: ${await cacheRes.text()}` }, 500)
+
+      // Atomically bump edit_version via RPC (#162)
+      let nextVersion = 1
+      try {
+        const rpcRes = await fetch(`${supabaseUrl}/rest/v1/rpc/increment_edit_version`, {
+          method: 'POST',
+          headers: { ...svcH },
+          body: JSON.stringify({ p_cache_key: item.course_key }),
+        })
+        if (rpcRes.ok) {
+          const rpcData = await rpcRes.json()
+          if (typeof rpcData === 'number') nextVersion = rpcData
+        }
+      } catch {}
 
       if (Array.isArray(hazardsByHole) && hazardsByHole.length) {
         const hzRows = buildHazardRows(hazardsByHole, {
@@ -196,12 +199,12 @@ export default async function handler(req) {
         }
       }
 
-      await patch({ status: 'approved', approved_by: requester.id, approved_at: new Date().toISOString() })
+      await patch({ status: 'approved', approved_by: userId, approved_at: new Date().toISOString() })
       return json({ ok: true, edit_version: nextVersion })
     }
 
     if (action === 'reject') {
-      await patch({ status: 'rejected', approved_by: requester.id, approved_at: new Date().toISOString() })
+      await patch({ status: 'rejected', approved_by: userId, approved_at: new Date().toISOString() })
       return json({ ok: true })
     }
 
