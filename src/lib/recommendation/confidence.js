@@ -57,7 +57,7 @@ export function holeConfidence(course, hole) {
   const src = pickHoleSource(course, hole)
   const rank = sourceRank(src)
   const overall = confidenceLabel(rank)
-  const hasHazards = !!(hole?.osmDesign?.hazards?.length || hole?.hzDesign?.hazards?.length || hole?.webDesign?.water || hole?.webDesign?.bunkers)
+  const hasHazards = !!(hole?.osmDesign?.hazards?.length || hole?.hzDesign?.hazards?.length || hole?.webDesign?.hazards?.length || hole?.webDesign?.water || hole?.webDesign?.bunkers)
   return {
     source: src,
     overall,

@@ -8,7 +8,7 @@ import { validateAuth, isAdminUser } from './_lib/admin.js'
 import { CORS_HEADERS, jsonResponse } from './_lib/middleware.js'
 import { parseJsonFromText } from './_lib/extractJson.js'
 import { buildScorecardTeesMessages, buildHazardDesignMessages } from './_lib/pdfParseMessages.js'
-import { computeHazardCoverage, validateHazardDesignBatch, buildHazardRows } from './_lib/hazardCoverage.js'
+import { computeHazardCoverage, validateHazardDesignBatch, validateHazardPlausibility, buildHazardRows } from './_lib/hazardCoverage.js'
 
 export const config = { maxDuration: 300 }
 
@@ -168,10 +168,16 @@ Efficiency (this is the hot path — users are waiting):
 
 For EACH hole (1-18), extract ONLY what's actually stated in the search results:
 - Dogleg direction (left, right, or straight)
-- Water hazards and their position relative to the fairway/green (left, right, front, etc.)
-- Key bunker positions near the green (greenside left, greenside right, front, etc.)
-- Whether there is OB and which side
+- All hazards (water, bunkers, OB, trees, native areas) as structured objects
 - Notable green features (severely sloped, multi-tier, island green, etc.)
+
+For each hazard, create a structured object with:
+- "type": "bunker"|"water"|"creek"|"native"|"OB"|"trees"
+- "side": "L"|"R"|"C"|"front"|"back"
+- "category": "greenside"|"fairway"|"tee" (where in the hole architecture)
+- "carry_yards": distance in yards if mentioned, otherwise null
+- "position_description": caddie-style positional description from the source text, or null
+- "notes": short positional label
 
 CRITICAL: Include ONLY information you actually found. Any hole with no verified detail must be null. Do NOT guess or fabricate — accuracy over completeness.
 
@@ -180,7 +186,7 @@ Return ONLY this JSON (no markdown):
   "course": "Full course name",
   "source": "URL where you found the most detail",
   "holes": [
-    {"hole":1,"dogleg":"left|right|straight|null","water":"description or null","bunkers":"description or null","ob":"left|right|both|null","green_notes":"description or null"},
+    {"hole":1,"dogleg":"left|right|straight|null","hazards":[{"type":"water","side":"L","category":"fairway","carry_yards":null,"position_description":"water left of fairway","notes":"left side"}],"green_notes":"description or null"},
     ...all 18 holes, use null for any hole you cannot find info about
   ]
 }
@@ -226,7 +232,10 @@ function buildHazardExtractMessages(holeNumber, imageRef) {
 Identify every hazard visible on the diagram. For each hazard set:
 - "type": one of "bunker" | "water" | "creek" | "native" | "OB" | "trees"
 - "side": "L" | "R" | "C" | "front" | "back" (where C = centerline, in play)
+- "category": "greenside" | "fairway" | "tee" — where in the hole architecture the hazard lives
 - "carry_yards": carry distance from the back tee if labeled on the diagram, otherwise null
+- "distances_by_tee": object mapping tee names to distances (e.g. {"blue": 230}), only when labeled. Omit or {} if not labeled.
+- "position_description": caddie-style positional description (e.g. "fairway bunkers on right side ~230 yards from blue tees"). null if not determinable.
 - "notes": short label or position note (e.g. "fairway 240-260", "greenside")
 
 Also identify:
@@ -238,7 +247,7 @@ Return ONLY this JSON:
 {
   "hole": ${holeNumber},
   "dogleg": "left|right|straight",
-  "hazards": [{"type":"bunker","side":"R","carry_yards":235,"notes":"fairway"}],
+  "hazards": [{"type":"bunker","side":"R","category":"fairway","carry_yards":235,"distances_by_tee":{"blue":230},"position_description":"fairway bunker right side ~235 yards","notes":"fairway"}],
   "green_notes": "",
   "recommended_line": ""
 }` },
@@ -464,16 +473,61 @@ async function handleRequest(req) {
   }
 
   async function parsePdfAndPersist(pdfUrl) {
-    const parsed = await parseAndPersistScorecard(pdfUrl)
-    const hazardResult = await parseAndPersistHazards(pdfUrl, parsed._confidence)
-    parsed.hazardCoverage = hazardResult.coverage
-    // Raw hazardsByHole travels with the response (not just the coverage
-    // summary) so a caller that deferred persistence (persist:false — the
-    // admin reparse queue's "run" step) can upsert it itself once approved.
-    parsed.hazardsByHole = hazardResult.hazardsByHole || []
-    if (hazardResult.validationIssues?.length) parsed._hazardValidationIssues = hazardResult.validationIssues
-    if (hazardResult.persistError) parsed._hazardPersistError = hazardResult.persistError
-    if (hazardResult.extractError) parsed._hazardExtractError = hazardResult.extractError
+    // Run scorecard and hazard extraction concurrently. If scorecard fails,
+    // hazards still run (and vice versa). This decouples the two pipelines so
+    // a bad scorecard (common with unusual PDF layouts) doesn't block the
+    // more reliable hazard extraction.
+    const [scorecardResult, hazardResult] = await Promise.allSettled([
+      parseAndPersistScorecard(pdfUrl),
+      parseAndPersistHazards(pdfUrl, 'medium'),  // default confidence; updated below if scorecard succeeds
+    ])
+
+    let parsed
+    if (scorecardResult.status === 'fulfilled') {
+      parsed = scorecardResult.value
+    } else {
+      // Scorecard failed — build a minimal result so the response still
+      // carries hazard data and the error message.
+      console.error(`[scorecard] parse failed: ${scorecardResult.reason?.message}`)
+      parsed = {
+        name: courseName,
+        location: location || null,
+        _confidence: 'low',
+        _scorecardError: scorecardResult.reason?.message || 'Scorecard parse failed',
+        _sourcePdf: pdfUrl,
+      }
+    }
+
+    if (hazardResult.status === 'fulfilled') {
+      const hr = hazardResult.value
+      parsed.hazardCoverage = hr.coverage
+      parsed.hazardsByHole = hr.hazardsByHole || []
+      if (hr.validationIssues?.length) parsed._hazardValidationIssues = hr.validationIssues
+      if (hr.persistError) parsed._hazardPersistError = hr.persistError
+      if (hr.extractError) parsed._hazardExtractError = hr.extractError
+    } else {
+      console.error(`[hazard-design] parse failed: ${hazardResult.reason?.message}`)
+      parsed.hazardCoverage = computeHazardCoverage([])
+      parsed.hazardsByHole = []
+      parsed._hazardExtractError = hazardResult.reason?.message || 'Hazard extraction failed'
+    }
+
+    // Post-step: plausibility cross-check between scorecard and hazards.
+    // Runs after both pipelines complete so it can compare hazard distances
+    // against hole lengths from the scorecard.
+    const scorecardHoles = Array.isArray(parsed.holes) ? parsed.holes : []
+    const hazardsByHole = parsed.hazardsByHole || []
+    if (scorecardHoles.length && hazardsByHole.length) {
+      const plausibilityIssues = validateHazardPlausibility(hazardsByHole, scorecardHoles)
+      if (plausibilityIssues.length) {
+        parsed._hazardPlausibilityIssues = plausibilityIssues
+        // Downgrade confidence if many plausibility issues
+        if (plausibilityIssues.length > 3 && parsed._confidence !== 'low') {
+          parsed._confidence = 'low'
+        }
+      }
+    }
+
     return parsed
   }
 

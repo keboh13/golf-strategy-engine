@@ -128,9 +128,19 @@ function buildHoleLine(i, h, ctx) {
   } else if (h.webDesign) {
     const parts = []
     if (h.webDesign.dogleg && h.webDesign.dogleg !== 'straight') parts.push(`dogleg ${h.webDesign.dogleg}`)
-    if (h.webDesign.water) parts.push(`water: ${h.webDesign.water}`)
-    if (h.webDesign.bunkers) parts.push(`bunkers: ${h.webDesign.bunkers}`)
-    if (h.webDesign.ob) parts.push(`OB ${h.webDesign.ob}`)
+    // Support both structured hazards array and legacy loose-string fields
+    if (Array.isArray(h.webDesign.hazards) && h.webDesign.hazards.length) {
+      parts.push('hazards: ' + h.webDesign.hazards.map(z => {
+        const carry = z.carry_yards ? ` carry ${z.carry_yards}y` : ''
+        const desc = z.position_description ? ` (${z.position_description})` : (z.notes ? ` (${z.notes})` : '')
+        return `${z.type} ${z.side}${carry}${desc}`
+      }).join(', '))
+    } else {
+      // Legacy loose-string fields for backward compat with cached data
+      if (h.webDesign.water) parts.push(`water: ${h.webDesign.water}`)
+      if (h.webDesign.bunkers) parts.push(`bunkers: ${h.webDesign.bunkers}`)
+      if (h.webDesign.ob) parts.push(`OB ${h.webDesign.ob}`)
+    }
     if (h.webDesign.green_notes) parts.push(`green: ${h.webDesign.green_notes}`)
     if (parts.length) designStr = ` | Design (web search — use with moderate confidence): ${parts.join('; ')}`
   }
@@ -143,8 +153,8 @@ function buildHoleLine(i, h, ctx) {
     if (Array.isArray(hz.hazards) && hz.hazards.length) {
       parts.push('hazards: ' + hz.hazards.map(z => {
         const carry = z.carry_yards ? ` carry ${z.carry_yards}y` : ''
-        const note = z.notes ? ` (${z.notes})` : ''
-        return `${z.type} ${z.side}${carry}${note}`
+        const desc = z.position_description ? ` (${z.position_description})` : (z.notes ? ` (${z.notes})` : '')
+        return `${z.type} ${z.side}${carry}${desc}`
       }).join(', '))
     }
     if (hz.greenDepth) parts.push(`green depth ${hz.greenDepth}y`)
