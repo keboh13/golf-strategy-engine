@@ -141,7 +141,7 @@ async function handleRequest(req) {
       }
 
       const cur = await supabaseRest(
-        `course_cache?cache_key=eq.${encodeURIComponent(course_key)}&select=course_data,edit_version`,
+        `course_cache?cache_key=eq.${encodeURIComponent(course_key)}&select=course_data`,
         { method: 'GET' }
       )
       if (!cur.ok) return jsonResponse({ error: 'Course not found.' }, 404)
@@ -149,8 +149,8 @@ async function handleRequest(req) {
       if (!rows?.length) return jsonResponse({ error: 'Course not found.' }, 404)
 
       const merged = { ...(rows[0].course_data || {}), ...patch }
-      const nextVersion = Number(rows[0].edit_version || 0) + 1
 
+      // Write course_data without edit_version first
       const upd = await supabaseRest(
         `course_cache?cache_key=eq.${encodeURIComponent(course_key)}`,
         {
@@ -160,13 +160,39 @@ async function handleRequest(req) {
             course_data: merged,
             updated_at: new Date().toISOString(),
             updated_by: ownerId,
-            edit_version: nextVersion,
           }),
         }
       )
       if (!upd.ok) {
         const err = await upd.text().catch(() => '')
         return jsonResponse({ error: `course_cache update failed: ${err}` }, 500)
+      }
+
+      // Atomically bump edit_version via RPC to avoid read-then-write race (#162)
+      let nextVersion
+      try {
+        const rpcRes = await fetch(`${supabaseUrl}/rest/v1/rpc/increment_edit_version`, {
+          method: 'POST',
+          headers: { ...svcHeaders, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ p_cache_key: course_key }),
+        })
+        if (rpcRes.ok) {
+          const rpcData = await rpcRes.json()
+          nextVersion = typeof rpcData === 'number' ? rpcData : null
+        }
+      } catch {}
+      // Fallback: read the version we just wrote if RPC unavailable
+      if (nextVersion == null) {
+        const updRows = await upd.json().catch(() => [])
+        nextVersion = Number(updRows?.[0]?.edit_version || 0) + 1
+        await supabaseRest(
+          `course_cache?cache_key=eq.${encodeURIComponent(course_key)}`,
+          {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ edit_version: nextVersion }),
+          }
+        ).catch(() => {})
       }
 
       // Optional batch hazard upsert
@@ -190,7 +216,104 @@ async function handleRequest(req) {
         }
       }
 
-      return jsonResponse({ course_data: merged, edit_version: nextVersion }, 200)
+      return jsonResponse({ course_data: merged, edit_version: nextVersion || 0 }, 200)
+    }
+
+    // ── remove-pdf ─────────────────────────────────────────────────────────
+    // Atomically clear PDF storage objects, wipe _sourcePdf / hazardsByHole /
+    // _sourceHtml / _discoveryTitle from course_data, delete hazard rows from
+    // course_hole_hazards, and bump edit_version. Uses service role key so
+    // RLS-protected tables are actually modified. (#160, #165)
+    if (action === 'remove-pdf') {
+      const { course_key } = body
+      if (!course_key) return jsonResponse({ error: 'Missing course_key.' }, 400)
+
+      // Load current row
+      const cur = await supabaseRest(
+        `course_cache?cache_key=eq.${encodeURIComponent(course_key)}&select=course_data,edit_version`,
+        { method: 'GET' }
+      )
+      if (!cur.ok) return jsonResponse({ error: 'Course not found.' }, 404)
+      const rows = await cur.json()
+      if (!rows?.length) return jsonResponse({ error: 'Course not found.' }, 404)
+
+      const courseData = { ...(rows[0].course_data || {}) }
+      delete courseData._sourcePdf
+      delete courseData.hazardsByHole
+      delete courseData._sourceHtml
+      delete courseData._discoveryTitle
+      courseData._needs_review = true
+
+      // Delete all stored PDFs from the storage bucket
+      const slug = courseKeySlug(courseData.name || '', courseData.location || '')
+      if (slug) {
+        try {
+          const listRes = await fetch(`${supabaseUrl}/storage/v1/object/list/course-art`, {
+            method: 'POST',
+            headers: { ...svcHeaders, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prefix: slug, limit: 100 }),
+          })
+          if (listRes.ok) {
+            const objs = await listRes.json()
+            const paths = (objs || []).filter(o => o?.name).map(o => `${slug}/${o.name}`)
+            if (paths.length) {
+              await fetch(`${supabaseUrl}/storage/v1/object/course-art`, {
+                method: 'DELETE',
+                headers: { ...svcHeaders, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ prefixes: paths }),
+              }).catch(() => {})
+            }
+          }
+        } catch (e) {
+          console.warn('[admin-course remove-pdf] storage cleanup:', e.message)
+        }
+      }
+
+      // Delete hazard rows for this course
+      await supabaseRest(
+        `course_hole_hazards?course_key=eq.${encodeURIComponent(course_key)}`,
+        { method: 'DELETE' }
+      ).catch(() => {})
+
+      // Atomically bump edit_version via increment RPC
+      let nextVersion
+      try {
+        const rpcRes = await fetch(`${supabaseUrl}/rest/v1/rpc/increment_edit_version`, {
+          method: 'POST',
+          headers: { ...svcHeaders, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ p_cache_key: course_key }),
+        })
+        if (rpcRes.ok) {
+          const rpcData = await rpcRes.json()
+          nextVersion = typeof rpcData === 'number' ? rpcData : Number(rows[0].edit_version || 0) + 1
+        } else {
+          nextVersion = Number(rows[0].edit_version || 0) + 1
+        }
+      } catch {
+        nextVersion = Number(rows[0].edit_version || 0) + 1
+      }
+
+      // Update course_data (without edit_version — the RPC already bumped it,
+      // but we fall back to writing it if the RPC didn't exist)
+      const upd = await supabaseRest(
+        `course_cache?cache_key=eq.${encodeURIComponent(course_key)}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', Prefer: 'return=representation' },
+          body: JSON.stringify({
+            course_data: courseData,
+            updated_at: new Date().toISOString(),
+            updated_by: ownerId,
+            edit_version: nextVersion,
+          }),
+        }
+      )
+      if (!upd.ok) {
+        const err = await upd.text().catch(() => '')
+        return jsonResponse({ error: `course_cache update failed: ${err}` }, 500)
+      }
+
+      return jsonResponse({ ok: true, course_key, edit_version: nextVersion }, 200)
     }
 
     // ── delete-course ──────────────────────────────────────────────────────
@@ -368,7 +491,20 @@ async function handleRequest(req) {
         return jsonResponse({ error: `rename RPC failed: ${err}` }, 500)
       }
 
-      return jsonResponse({ old_key, new_key, course_data: finalCourseData }, 200)
+      // Fetch the new row's edit_version after rename (#167)
+      let editVersion = 0
+      try {
+        const vRes = await supabaseRest(
+          `course_cache?cache_key=eq.${encodeURIComponent(new_key)}&select=edit_version`,
+          { method: 'GET' }
+        )
+        if (vRes.ok) {
+          const vRows = await vRes.json()
+          if (vRows?.length) editVersion = Number(vRows[0].edit_version || 0)
+        }
+      } catch {}
+
+      return jsonResponse({ old_key, new_key, course_data: finalCourseData, edit_version: editVersion }, 200)
     }
 
     // ── reparse-pdf ────────────────────────────────────────────────────────

@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef, useMemo, Component } from 'react'
-import { supabase, loadUserProfiles, saveUserProfile, deleteUserProfile, loadUserHistory, saveUserHistory, loadUserSettings, saveUserSettings, getCachedCourseDB, setCachedCourseDB, getAllCachedCoursesDB, deleteCachedCourseDB, loadSavedPlans, deleteSavedPlan, listCoursePdfs, uploadCoursePdfToBucket, deleteAllCoursePdfs, deleteCourseHazards, clearCachedScorecardPdfRef, listCanonicalCacheKeys, listCanonicalCacheVersions, listAliasKeys, loadPrepSession, savePrepSession, clearPrepSession } from './lib/supabase.js'
+import { supabase, loadUserProfiles, saveUserProfile, deleteUserProfile, loadUserHistory, saveUserHistory, loadUserSettings, saveUserSettings, getCachedCourseDB, setCachedCourseDB, getAllCachedCoursesDB, deleteCachedCourseDB, loadSavedPlans, deleteSavedPlan, listCoursePdfs, uploadCoursePdfToBucket, listCanonicalCacheKeys, listCanonicalCacheVersions, listAliasKeys, loadPrepSession, savePrepSession, clearPrepSession } from './lib/supabase.js'
 import { buildRecommendationPrompt } from './lib/recommendation/prompt.js'
 import { saveContrib } from './lib/holeContributions.js'
 import { C, F, card, inp, lbl, btnP, btnG } from './theme.js'
@@ -899,7 +899,7 @@ function AppInner({ user, session, onSignOut, onRunOnboarding }) {
             // If editor renamed, the currently-loaded course's name in
             // App state needs updating too if it matched.
             if (result?.new_key && isSameCourseKey(course, { name: editorCourse.name, location: editorCourse.location })) {
-              const merged = { ...course, ...(result.course_data || {}) }
+              const merged = { ...course, ...(result.course_data || {}), _editVersion: result.edit_version ?? 0 }
               setCourse(merged)
               setCachedCourse(merged)
             } else if (result?.course_data && isSameCourseKey(course, editorCourse)) {

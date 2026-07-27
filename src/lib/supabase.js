@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
-import { cacheKey as makeCacheKey } from './courseCache.js'
+import { cacheKey as makeCacheKey, isLocalCacheStale, setCachedCourse } from './courseCache.js'
 
 const SUPABASE_URL  = import.meta.env.VITE_SUPABASE_URL  || ''
 const SUPABASE_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY || ''
@@ -155,13 +155,22 @@ export async function getCachedCourseDB(name, location) {
 
   if (error || !data) return null
   supabase.rpc('increment_cache_hit', { p_cache_key: data.cache_key }).then(() => {})
-  return {
+  const result = {
     ...data.course_data,
     source: data.source,
     _cachedAt: new Date(data.cached_at).getTime(),
     _editVersion: data.edit_version ?? 0,
     _canonicalKey: data.cache_key,
   }
+
+  // If the local cache is stale (lower edit_version than DB), update it (#161)
+  const courseName = data.course_data?.name
+  const courseLocation = data.course_data?.location
+  if (courseName && isLocalCacheStale(courseName, courseLocation, data.edit_version ?? 0)) {
+    setCachedCourse(result)
+  }
+
+  return result
 }
 
 export async function setCachedCourseDB(normalized) {

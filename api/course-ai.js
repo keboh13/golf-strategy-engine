@@ -107,13 +107,24 @@ async function callClaude(messages, maxTokens, useWebSearch, extraTools, modelOv
 // Anthropic's document fetcher produces an opaque base64/format error.
 async function urlServesPdf(url) {
   try {
+    // #152: 5s timeout for the PDF probe
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 5_000)
     // Range-GET the first few bytes — HEAD lies on a lot of CDNs (returns
     // 200 + text/html for the redirect target instead of the asset).
-    const res = await fetch(url, {
-      method: 'GET',
-      redirect: 'follow',
-      headers: { Range: 'bytes=0-7' },
-    })
+    let res
+    try {
+      res = await fetch(url, {
+        method: 'GET',
+        redirect: 'follow',
+        headers: { Range: 'bytes=0-7' },
+        signal: controller.signal,
+      })
+    } catch (e) {
+      clearTimeout(timer)
+      return false
+    }
+    clearTimeout(timer)
     if (!res.ok && res.status !== 206) return false
     const ct = (res.headers.get('content-type') || '').toLowerCase()
     if (ct.includes('application/pdf')) return true
@@ -350,14 +361,28 @@ async function handleRequest(req) {
 
   const supabaseUrl = process.env.SUPABASE_URL
   const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-  const supabaseRest = async (path, init) => fetch(`${supabaseUrl}/rest/v1/${path}`, {
-    ...init,
-    headers: {
-      ...(init?.headers || {}),
-      apikey: supabaseServiceKey,
-      Authorization: `Bearer ${supabaseServiceKey}`,
-    },
-  })
+  const supabaseRest = async (path, init) => {
+    // #152: 8s default timeout for Supabase REST calls
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 8_000)
+    try {
+      const res = await fetch(`${supabaseUrl}/rest/v1/${path}`, {
+        ...init,
+        headers: {
+          ...(init?.headers || {}),
+          apikey: supabaseServiceKey,
+          Authorization: `Bearer ${supabaseServiceKey}`,
+        },
+        signal: controller.signal,
+      })
+      clearTimeout(timer)
+      return res
+    } catch (e) {
+      clearTimeout(timer)
+      if (e.name === 'AbortError') throw new Error(`Supabase REST timeout after 8s (${path.split('?')[0]})`)
+      throw e
+    }
+  }
 
   // Call 1 — scorecard + tees. Mechanical extraction, fast model, existing
   // validation gate. This is the part that's been reliable; kept unchanged
@@ -479,15 +504,13 @@ async function handleRequest(req) {
     // more reliable hazard extraction.
     const [scorecardResult, hazardResult] = await Promise.allSettled([
       parseAndPersistScorecard(pdfUrl),
-      parseAndPersistHazards(pdfUrl, 'medium'),  // default confidence; updated below if scorecard succeeds
+      parseAndPersistHazards(pdfUrl, 'medium'),
     ])
 
     let parsed
     if (scorecardResult.status === 'fulfilled') {
       parsed = scorecardResult.value
     } else {
-      // Scorecard failed — build a minimal result so the response still
-      // carries hazard data and the error message.
       console.error(`[scorecard] parse failed: ${scorecardResult.reason?.message}`)
       parsed = {
         name: courseName,
@@ -512,16 +535,12 @@ async function handleRequest(req) {
       parsed._hazardExtractError = hazardResult.reason?.message || 'Hazard extraction failed'
     }
 
-    // Post-step: plausibility cross-check between scorecard and hazards.
-    // Runs after both pipelines complete so it can compare hazard distances
-    // against hole lengths from the scorecard.
     const scorecardHoles = Array.isArray(parsed.holes) ? parsed.holes : []
     const hazardsByHole = parsed.hazardsByHole || []
     if (scorecardHoles.length && hazardsByHole.length) {
       const plausibilityIssues = validateHazardPlausibility(hazardsByHole, scorecardHoles)
       if (plausibilityIssues.length) {
         parsed._hazardPlausibilityIssues = plausibilityIssues
-        // Downgrade confidence if many plausibility issues
         if (plausibilityIssues.length > 3 && parsed._confidence !== 'low') {
           parsed._confidence = 'low'
         }

@@ -5,12 +5,9 @@ import {
   getAllCachedCoursesDB,
   listCoursePdfs,
   uploadCoursePdfToBucket,
-  deleteAllCoursePdfs,
-  deleteCourseHazards,
-  clearCachedScorecardPdfRef,
 } from '../lib/supabase.js'
 import { removeCachedCourseByKey } from '../lib/courseCache.js'
-import { adminUploadScorecardPdf, adminDeleteCourse } from '../lib/courseApi.js'
+import { adminUploadScorecardPdf, adminDeleteCourse, adminRemovePdf } from '../lib/courseApi.js'
 import AdminReparseQueue   from './AdminReparseQueue.jsx'
 import AdminBulkImport     from './AdminBulkImport.jsx'
 import AdminContributions  from './AdminContributions.jsx'
@@ -161,12 +158,10 @@ export default function AdminCoursesPanel({ authToken, onEditCourse, onCourseCha
     if (!window.confirm(`Remove the uploaded scorecard PDF + extracted hazards for ${c.name}?\n\nThe course will fall back to API / auto-discovered data on next lookup. All users will see this change.`)) return
     setBusyKey(c._cacheKey); setMsg('')
     try {
-      const n = await deleteAllCoursePdfs(c.name, c.location)
-      await deleteCourseHazards(c.name, c.location)
-      await clearCachedScorecardPdfRef(c.name, c.location)
+      await adminRemovePdf(authToken, { course_key: c._cacheKey })
       removeCachedCourseByKey(c._cacheKey)
       onCourseChanged?.(c._cacheKey)
-      setMsg(`✓ Removed ${n} PDF${n === 1 ? '' : 's'} + hazards for ${c.name}.`)
+      setMsg(`✓ Removed PDF + hazards for ${c.name}.`)
       await load()
     } catch (e) {
       setMsg(`Error: ${e.message}`)
