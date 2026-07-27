@@ -7,8 +7,8 @@ import { C, F } from '../theme.js'
 // Either or both can be absent; the component renders nothing when neither
 // condition is active.
 
-export default function PwaBanner({ isOnline, canInstall, onInstall, onDismiss }) {
-  if (isOnline && !canInstall) return null
+export default function PwaBanner({ isOnline, canInstall, updateReady, onInstall, onDismiss, onApplyUpdate }) {
+  if (isOnline && !canInstall && !updateReady) return null
 
   return (
     <>
@@ -40,6 +40,51 @@ export default function PwaBanner({ isOnline, canInstall, onInstall, onDismiss }
             <strong>Offline</strong> — saved briefs and player data are still available.
             Generating new briefs requires a connection.
           </span>
+        </div>
+      )}
+
+      {/* ── Update available banner ──────────────────────────────── */}
+      {updateReady && isOnline && (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            position: 'fixed',
+            top: !isOnline ? 42 : 0,
+            left: 0,
+            right: 0,
+            zIndex: 9998,
+            background: '#1a2744',
+            borderBottom: '1px solid #2a4a7a',
+            padding: '8px 16px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            fontFamily: F,
+            fontSize: 13,
+            color: '#93c5fd',
+            lineHeight: 1.4,
+          }}
+        >
+          <span style={{ flex: 1 }}>A new version is available.</span>
+          <button
+            onClick={onApplyUpdate}
+            style={{
+              padding: '6px 14px',
+              background: '#3b82f6',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 6,
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: 'pointer',
+              fontFamily: F,
+              whiteSpace: 'nowrap',
+              flexShrink: 0,
+            }}
+          >
+            Refresh
+          </button>
         </div>
       )}
 
