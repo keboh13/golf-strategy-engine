@@ -354,4 +354,12 @@ export const IMPLAUSIBLE_HAZARDS = [
       { type: 'water', side: 'L', category: 'tee', carry_yards: 150, notes: 'tee hazard too far' },
     ],
   },
+  {
+    hole: 9, // 432y hole
+    dogleg: 'straight',
+    hazards: [
+      // Suspiciously short carry distance (< 30y) — likely a data entry error
+      { type: 'bunker', side: 'R', category: 'fairway', carry_yards: 15, notes: 'suspiciously short' },
+    ],
+  },
 ]
