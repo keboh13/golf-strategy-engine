@@ -15,7 +15,7 @@
 import { buildBagSection } from '../promptSections.js'
 import { decomposeWind, windDistanceAdjustmentYds } from './wind.js'
 import { effectiveYardage } from './elevation.js'
-import { tee_shot_overlaps, formatOverlapLine } from './dispersion.js'
+import { tee_shot_overlaps, formatOverlapLine, approach_overlaps, formatApproachOverlapLine } from './dispersion.js'
 import { holeConfidence, rollupConfidence } from './confidence.js'
 import { summarizeHistory, renderHistoryBlock } from './history.js'
 import { formatDistancesLine } from '../courseGeometry.js'
@@ -39,6 +39,207 @@ function formatStructuredMiss(miss) {
   if (miss.trigger) parts.push(`under ${miss.trigger}`)
   if (miss.notes) parts.push(miss.notes)
   return parts.join(', ') || null
+}
+
+// ── Issue #196: Miss-side conflict detection ──────────────────────────────
+/**
+ * Check if player's miss tendency conflicts with hazard positions on a hole.
+ * Returns an array of caution strings (empty if no conflicts).
+ *
+ * @param {string|object} miss - player miss direction (string or {shape, magnitudeYds, trigger})
+ * @param {Array} hazards - hole hazards [{type, side, loc, carry_yards}]
+ * @param {boolean} isLefty - whether player is left-handed
+ */
+export function computeMissSideConflicts(miss, hazards, isLefty) {
+  if (!miss || !Array.isArray(hazards) || !hazards.length) return []
+
+  // Determine the miss direction in absolute terms (L or R on the course)
+  const missShape = typeof miss === 'string' ? miss.toLowerCase() : (miss.shape || '').toLowerCase()
+
+  // Map miss shape to absolute miss side
+  // Righty: fade/slice → R, draw/hook → L
+  // Lefty: fade/slice → L, draw/hook → R
+  let missSide = null
+  if (/fade|slice|push/.test(missShape)) {
+    missSide = isLefty ? 'L' : 'R'
+  } else if (/draw|hook|pull/.test(missShape)) {
+    missSide = isLefty ? 'R' : 'L'
+  }
+
+  if (!missSide) return []
+
+  const magnitude = typeof miss === 'object' && Number.isFinite(miss.magnitudeYds) ? miss.magnitudeYds : null
+  const trigger = typeof miss === 'object' && miss.trigger ? miss.trigger : null
+
+  const conflicts = []
+  for (const hz of hazards) {
+    const hzSide = (hz.side || hz.loc || '').toUpperCase()
+    if (hzSide !== missSide) continue
+
+    const magStr = magnitude ? ` (~${magnitude}y)` : ''
+    const trigStr = trigger ? ` (especially ${trigger})` : ''
+    conflicts.push(
+      `CAUTION: miss tendency ${missShape}${magStr} goes toward ${hz.type} ${hzSide}${trigStr}`
+    )
+  }
+  return conflicts
+}
+
+// ── Issue #200: Wind-adjusted club suggestions ────────────────────────────
+/**
+ * Find the best club for a given target distance from the player's bag.
+ * Returns { club, carry } or null.
+ */
+export function findClubForDistance(clubs, targetYds) {
+  if (!Array.isArray(clubs) || !Number.isFinite(targetYds) || targetYds <= 0) return null
+
+  let best = null
+  let bestDiff = Infinity
+  for (const c of clubs) {
+    const carry = c.stats?.carryP50 ?? c.stats?.carryAvg ?? c.carry
+    if (!Number.isFinite(carry)) continue
+    const diff = Math.abs(carry - targetYds)
+    if (diff < bestDiff) {
+      bestDiff = diff
+      best = { club: c.club, carry }
+    }
+  }
+  return best
+}
+
+/**
+ * When wind delta exceeds a typical club gap (~10-12y), compute a wind-adjusted
+ * club suggestion string.
+ *
+ * @param {Array} clubs - player's bag
+ * @param {number} baseYds - elevation-adjusted yardage
+ * @param {number} windDelta - wind distance adjustment in yards
+ * @returns {string|null}
+ */
+export function windAdjustedClubSuggestion(clubs, baseYds, windDelta) {
+  if (!Array.isArray(clubs) || !Number.isFinite(baseYds) || !Number.isFinite(windDelta)) return null
+  if (Math.abs(windDelta) < 10) return null
+
+  const playsAs = baseYds + windDelta
+  const normalClub = findClubForDistance(clubs, baseYds)
+  const adjustedClub = findClubForDistance(clubs, playsAs)
+
+  if (!normalClub || !adjustedClub) return null
+  if (normalClub.club === adjustedClub.club) return null
+
+  return `Wind-adjusted: ${baseYds}y plays as ${playsAs}y -> suggest ${adjustedClub.club} (normally ${normalClub.club})`
+}
+
+// ── Issue #204: Scoring strategy section ──────────────────────────────────
+/**
+ * Categorize each hole as birdie target, par-save, or bogey-risk based on
+ * player capabilities, hole layout, and hazard data.
+ *
+ * @param {Array} holes - course holes array
+ * @param {Array} clubs - player's bag
+ * @param {object} playerInfo - player profile
+ * @param {object} course - course data
+ * @returns {string} formatted SCORING_STRATEGY section
+ */
+export function buildScoringStrategy(holes, clubs, playerInfo, course) {
+  if (!Array.isArray(holes) || !holes.length) return ''
+
+  // Find player's max distances
+  const maxCarry = getMaxCarry(clubs)
+  const longIronMax = getLongIronMax(clubs)
+
+  const birdieTargets = []
+  const parSave = []
+  const bogeyRisk = []
+
+  const miss = playerInfo?.miss
+  const isLefty = (playerInfo?.handedness || 'Right') === 'Left'
+
+  for (let i = 0; i < holes.length; i++) {
+    const h = holes[i]
+    const yds = parseInt(h.yardage) || 0
+    const par = parseInt(h.par) || 4
+    const hcp = parseInt(h.handicap) || 9
+    const holeNum = i + 1
+
+    // Collect hazards for this hole
+    const allHazards = [
+      ...(h.hzDesign?.hazards || []),
+      ...(h.osmDesign?.hazards || []).map(hz => ({ type: hz.type, side: hz.loc })),
+    ]
+    const hazardCount = allHazards.length
+    const missConflicts = computeMissSideConflicts(miss, allHazards, isLefty)
+
+    if (par === 5) {
+      if (maxCarry && yds <= maxCarry * 2 + 30) {
+        const reachClub = yds - maxCarry <= longIronMax ? 'reachable in two' : 'needs long approach'
+        birdieTargets.push(`H${holeNum} par ${par} ${yds}y: ${reachClub}, birdie target`)
+      } else if (hazardCount >= 2 || hcp <= 4) {
+        bogeyRisk.push(`H${holeNum} par ${par} ${yds}y: long with hazards, bogey risk`)
+      } else {
+        parSave.push(`H${holeNum} par ${par} ${yds}y: three-shot hole, play for par`)
+      }
+    } else if (par === 4) {
+      if (yds <= 340 && hazardCount <= 1) {
+        birdieTargets.push(`H${holeNum} par ${par} ${yds}y: short par 4, birdie opportunity`)
+      } else if (yds >= 430 || (hcp <= 4 && hazardCount >= 2)) {
+        if (missConflicts.length > 0) {
+          bogeyRisk.push(`H${holeNum} par ${par} ${yds}y: long + miss conflicts with hazards, elevated risk`)
+        } else {
+          parSave.push(`H${holeNum} par ${par} ${yds}y: demanding, play for par`)
+        }
+      } else if (missConflicts.length > 0 && hazardCount >= 2) {
+        bogeyRisk.push(`H${holeNum} par ${par} ${yds}y: hazard layout + miss tendency = elevated risk`)
+      }
+    } else if (par === 3) {
+      if (yds <= 160 && hazardCount <= 1) {
+        birdieTargets.push(`H${holeNum} par ${par} ${yds}y: short par 3, birdie chance`)
+      } else if (yds >= 210 || hazardCount >= 3) {
+        parSave.push(`H${holeNum} par ${par} ${yds}y: demanding par 3`)
+      } else if (missConflicts.length > 0) {
+        bogeyRisk.push(`H${holeNum} par ${par} ${yds}y: miss tendency toward hazard`)
+      }
+    }
+  }
+
+  const lines = ['SCORING_STRATEGY:']
+  if (birdieTargets.length) {
+    lines.push('Birdie targets:')
+    birdieTargets.forEach(t => lines.push(`  - ${t}`))
+  }
+  if (parSave.length) {
+    lines.push('Par-save holes:')
+    parSave.forEach(t => lines.push(`  - ${t}`))
+  }
+  if (bogeyRisk.length) {
+    lines.push('Bogey-risk holes:')
+    bogeyRisk.forEach(t => lines.push(`  - ${t}`))
+  }
+
+  return lines.length > 1 ? lines.join('\n') : ''
+}
+
+function getMaxCarry(clubs) {
+  if (!Array.isArray(clubs)) return null
+  let max = 0
+  for (const c of clubs) {
+    const carry = c.stats?.carryP50 ?? c.stats?.carryAvg ?? c.carry
+    if (Number.isFinite(carry) && carry > max) max = carry
+  }
+  return max || null
+}
+
+function getLongIronMax(clubs) {
+  if (!Array.isArray(clubs)) return 0
+  let max = 0
+  for (const c of clubs) {
+    const name = (c.club || '').toLowerCase()
+    if (/iron|hybrid/i.test(name)) {
+      const carry = c.stats?.carryP50 ?? c.stats?.carryAvg ?? c.carry
+      if (Number.isFinite(carry) && carry > max) max = carry
+    }
+  }
+  return max
 }
 
 // Find the driver/longest-club stats for tee-shot dispersion math.
@@ -186,6 +387,26 @@ function buildHoleLine(i, h, ctx) {
     : null
   const overlapStr = overlapLine ? `\n   Risk: ${overlapLine}` : ''
 
+  // Issue #193: Approach-shot dispersion analysis
+  const teeCarry = ctx.teeClubStats?.carryYds
+  const approachResult = (rawYds && teeCarry && ctx.clubs)
+    ? approach_overlaps({ holeYardage: rawYds, teeCarryYds: teeCarry, hazards: allHazards, clubs: ctx.clubs })
+    : null
+  const approachLine = formatApproachOverlapLine(approachResult)
+  const approachStr = approachLine ? `\n   Risk: ${approachLine}` : ''
+
+  // Issue #196: Miss-side conflict detection
+  const missConflicts = ctx.playerMiss
+    ? computeMissSideConflicts(ctx.playerMiss, allHazards, ctx.isLefty)
+    : []
+  const missStr = missConflicts.length ? `\n   ${missConflicts.join('\n   ')}` : ''
+
+  // Issue #200: Wind-adjusted club suggestion
+  const windClubStr = (Math.abs(windDelta) >= 10 && ctx.clubs)
+    ? windAdjustedClubSuggestion(ctx.clubs, baseYds, windDelta)
+    : null
+  const windClubLine = windClubStr ? `\n   ${windClubStr}` : ''
+
   // Confidence tag
   const conf = holeConfidence(ctx.course, h)
   const confStr = ` | conf:${conf.overall}/${conf.hazards}`
@@ -194,7 +415,7 @@ function buildHoleLine(i, h, ctx) {
 
   const elevHdr = h.elevation ? ` | Elev: ${h.elevation}` : ''
 
-  return `H${i+1}: Par ${h.par}, ${h.yardage || '?'}y${effStr}${windPlaysStr}, HCP ${h.handicap}${elevHdr}${confStr}${designStr}${nStr}${wStr}${yardageBookText}${overlapStr}`
+  return `H${i+1}: Par ${h.par}, ${h.yardage || '?'}y${effStr}${windPlaysStr}, HCP ${h.handicap}${elevHdr}${confStr}${designStr}${nStr}${wStr}${yardageBookText}${overlapStr}${approachStr}${missStr}${windClubLine}`
 }
 
 /**
@@ -280,8 +501,11 @@ Be direct. Short sentences. No filler.`,
   const hasHazardData = course.holes?.some(h => h.hzDesign)
   const rollup = rollupConfidence(course)
   const teeClubStats = pickTeeClubStats(clubs)
-  const ctx = { course, holeTimes, holeWeather, teeClubStats }
+  const ctx = { course, holeTimes, holeWeather, teeClubStats, clubs, playerMiss: playerInfo?.miss, isLefty }
   const holesData = (course.holes || []).map((h, i) => buildHoleLine(i, h, ctx)).join('\n')
+
+  // Issue #204: Scoring strategy section
+  const scoringStrategy = buildScoringStrategy(course.holes, clubs, playerInfo, course)
 
   const sourceNote = course.source === 'GolfCourseAPI' ? `Verified — GolfCourseAPI`
     : course.source === 'OpenGolfAPI'    ? `Partial — OpenGolfAPI (par/HCP only, yardages from web)`
@@ -310,7 +534,7 @@ ${course.notes ? `Notes: ${course.notes}` : ''}
 Tee: ${teeTime} (${teeDate}), ${pace} min/hole
 ${historyBlock}
 ${priorRoundBlock}
-
+${scoringStrategy ? `\n${scoringStrategy}\n` : ''}
 PRE-COMPUTED HINTS (USE THESE — do not redo the math):
 - "plays Xy" = elevation-adjusted effective yardage. Pick clubs off this number.
 - "(NNmph headwind, NNmph L→R cross)" = wind already decomposed against the hole bearing.
