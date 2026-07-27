@@ -106,6 +106,9 @@ export default function CourseHoleMap({
   const [saving, setSaving] = useState(false)
   const [fullscreen, setFullscreen] = useState(false)
   const [ringsOn, setRingsOn] = useState(true)
+  const [pendingContrib, setPendingContrib] = useState(null)  // { ref, teeLng, teeLat, pinLng, pinLat, yards }
+  const [contribError, setContribError] = useState(null)       // sanity-check error message
+  const [lastContrib, setLastContrib] = useState(null)         // for undo: last saved contribution
 
   const contribute = !!onContribute
   const inContribMode = contribStep != null
@@ -272,22 +275,25 @@ export default function CourseHoleMap({
         el.style.cssText = 'width:14px;height:14px;border-radius:50%;background:#ef4444;border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,0.5)'
         const m = new maplibregl.Marker({ element: el }).setLngLat(lngLat).addTo(map)
         draftMarkersRef.current.push(m)
-        ;(async () => {
-          setSaving(true)
-          try {
-            await onContribute?.({
-              ref: selectedHole,
-              teeLng: teeDraft[0], teeLat: teeDraft[1],
-              pinLng: lngLat[0],   pinLat: lngLat[1],
-            })
-          } finally {
-            setSaving(false)
-            setContribStep(null)
-            setTeeDraft(null)
-            draftMarkersRef.current.forEach(m => m.remove())
-            draftMarkersRef.current = []
-          }
-        })()
+
+        // Compute distance and validate before saving
+        const yards = Math.round(computeTeeToPinYards(teeDraft, lngLat))
+        if (yards < 50 || yards > 700) {
+          setContribError(`Distance of ${yards} yards is out of range (50–700). Please try again.`)
+          setContribStep(null)
+          setTeeDraft(null)
+          draftMarkersRef.current.forEach(m => m.remove())
+          draftMarkersRef.current = []
+          return
+        }
+        // Store pending contribution for confirmation
+        setPendingContrib({
+          ref: selectedHole,
+          teeLng: teeDraft[0], teeLat: teeDraft[1],
+          pinLng: lngLat[0],   pinLat: lngLat[1],
+          yards,
+        })
+        setContribStep(null)
       }
     }
     map.on('click', onClick)
@@ -338,9 +344,54 @@ export default function CourseHoleMap({
   const cancelContribute = useCallback(() => {
     setContribStep(null)
     setTeeDraft(null)
+    setPendingContrib(null)
+    setContribError(null)
     draftMarkersRef.current.forEach(m => m.remove())
     draftMarkersRef.current = []
   }, [])
+
+  const confirmContribute = useCallback(async () => {
+    if (!pendingContrib) return
+    setSaving(true)
+    try {
+      await onContribute?.({
+        ref: pendingContrib.ref,
+        teeLng: pendingContrib.teeLng, teeLat: pendingContrib.teeLat,
+        pinLng: pendingContrib.pinLng, pinLat: pendingContrib.pinLat,
+      })
+      setLastContrib(pendingContrib)
+    } finally {
+      setSaving(false)
+      setPendingContrib(null)
+      setTeeDraft(null)
+      draftMarkersRef.current.forEach(m => m.remove())
+      draftMarkersRef.current = []
+    }
+  }, [pendingContrib, onContribute])
+
+  const cancelPendingContrib = useCallback(() => {
+    setPendingContrib(null)
+    setTeeDraft(null)
+    draftMarkersRef.current.forEach(m => m.remove())
+    draftMarkersRef.current = []
+  }, [])
+
+  const undoContribute = useCallback(async () => {
+    if (!lastContrib) return
+    // Signal undo by passing the undo flag to onContribute
+    setSaving(true)
+    try {
+      await onContribute?.({
+        ref: lastContrib.ref,
+        teeLng: lastContrib.teeLng, teeLat: lastContrib.teeLat,
+        pinLng: lastContrib.pinLng, pinLat: lastContrib.pinLat,
+        undo: true,
+      })
+    } finally {
+      setSaving(false)
+      setLastContrib(null)
+    }
+  }, [lastContrib, onContribute])
 
   const banner = (() => {
     if (inContribMode) return null
@@ -539,6 +590,49 @@ export default function CourseHoleMap({
             >Cancel</button>
           </div>
         )}
+
+        {/* Contribution confirmation overlay */}
+        {pendingContrib && (
+          <div
+            style={{
+              position: 'absolute', top: 10, right: 10, zIndex: 5,
+              padding: '12px 16px', borderRadius: 10,
+              background: 'rgba(15, 17, 23, 0.95)', backdropFilter: 'blur(6px)',
+              border: `1px solid ${C.accent}`,
+              boxShadow: '0 4px 16px rgba(0,0,0,0.6)',
+              maxWidth: 280,
+            }}
+          >
+            {saving ? (
+              <span style={{ color: C.text, fontSize: 13, fontWeight: 600 }}>Saving…</span>
+            ) : (
+              <>
+                <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 8 }}>
+                  Save this measurement of {pendingContrib.yards} yards for Hole {pendingContrib.ref}?
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    onClick={confirmContribute}
+                    style={{
+                      background: C.accent, color: '#0f1117', border: 'none',
+                      borderRadius: 6, padding: '6px 16px', fontSize: 12,
+                      fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
+                    }}
+                  >Save</button>
+                  <button
+                    onClick={cancelPendingContrib}
+                    style={{
+                      background: 'transparent', color: C.textMuted,
+                      border: `1px solid ${C.border}`, borderRadius: 6,
+                      padding: '6px 12px', fontSize: 12, cursor: 'pointer',
+                      fontFamily: 'inherit',
+                    }}
+                  >Cancel</button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
       </div>
 
       {!coords?.lat && (
@@ -571,6 +665,40 @@ export default function CourseHoleMap({
               }}
             >Mark this hole</button>
           )}
+        </div>
+      )}
+
+      {/* Sanity-check error message */}
+      {contribError && (
+        <div style={{
+          marginTop: 10, padding: '8px 14px', borderRadius: 8,
+          background: C.redMuted, border: `1px solid ${C.red}`,
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        }}>
+          <p style={{ fontSize: 11, color: C.red, margin: 0 }}>{contribError}</p>
+          <button
+            onClick={() => setContribError(null)}
+            style={{ background: 'transparent', border: 'none', color: C.red, cursor: 'pointer', fontSize: 14, fontFamily: 'inherit', padding: '0 4px' }}
+          >×</button>
+        </div>
+      )}
+
+      {/* Undo last contribution */}
+      {lastContrib && !inContribMode && !pendingContrib && (
+        <div style={{ marginTop: 10, display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 11, color: C.green }}>
+            Saved {lastContrib.yards}y for Hole {lastContrib.ref}
+          </span>
+          <button
+            onClick={undoContribute}
+            disabled={saving}
+            style={{
+              background: 'transparent', color: C.amber,
+              border: `1px solid ${C.amber}`, borderRadius: 6,
+              padding: '4px 10px', fontSize: 11, cursor: 'pointer',
+              fontFamily: 'inherit', opacity: saving ? 0.5 : 1,
+            }}
+          >Undo</button>
         </div>
       )}
 

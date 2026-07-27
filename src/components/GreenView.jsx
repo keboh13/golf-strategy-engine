@@ -122,7 +122,7 @@ export default function GreenView({ green, holeNum }) {
           >{fullscreen ? '⊠' : '⛶'}</button>
         </span>
       </div>
-      <svg viewBox={`0 0 ${FIXED_W} ${FIXED_H}`} width="100%" style={{ display: 'block' }}>
+      <svg viewBox={`0 0 ${FIXED_W} ${FIXED_H}`} width="100%" style={{ display: 'block', position: 'relative' }}>
         <path d={greenPath} fill="#1a4d2e" stroke={C.green} strokeWidth={1.5} />
 
         {tierCount >= 2 && <line x1={cx - greenW * 0.35} y1={cy} x2={cx + greenW * 0.35} y2={cy} stroke={C.textFaint} strokeWidth={0.8} strokeDasharray="6 3" opacity={0.6} />}
@@ -165,9 +165,26 @@ export default function GreenView({ green, holeNum }) {
 
         <polygon points={`${cx - 4},${FIXED_H - 8} ${cx + 4},${FIXED_H - 8} ${cx},${FIXED_H - 16}`} fill={C.textFaint} />
         <text x={cx} y={FIXED_H - 2} textAnchor="middle" fill={C.textFaint} fontSize={8} fontFamily={F}>approach</text>
+
+        {/* ADR: suppress fabricated green data — prominent overlay when AI-generated and unverified */}
+        {green._source === 'ai' && green.confidence !== 'verified' && (
+          <g>
+            <rect x={0} y={0} width={FIXED_W} height={FIXED_H} fill="rgba(15, 17, 23, 0.72)" />
+            <rect x={FIXED_W / 2 - 130} y={FIXED_H / 2 - 40} width={260} height={80} rx={10} fill="rgba(15, 17, 23, 0.9)" stroke={C.amber} strokeWidth={1.5} />
+            <text x={FIXED_W / 2} y={FIXED_H / 2 - 10} textAnchor="middle" fill={C.amber} fontSize={14} fontWeight="700" fontFamily={F}>
+              AI-Estimated Data
+            </text>
+            <text x={FIXED_W / 2} y={FIXED_H / 2 + 12} textAnchor="middle" fill={C.textMuted} fontSize={10} fontFamily={F}>
+              This green diagram is unverified
+            </text>
+            <text x={FIXED_W / 2} y={FIXED_H / 2 + 26} textAnchor="middle" fill={C.textMuted} fontSize={10} fontFamily={F}>
+              and may not reflect actual conditions
+            </text>
+          </g>
+        )}
       </svg>
       <div style={{ padding: '4px 8px 0', display: 'flex', flexDirection: 'column', gap: 2, width: '100%' }}>
-        {green.confidence && green.confidence !== 'verified' && !sourceTag && (
+        {green.confidence && green.confidence !== 'verified' && !sourceTag && green._source !== 'ai' && (
           <p style={{ fontSize: 9, color: C.amber, margin: 0, fontStyle: 'italic' }}>
             Green data is estimated — verify with course knowledge
           </p>
