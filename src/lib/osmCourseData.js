@@ -72,30 +72,47 @@ function resolveNodes(wayOrRelation, nodeMap) {
   return []
 }
 
-async function overpassFetch(query) {
+async function overpassFetch(query, { signal } = {}) {
   // Race all endpoints; return first successful response.
-  const attempt = (url) => fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: 'data=' + encodeURIComponent(query),
-  }).then(res => {
-    if (!res.ok) throw new Error(`Overpass ${url} HTTP ${res.status}`)
-    return res.json()
-  })
+  // Each attempt gets a 30s AbortController timeout. If the caller also
+  // passes a signal (e.g. the enrichment abort), we link both so either
+  // cancellation tears down the fetch.
+  const attempt = (url) => {
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), 30_000)
+    // Forward parent signal
+    if (signal) {
+      if (signal.aborted) { clearTimeout(timer); ctrl.abort(); }
+      else signal.addEventListener('abort', () => { clearTimeout(timer); ctrl.abort() }, { once: true })
+    }
+    return fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'data=' + encodeURIComponent(query),
+      signal: ctrl.signal,
+    }).then(res => {
+      clearTimeout(timer)
+      if (!res.ok) throw new Error(`Overpass ${url} HTTP ${res.status}`)
+      return res.json()
+    }, err => {
+      clearTimeout(timer)
+      throw err
+    })
+  }
 
   return Promise.any(OVERPASS_URLS.map(attempt))
     .catch(() => { throw new Error('Overpass: all endpoints failed') })
 }
 
-export async function fetchOSMCourseData(lat, lng) {
+export async function fetchOSMCourseData(lat, lng, { signal } = {}) {
   if (!lat || !lng) return null
 
   // Fire area and bbox queries in parallel. The area query is preferred when it
   // returns golf-tagged elements (avoids bleeding into adjacent courses). If it
   // comes back empty we fall back to the bbox result which runs concurrently.
   const [areaResult, bboxResult] = await Promise.allSettled([
-    overpassFetch(buildAreaQuery(lat, lng)),
-    overpassFetch(buildBboxQuery(lat, lng)),
+    overpassFetch(buildAreaQuery(lat, lng), { signal }),
+    overpassFetch(buildBboxQuery(lat, lng), { signal }),
   ])
 
   let data = null

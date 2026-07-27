@@ -234,16 +234,33 @@ export default async function handler(req) {
       if (!sanitized.tools.length) delete sanitized.tools
     }
 
-    const upstream = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-        'anthropic-beta': 'prompt-caching-2024-07-31',
-      },
-      body: JSON.stringify(sanitized),
-    })
+    // #155: 120s timeout for the upstream Anthropic fetch
+    const upstreamCtrl = new AbortController()
+    const upstreamTimer = setTimeout(() => upstreamCtrl.abort(), 120_000)
+    let upstream
+    try {
+      upstream = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'anthropic-beta': 'prompt-caching-2024-07-31',
+        },
+        body: JSON.stringify(sanitized),
+        signal: upstreamCtrl.signal,
+      })
+    } catch (e) {
+      clearTimeout(upstreamTimer)
+      if (e.name === 'AbortError') {
+        return new Response(JSON.stringify({ error: 'Anthropic API timed out after 120s.' }), {
+          status: 504,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      throw e
+    }
+    clearTimeout(upstreamTimer)
 
     if (!upstream.ok) {
       return new Response(upstream.body, {

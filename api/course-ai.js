@@ -107,13 +107,24 @@ async function callClaude(messages, maxTokens, useWebSearch, extraTools, modelOv
 // Anthropic's document fetcher produces an opaque base64/format error.
 async function urlServesPdf(url) {
   try {
+    // #152: 5s timeout for the PDF probe
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 5_000)
     // Range-GET the first few bytes — HEAD lies on a lot of CDNs (returns
     // 200 + text/html for the redirect target instead of the asset).
-    const res = await fetch(url, {
-      method: 'GET',
-      redirect: 'follow',
-      headers: { Range: 'bytes=0-7' },
-    })
+    let res
+    try {
+      res = await fetch(url, {
+        method: 'GET',
+        redirect: 'follow',
+        headers: { Range: 'bytes=0-7' },
+        signal: controller.signal,
+      })
+    } catch (e) {
+      clearTimeout(timer)
+      return false
+    }
+    clearTimeout(timer)
     if (!res.ok && res.status !== 206) return false
     const ct = (res.headers.get('content-type') || '').toLowerCase()
     if (ct.includes('application/pdf')) return true
@@ -341,14 +352,28 @@ async function handleRequest(req) {
 
   const supabaseUrl = process.env.SUPABASE_URL
   const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-  const supabaseRest = async (path, init) => fetch(`${supabaseUrl}/rest/v1/${path}`, {
-    ...init,
-    headers: {
-      ...(init?.headers || {}),
-      apikey: supabaseServiceKey,
-      Authorization: `Bearer ${supabaseServiceKey}`,
-    },
-  })
+  const supabaseRest = async (path, init) => {
+    // #152: 8s default timeout for Supabase REST calls
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 8_000)
+    try {
+      const res = await fetch(`${supabaseUrl}/rest/v1/${path}`, {
+        ...init,
+        headers: {
+          ...(init?.headers || {}),
+          apikey: supabaseServiceKey,
+          Authorization: `Bearer ${supabaseServiceKey}`,
+        },
+        signal: controller.signal,
+      })
+      clearTimeout(timer)
+      return res
+    } catch (e) {
+      clearTimeout(timer)
+      if (e.name === 'AbortError') throw new Error(`Supabase REST timeout after 8s (${path.split('?')[0]})`)
+      throw e
+    }
+  }
 
   // Call 1 — scorecard + tees. Mechanical extraction, fast model, existing
   // validation gate. This is the part that's been reliable; kept unchanged
@@ -464,8 +489,13 @@ async function handleRequest(req) {
   }
 
   async function parsePdfAndPersist(pdfUrl) {
-    const parsed = await parseAndPersistScorecard(pdfUrl)
-    const hazardResult = await parseAndPersistHazards(pdfUrl, parsed._confidence)
+    // #150: Run scorecard and hazard extraction in parallel.
+    // Hazards receive 'medium' as default confidence since the scorecard
+    // result (which would supply the real confidence) isn't available yet.
+    const [parsed, hazardResult] = await Promise.all([
+      parseAndPersistScorecard(pdfUrl),
+      parseAndPersistHazards(pdfUrl, 'medium'),
+    ])
     parsed.hazardCoverage = hazardResult.coverage
     // Raw hazardsByHole travels with the response (not just the coverage
     // summary) so a caller that deferred persistence (persist:false — the
