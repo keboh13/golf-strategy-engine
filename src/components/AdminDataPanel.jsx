@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import { supabase } from '../lib/supabase.js'
+import { queryCourseCacheDB } from '../lib/supabase.js'
 import { C, F, card, btnG, lbl } from '../theme.js'
 import { Badge } from './ui.jsx'
+import { sourceBadge as sourceBadgeProps } from '../lib/formatters.js'
 
 // Reads the shared course_cache directly via the Supabase JS client (uses the
 // anon key + the RLS policies admins already have). Focuses on cache-health
@@ -9,13 +10,13 @@ import { Badge } from './ui.jsx'
 // hit-count, and courses that need a review pass.
 
 const SOURCE_LABELS = {
-  GolfCourseAPI: { label: '✓ API',         bg: '#0d2a1a', fg: '#4ade80' },
-  yardage_book:  { label: '📄 Yardage book', bg: '#0d1a2a', fg: '#60a5fa' },
-  OpenGolfAPI:   { label: '~ OpenGolf',     bg: '#2a1e0a', fg: '#fbbf24' },
-  claude_vision: { label: '🤖 Vision',      bg: '#1a0d2a', fg: '#c084fc' },
+  GolfCourseAPI: { label: '✓ API',         bg: C.greenMuted,  fg: C.green },
+  yardage_book:  { label: '📄 Yardage book', bg: C.blueMuted,   fg: C.blue },
+  OpenGolfAPI:   { label: '~ OpenGolf',     bg: C.amberMuted,  fg: C.amber },
+  claude_vision: { label: '🤖 Vision',      bg: C.accentMuted, fg: C.accent },
 }
 function sourceBadge(src) {
-  const s = SOURCE_LABELS[src] || { label: src || '—', bg: '#1a1f2e', fg: '#64748b' }
+  const s = SOURCE_LABELS[src] || { label: src || '—', bg: C.bgCard, fg: C.textMuted }
   return <Badge label={s.label} bg={s.bg} fg={s.fg} />
 }
 
@@ -44,13 +45,8 @@ export default function AdminDataPanel({ onNavigate }) {
   const load = async () => {
     setLoading(true); setError('')
     try {
-      const { data, error: err } = await supabase
-        .from('course_cache')
-        .select('cache_key, course_data, source, cached_at, hit_count, updated_at')
-        .order('hit_count', { ascending: false })
-        .limit(500)
-      if (err) throw err
-      setRows(data || [])
+      const { rows } = await queryCourseCacheDB({ sort: 'popular', limit: 500, raw: true })
+      setRows(rows || [])
     } catch (e) {
       setError(e.message)
     }

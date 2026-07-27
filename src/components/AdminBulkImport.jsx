@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { C, F, card, inp, lbl, btnP, btnG } from '../theme.js'
 import { Badge } from './ui.jsx'
 import { supabase } from '../lib/supabase.js'
+import { cacheKey } from '../lib/courseCache.js'
 
 // Parses a CSV or JSON file into an array of course objects.
 // Expected CSV columns (case-insensitive, extra columns ignored):
@@ -48,10 +49,6 @@ function toCourseData(row) {
     try { cd.holes = JSON.parse(row.holes_json) } catch {}
   }
   return cd
-}
-
-function cacheKey(name, location) {
-  return `${(name || '').toLowerCase().trim()}|${(location || '').toLowerCase().trim()}`
 }
 
 export default function AdminBulkImport() {

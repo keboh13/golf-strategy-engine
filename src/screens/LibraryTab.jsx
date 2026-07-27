@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState, useRef } from 'react'
 import { C, F, card, inp, lbl, btnP, btnG } from '../theme.js'
 import { Badge } from '../components/ui.jsx'
-import { supabase } from '../lib/supabase.js'
+import { queryCourseCacheDB } from '../lib/supabase.js'
 import CourseDetailDrawer from '../components/CourseDetailDrawer.jsx'
+import { sourceBadge } from '../lib/formatters.js'
 
 const PAGE_SIZE = 50
 
@@ -11,14 +12,6 @@ const SORT_OPTIONS = [
   { id: 'recent',  label: 'Recently added' },
   { id: 'name',    label: 'Name (A→Z)' },
 ]
-
-function sourceBadge(source) {
-  if (source === 'GolfCourseAPI') return { label: '✓ API',       bg: C.greenMuted,  fg: C.green  }
-  if (source === 'yardage_book')  return { label: '📄 Yardage',  bg: C.blueMuted,   fg: C.blue   }
-  if (source === 'OpenGolfAPI')   return { label: '~ OpenGolf',  bg: C.amberMuted,  fg: C.amber  }
-  if (source === 'Claude')        return { label: '⚡ AI',        bg: C.accentMuted, fg: C.accent }
-  return { label: source || '?', bg: C.bgInput, fg: C.textMuted }
-}
 
 function CourseCard({ course, onClick }) {
   const sb = sourceBadge(course.source)
@@ -81,24 +74,10 @@ export default function LibraryTab({ isMobile, session, onUseForPrep }) {
 
     setLoading(true); setError('')
     try {
-      let query = supabase
-        .from('course_cache')
-        .select('cache_key,course_data,source,cached_at,hit_count,is_public', { count: 'exact' })
-        .range(off, off + PAGE_SIZE - 1)
-
-      if (pub) query = query.eq('is_public', true)
-
-      // Text search on cache_key (name|location pattern)
-      if (q.trim()) {
-        query = query.ilike('cache_key', `%${q.trim().toLowerCase()}%`)
-      }
-
-      if (srt === 'popular') query = query.order('hit_count', { ascending: false })
-      else if (srt === 'recent') query = query.order('cached_at', { ascending: false })
-      else if (srt === 'name')   query = query.order('cache_key',  { ascending: true })
-
-      const { data, count, error: err } = await query
-      if (err) throw err
+      const { rows: data, count } = await queryCourseCacheDB({
+        search: q, publicOnly: pub, sort: srt,
+        limit: PAGE_SIZE, offset: off, count: true, raw: true,
+      })
 
       // Flatten course_data fields for easy card rendering
       const normalized = (data || []).map(r => ({

@@ -27,17 +27,7 @@ function jsonResponse(body, status = 200) {
   })
 }
 
-async function isAdmin(supabaseUrl, svcKey, userId) {
-  const [a, r] = await Promise.all([
-    fetch(`${supabaseUrl}/rest/v1/admins?user_id=eq.${userId}&select=user_id&limit=1`,
-      { headers: { apikey: svcKey, Authorization: `Bearer ${svcKey}` } }),
-    fetch(`${supabaseUrl}/rest/v1/user_roles?user_id=eq.${userId}&role=in.(admin,owner)&select=user_id&limit=1`,
-      { headers: { apikey: svcKey, Authorization: `Bearer ${svcKey}` } }),
-  ])
-  const rowsA = a.ok ? await a.json() : []
-  const rowsR = r.ok ? await r.json() : []
-  return (Array.isArray(rowsA) && rowsA.length > 0) || (Array.isArray(rowsR) && rowsR.length > 0)
-}
+import { validateAuth, isAdminUser } from './_lib/admin.js'
 
 // Compute a percentile from a sorted ascending number array. Returns 0 when
 // the sample is empty so the client can render 0 instead of NaN.
@@ -55,17 +45,9 @@ export default async function handler(req) {
   const svcKey      = process.env.SUPABASE_SERVICE_ROLE_KEY
   if (!supabaseUrl || !svcKey) return jsonResponse({ error: 'Server not configured.' }, 500)
 
-  const token = (req.headers.get('Authorization') || '').replace('Bearer ', '')
-  if (!token) return jsonResponse({ error: 'Unauthorized' }, 401)
-
-  const userRes = await fetch(`${supabaseUrl}/auth/v1/user`, {
-    headers: { Authorization: `Bearer ${token}`, apikey: svcKey },
-  })
-  if (!userRes.ok) return jsonResponse({ error: 'Invalid or expired session.' }, 401)
-  const requester = await userRes.json()
-  if (!(await isAdmin(supabaseUrl, svcKey, requester.id))) {
-    return jsonResponse({ error: 'Forbidden — admin access only.' }, 403)
-  }
+  const userId = await validateAuth(req)
+  if (!userId) return jsonResponse({ error: 'Unauthorized' }, 401)
+  if (!(await isAdminUser(userId))) return jsonResponse({ error: 'Forbidden — admin access only.' }, 403)
 
   const url = new URL(req.url)
   const days = Math.min(Math.max(parseInt(url.searchParams.get('days') || '14', 10), 1), 90)

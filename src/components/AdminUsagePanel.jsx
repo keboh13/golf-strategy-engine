@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { C, F, card, inp, lbl, btnG, btnP } from '../theme.js'
+import { fmtMs } from '../lib/formatters.js'
+import MetricTile from './MetricTile.jsx'
+import { Stars } from './StarRating.jsx'
 
 const RANGE_OPTIONS = [
   { id: 7,  label: 'Last 7 days' },
@@ -9,27 +12,6 @@ const RANGE_OPTIONS = [
 ]
 
 const DIMENSIONS = ['overall', 'accuracy', 'strategy', 'clarity']
-
-function StatTile({ label, value, sub, color = C.text }) {
-  return (
-    <div style={{ background: C.bgInput, border: `1px solid ${C.border}`, borderRadius: 8, padding: '10px 14px' }}>
-      <p style={{ ...lbl, margin: '0 0 4px' }}>{label}</p>
-      <p style={{ fontSize: 20, fontWeight: 600, color, margin: 0, fontVariantNumeric: 'tabular-nums' }}>{value}</p>
-      {sub && <p style={{ fontSize: 10, color: C.textFaint, margin: '3px 0 0' }}>{sub}</p>}
-    </div>
-  )
-}
-
-function Stars({ value }) {
-  if (value == null) return <span style={{ color: C.textFaint }}>—</span>
-  const full  = Math.round(value)
-  return (
-    <span style={{ color: C.amber, letterSpacing: 1 }}>
-      {'★'.repeat(full)}{'☆'.repeat(5 - full)}
-      <span style={{ color: C.textMuted, fontSize: 11, marginLeft: 6, letterSpacing: 0 }}>{value.toFixed(1)}</span>
-    </span>
-  )
-}
 
 function DailyBarChart({ data, valueKey = 'calls', color = C.accent }) {
   const max = Math.max(1, ...data.map(d => d[valueKey] || 0))
@@ -57,12 +39,6 @@ function DailyBarChart({ data, valueKey = 'calls', color = C.accent }) {
       })}
     </svg>
   )
-}
-
-function fmtMs(ms) {
-  if (!ms) return '—'
-  if (ms < 1000) return `${Math.round(ms)} ms`
-  return `${(ms / 1000).toFixed(1)} s`
 }
 
 function shortKey(key) {
@@ -200,10 +176,10 @@ export default function AdminUsagePanel({ authToken }) {
         {data && (
           <>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10, marginBottom: 14 }}>
-              <StatTile label="Calls" value={totals.calls.toLocaleString()} sub={`${days}-day total`} color={C.accent} />
-              <StatTile label="Input tokens" value={totals.inputTokens.toLocaleString()} />
-              <StatTile label="Output tokens" value={totals.outputTokens.toLocaleString()} color={C.green} />
-              <StatTile label="Active users" value={(data.topUsers || []).length} sub="non-zero usage" />
+              <MetricTile label="Calls" value={totals.calls.toLocaleString()} sub={`${days}-day total`} color={C.accent} />
+              <MetricTile label="Input tokens" value={totals.inputTokens.toLocaleString()} />
+              <MetricTile label="Output tokens" value={totals.outputTokens.toLocaleString()} color={C.green} />
+              <MetricTile label="Active users" value={(data.topUsers || []).length} sub="non-zero usage" />
             </div>
             <DailyBarChart data={data.dailyTotals || []} valueKey="calls" color={C.accent} />
             <p style={{ fontSize: 10, color: C.textFaint, margin: '4px 0 0' }}>Calls per day</p>

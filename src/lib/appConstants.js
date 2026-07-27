@@ -8,6 +8,19 @@ export const LS_CURRENT_PROFILE = 'gse_current_profile'
 export const LS_COURSE_CACHE = 'gse_course_cache'
 export const LS_MODEL = 'gse_model'
 
+// All localStorage keys used by this app share the 'gse_' prefix.
+// clearAppStorage removes only these keys instead of nuking everything
+// (which would wipe unrelated data from the same origin).
+const APP_LS_PREFIX = 'gse_'
+export function clearAppStorage() {
+  const toRemove = []
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i)
+    if (key && key.startsWith(APP_LS_PREFIX)) toRemove.push(key)
+  }
+  toRemove.forEach(k => localStorage.removeItem(k))
+}
+
 export const AVAILABLE_MODELS = [
   { id: 'claude-haiku-4-5-20251001', name: 'Haiku',   desc: 'Fastest · Good for quick briefs',          tier: 'Free',     speed: '~8s',  cost: '$' },
   { id: 'claude-sonnet-4-6',         name: 'Sonnet',  desc: 'Balanced · Recommended (default)',         tier: 'Standard', speed: '~15s', cost: '$$' },
@@ -30,6 +43,24 @@ export const DEFAULT_CLUBS = [
   { club: 'SW (56°)',        carry:  85, shape: 'Straight'    },
   { club: 'LW (60°)',        carry:  65, shape: 'Straight'    },
 ]
+
+// Default holes array for a new course — standard par layout.
+const DEFAULT_HOLES = Array.from({ length: 18 }, (_, i) => ({
+  par:      [4,4,3,5,4,3,4,5,4,4,3,4,5,4,3,4,4,5][i] || 4,
+  yardage:  '',
+  handicap: i + 1,
+  notes:    '',
+  elevation: '',
+}))
+
+export function makeDefaultCourse() {
+  return {
+    name: '', location: '', yardage: '', rating: '', slope: '', par: 72,
+    conditions: 'Normal', roundType: 'Stroke play tournament',
+    targetScore: '', notes: '', source: '', elevation: '',
+    holes: DEFAULT_HOLES.map(h => ({ ...h })),
+  }
+}
 
 export const DEFAULT_PLAYER = {
   name: '', handicap: '4.2', ghin: '',

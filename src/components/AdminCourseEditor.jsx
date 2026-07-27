@@ -1,6 +1,8 @@
 import { useState, useMemo } from 'react'
 import { C, card, inp, lbl, btnP, btnG } from '../theme.js'
 import { adminUpdateMetadata, adminRenameCourse, adminReparsePdf } from '../lib/courseApi.js'
+import { validateScorecard } from '../lib/scorecardValidation.js'
+import useEscapeClose from '../hooks/useEscapeClose.js'
 
 // Modal editor for course metadata. Mounts over the admin tab; closes on
 // Cancel or after a successful save. All edits go through the server, which
@@ -54,24 +56,13 @@ export default function AdminCourseEditor({ course, authToken, onClose, onSaved 
   const [busy, setBusy] = useState(false)
   const [reparse, setReparse] = useState(null) // { diff, parsed } when re-parse run
 
+  useEscapeClose(onClose)
+
   const nameChanged = draft.name.trim().toLowerCase() !== (course.name || '').trim().toLowerCase()
   const locationChanged = draft.location.trim().toLowerCase() !== (course.location || '').trim().toLowerCase()
   const isRename = nameChanged || locationChanged
 
-  // ── Validation mirrors api/course-ai.js validateScorecardJson ─────────────
-  const validationIssues = useMemo(() => {
-    const issues = []
-    const parTotal = holes.reduce((s, h) => s + (parseInt(h.par) || 0), 0)
-    if (parTotal < 68 || parTotal > 74) issues.push(`par total ${parTotal} outside 68–74`)
-    const yardTotal = holes.reduce((s, h) => s + (parseInt(h.yardage) || 0), 0)
-    if (yardTotal && (yardTotal < 4500 || yardTotal > 8200)) issues.push(`yardage total ${yardTotal} outside 4500–8200`)
-    for (let i = 0; i < holes.length; i++) {
-      const y = parseInt(holes[i].yardage) || 0
-      if (y && (y < 80 || y > 700)) { issues.push(`hole ${i + 1} yardage ${y} outside 80–700`); break }
-    }
-    if (!draft.name.trim()) issues.push('course name is required')
-    return issues
-  }, [holes, draft.name])
+  const validationIssues = useMemo(() => validateScorecard(holes, draft.name), [holes, draft.name])
 
   function updateHole(i, patch) {
     setHoles(prev => prev.map((h, idx) => idx === i ? { ...h, ...patch } : h))

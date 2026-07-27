@@ -1,13 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { C, F, card, inp, lbl, btnP, btnG } from '../theme.js'
 import { Badge } from './ui.jsx'
+import { shortDate } from '../lib/formatters.js'
+import useEscapeClose from '../hooks/useEscapeClose.js'
 
 const ROLE_OPTIONS = ['viewer', 'editor', 'admin', 'owner']
-
-function shortDate(iso) {
-  if (!iso) return '—'
-  try { return new Date(iso).toLocaleDateString() } catch { return iso }
-}
 
 // ── User detail drawer ────────────────────────────────────────────────────────
 function UserDrawer({ user, authToken, currentUserId, onClose, onSoftDelete, onRestore, onImpersonate }) {
@@ -37,12 +34,8 @@ function UserDrawer({ user, authToken, currentUserId, onClose, onSoftDelete, onR
     load()
   }, [user.id, authToken])
 
-  // Close on Escape or backdrop click
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  // Close on Escape
+  useEscapeClose(onClose)
 
   const handleImpersonate = async () => {
     setImpMsg('Generating link…')
