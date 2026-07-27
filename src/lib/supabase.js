@@ -8,14 +8,16 @@ if (!SUPABASE_URL || !SUPABASE_ANON) {
   console.warn('[supabase] VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY not set — auth and DB disabled')
 }
 
-export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON, {
-  auth: {
-    autoRefreshToken: true,
-    persistSession: true,
-    detectSessionInUrl: true,
-    flowType: 'implicit',
-  },
-})
+export const supabase = SUPABASE_URL && SUPABASE_ANON
+  ? createClient(SUPABASE_URL, SUPABASE_ANON, {
+      auth: {
+        autoRefreshToken: true,
+        persistSession: true,
+        detectSessionInUrl: true,
+        flowType: 'implicit',
+      },
+    })
+  : null
 
 // ── Per-user data helpers ─────────────────────────────────────────────────────
 
