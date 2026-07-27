@@ -344,7 +344,8 @@ export default function CourseSearch({ authToken, onSelect, onBrowseLibrary }) {
         <div>
           <label style={lbl}>Course name</label>
           <input style={inp} value={query} onChange={e => setQuery(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && search()} placeholder="e.g. Rhodes Ranch Golf Club" />
+            onKeyDown={e => e.key === 'Enter' && search()} placeholder="e.g. Rhodes Ranch Golf Club"
+            enterKeyHint="search" autoComplete="off" />
         </div>
         <div>
           <label style={lbl}>City / State</label>
@@ -454,6 +455,19 @@ export default function CourseSearch({ authToken, onSelect, onBrowseLibrary }) {
         </div>
       )}
 
+      {/* Loading skeleton — shown while a course detail is being fetched */}
+      {loading && !detail && results.length === 0 && !showProgressTracker && (
+        <div style={{ marginTop: 12, background: C.bgInput, border: `1px solid ${C.border}`, borderRadius: 10, padding: '16px 14px' }}>
+          <div style={{ height: 16, width: '60%', background: C.border, borderRadius: 4, marginBottom: 10, animation: 'blink 1.2s ease-in-out infinite' }} />
+          <div style={{ height: 12, width: '40%', background: C.border, borderRadius: 4, marginBottom: 16, animation: 'blink 1.2s ease-in-out infinite', animationDelay: '0.2s' }} />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(10, 1fr)', gap: 4 }}>
+            {Array.from({ length: 20 }).map((_, i) => (
+              <div key={i} style={{ height: 20, background: C.border, borderRadius: 3, animation: 'blink 1.2s ease-in-out infinite', animationDelay: `${i * 0.05}s` }} />
+            ))}
+          </div>
+        </div>
+      )}
+
       {results.length > 0 && !detail && (
         <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
           {results.map((r, i) => {
@@ -507,6 +521,10 @@ export default function CourseSearch({ authToken, onSelect, onBrowseLibrary }) {
             <button style={btnP} onClick={() => onSelect(detail)}>Use this scorecard →</button>
           </div>
           <ScorecardPreview holes={detail.holes} />
+          {/* Duplicate CTA at bottom so user doesn't scroll back up after reviewing 18 holes */}
+          <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>
+            <button style={btnP} onClick={() => onSelect(detail)}>Use this scorecard →</button>
+          </div>
         </div>
       )}
     </div>

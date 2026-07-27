@@ -94,7 +94,7 @@ export default function BriefRating({ user, recLogId }) {
             aria-label="What was off"
             disabled={notesSaving}
             style={{
-              flex: 1, minWidth: 240, height: 32, borderRadius: 6,
+              flex: 1, minWidth: 0, height: 32, borderRadius: 6,
               border: `1px solid ${C.border}`, background: C.bg,
               padding: '0 10px', color: C.text, fontSize: 12, fontFamily: F,
             }}

@@ -382,6 +382,13 @@ export default function CourseDetailDrawer({ course, onClose, onUseForPrep, sess
             </div>
           )}
 
+          {/* Bottom CTA — duplicated so user doesn't scroll back up after reviewing all holes */}
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            <button style={{ ...btnP }} onClick={handleUseForPrep}>
+              Use for Round Prep →
+            </button>
+          </div>
+
           {/* Metadata footer */}
           <div style={{ ...card, padding: '12px 16px' }}>
             <p style={{ ...lbl, margin: '0 0 8px' }}>Source</p>

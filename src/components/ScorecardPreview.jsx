@@ -1,3 +1,4 @@
+import { useState, useRef, useEffect } from 'react'
 import { C } from '../theme.js'
 
 function hazardSummary(hz) {
@@ -33,9 +34,34 @@ export default function ScorecardPreview({ holes }) {
       </td>
     </tr>
   )
+  const scrollRef = useRef(null)
+  const [canScrollLeft, setCanScrollLeft] = useState(false)
+  const [canScrollRight, setCanScrollRight] = useState(false)
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const check = () => {
+      setCanScrollLeft(el.scrollLeft > 4)
+      setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 4)
+    }
+    check()
+    el.addEventListener('scroll', check, { passive: true })
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(check) : null
+    ro?.observe(el)
+    return () => { el.removeEventListener('scroll', check); ro?.disconnect() }
+  }, [holes])
+
   return (
-    <div style={{ overflowX: 'auto' }}>
-      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11, tableLayout: 'fixed' }}>
+    <div style={{ position: 'relative' }}>
+      {canScrollLeft && (
+        <div aria-hidden style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 24, background: `linear-gradient(to right, ${C.bgCard}, transparent)`, zIndex: 1, pointerEvents: 'none' }} />
+      )}
+      {canScrollRight && (
+        <div aria-hidden style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 24, background: `linear-gradient(to left, ${C.bgCard}, transparent)`, zIndex: 1, pointerEvents: 'none' }} />
+      )}
+      <div ref={scrollRef} style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+      <table style={{ borderCollapse: 'collapse', fontSize: 11, tableLayout: 'fixed', minWidth: 760 }}>
         <thead>
           <tr>
             <td style={{ color: C.textFaint, padding: '3px 4px', width: 36 }}>Hole</td>
@@ -51,6 +77,7 @@ export default function ScorecardPreview({ holes }) {
           {row('HCP', h => h.handicap, C.textFaint)}
         </tbody>
       </table>
+      </div>
       {hasHazards && (
         <div style={{ marginTop: 10, padding: '8px 10px', background: C.bgInput, border: `1px solid ${C.border}`, borderRadius: 8 }}>
           <div style={{ fontSize: 10, color: C.textFaint, marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5 }}>

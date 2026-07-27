@@ -217,9 +217,9 @@ export default function OnboardingScreen({ onComplete }) {
           <p style={S.sub}>Takes about 2 minutes. You can edit everything later.</p>
         </div>
 
-        <div style={S.progress}>
+        <div style={S.progress} role="progressbar" aria-valuenow={step + 1} aria-valuemin={1} aria-valuemax={TOTAL_STEPS} aria-label={`Step ${step + 1} of ${TOTAL_STEPS}`}>
           {Array.from({ length: TOTAL_STEPS }).map((_, i) => (
-            <div key={i} style={S.dot(i === step, i < step)} />
+            <div key={i} style={S.dot(i === step, i < step)} role="presentation" aria-hidden="true" />
           ))}
         </div>
 
@@ -376,10 +376,16 @@ export default function OnboardingScreen({ onComplete }) {
               Generate a sample plan →
             </button>
             <button
-              style={{ ...S.btnG, width: '100%' }}
+              style={{ ...S.btnG, width: '100%', marginBottom: 10 }}
               onClick={() => finish()}
             >
               Finish — I'll start later
+            </button>
+            <button
+              style={S.btnSkip}
+              onClick={() => setStep(s => s - 1)}
+            >
+              ← Back
             </button>
           </div>
         )}

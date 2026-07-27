@@ -686,6 +686,8 @@ function AppInner({ user, session, onSignOut, onRunOnboarding }) {
         details summary::after{content:'▸';color:${C.textFaint};font-size:10px;margin-left:auto;transition:transform 0.15s}
         details[open] summary::after{transform:rotate(90deg)}
         input:focus,textarea:focus,select:focus{border-color:${C.accentDim}!important;outline:none}
+        *:focus-visible{outline:2px solid ${C.accent};outline-offset:2px;border-radius:4px}
+        input:focus-visible,textarea:focus-visible,select:focus-visible{outline-offset:0}
         select option{background:${C.bgInput}}
         code{background:${C.bgInput};padding:1px 5px;border-radius:4px;font-size:0.9em}
         .tab-bar::-webkit-scrollbar{display:none}
@@ -722,7 +724,7 @@ function AppInner({ user, session, onSignOut, onRunOnboarding }) {
       <div style={{ borderBottom: `1px solid ${C.border}`, padding: '0 1.5rem' }}>
         <div className="tab-bar" role="tablist" aria-label="Main navigation" style={{ maxWidth: 1020, margin: '0 auto', display: 'flex', overflowX: 'auto', scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
           {TABS.map(t => (
-            <button key={t.id} role="tab" aria-selected={tab === t.id} aria-controls={`panel-${t.id}`} onClick={() => setTab(t.id)} style={{
+            <button key={t.id} id={`tab-${t.id}`} role="tab" aria-selected={tab === t.id} aria-controls={`panel-${t.id}`} onClick={() => setTab(t.id)} style={{
               background: 'transparent', border: 'none',
               borderBottom: tab === t.id ? `2px solid ${C.accent}` : '2px solid transparent',
               padding: isMobile ? '12px 14px' : '13px 18px',
@@ -738,7 +740,7 @@ function AppInner({ user, session, onSignOut, onRunOnboarding }) {
       </div>
 
       {/* Content */}
-      <div style={{ maxWidth: 1020, margin: '0 auto', padding: isMobile ? '1rem 0.75rem 4rem' : '1.5rem 1.5rem 4rem' }}>
+      <div id={`panel-${tab}`} role="tabpanel" aria-labelledby={`tab-${tab}`} style={{ maxWidth: 1020, margin: '0 auto', padding: isMobile ? '1rem 0.75rem 4rem' : '1.5rem 1.5rem 4rem' }}>
 
         {/* ══════════════════════════════════════════════════════════════════
             SECTION 1: MY PLAYER
@@ -790,6 +792,7 @@ function AppInner({ user, session, onSignOut, onRunOnboarding }) {
             applyScorecard, resetPrep,
             courseSearchResetKey, handleHoleContribution,
             setTab, setExpandedBrief,
+            canInstall: canInstall && isOnline,
           }}>
             <PrepTab />
           </PrepContext.Provider>
