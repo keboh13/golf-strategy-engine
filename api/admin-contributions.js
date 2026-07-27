@@ -155,6 +155,27 @@ export default async function handler(req) {
       await fetch(`${base}/course_hole_contrib?course_key=eq.${encodeURIComponent(courseKey)}&hole_ref=eq.${holeRef}`,
         { method: 'DELETE', headers: svcH })
 
+      // Bump edit_version so client caches refresh (#168)
+      await fetch(`${supabaseUrl}/rest/v1/rpc/increment_edit_version`, {
+        method: 'POST',
+        headers: { ...svcH },
+        body: JSON.stringify({ p_cache_key: courseKey }),
+      }).catch(() => {
+        // Fallback: PATCH with read-then-write if RPC doesn't exist
+        fetch(`${base}/course_cache?cache_key=eq.${encodeURIComponent(courseKey)}&select=edit_version`, { headers: svcH })
+          .then(r => r.ok ? r.json() : [])
+          .then(rows => {
+            if (Array.isArray(rows) && rows.length) {
+              const next = Number(rows[0].edit_version || 0) + 1
+              fetch(`${base}/course_cache?cache_key=eq.${encodeURIComponent(courseKey)}`, {
+                method: 'PATCH',
+                headers: svcH,
+                body: JSON.stringify({ edit_version: next, updated_at: new Date().toISOString() }),
+              }).catch(() => {})
+            }
+          }).catch(() => {})
+      })
+
       await writeAudit(supabaseUrl, svcKey, requester.id, 'contribution.approve', targetId, { courseKey, holeRef })
 
       // ── Attribution + trust tier ──────────────────────────────────────────
