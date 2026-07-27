@@ -76,7 +76,7 @@ export default function PlayerTab({
       {/* Sub-tab navigation */}
       <div role="tablist" aria-label="Player sections" style={{ display: 'flex', gap: 4, marginBottom: 16, background: C.bgInput, borderRadius: 10, padding: 4, overflowX: 'auto' }}>
         {PLAYER_SUBS.map(s => (
-          <button key={s.id} role="tab" aria-selected={playerSubTab === s.id} onClick={() => setPlayerSubTab(s.id)} style={{
+          <button key={s.id} id={`ptab-${s.id}`} role="tab" aria-selected={playerSubTab === s.id} aria-controls={`ppanel-${s.id}`} onClick={() => setPlayerSubTab(s.id)} style={{
             flex: isMobile ? 1 : 'none',
             padding: isMobile ? '10px 8px' : '10px 18px',
             fontSize: isMobile ? 11 : 13, fontWeight: 500, fontFamily: F,
@@ -92,7 +92,7 @@ export default function PlayerTab({
 
       {/* ── Player Details sub-tab ── */}
       {playerSubTab === 'details' && (
-        <div>
+        <div id="ppanel-details" role="tabpanel" aria-labelledby="ptab-details">
           <div style={{ ...card, marginBottom: 12 }}>
             {/* Identity section - collapsible on mobile */}
             <details open style={{ marginBottom: 14 }}>
@@ -174,7 +174,7 @@ export default function PlayerTab({
 
       {/* ── Club Distances sub-tab ── */}
       {playerSubTab === 'clubs' && (
-        <div style={card}>
+        <div id="ppanel-clubs" role="tabpanel" aria-labelledby="ptab-clubs" style={card}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4, flexWrap: 'wrap', gap: 8 }}>
             <p style={{ ...lbl, margin: 0 }}>Club distances</p>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -199,8 +199,9 @@ export default function PlayerTab({
                       <span style={{ fontSize: 12, color: C.accent, fontWeight: 600 }}>{c.carry}y</span>
                       <span style={{ fontSize: 11, color: C.textFaint }}>{c.shape}</span>
                     </div>
-                    <button onClick={e => { e.preventDefault(); setClubs(clubs.filter((_, j) => j !== i)) }}
-                      style={{ background: 'none', border: 'none', color: C.textFaint, cursor: 'pointer', fontSize: 15, padding: 0 }}>×</button>
+                    <button onClick={e => { e.preventDefault(); if (window.confirm(`Remove ${c.club} from your bag?`)) setClubs(clubs.filter((_, j) => j !== i)) }}
+                      style={{ background: 'none', border: 'none', color: C.textFaint, cursor: 'pointer', fontSize: 15, padding: '4px 6px', minWidth: 32, minHeight: 32, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                      aria-label={`Remove ${c.club}`}>×</button>
                   </summary>
                   <div style={{ padding: '8px 12px 12px', borderTop: `1px solid ${C.border}`, display: 'flex', flexDirection: 'column', gap: 6 }}>
                     <input style={{ ...inp, padding: '6px 10px', fontSize: 13 }} value={c.club} placeholder="Club name"
@@ -241,9 +242,10 @@ export default function PlayerTab({
                     {['Fade','Draw','Straight','Slight fade','Slight draw'].map(s => <option key={s}>{s}</option>)}
                   </select>
                   <button
-                    onClick={() => { setClubs(clubs.filter((_, j) => j !== i)); setExpandedClubs(prev => { const n = {}; Object.keys(prev).forEach(k => { if (Number(k) < i) n[k] = prev[k]; else if (Number(k) > i) n[Number(k)-1] = prev[k] }); return n }) }}
-                    style={{ background: 'none', border: 'none', color: C.textFaint, cursor: 'pointer', fontSize: 15, padding: 0, textAlign: 'center' }}
+                    onClick={() => { if (window.confirm(`Remove ${c.club} from your bag?`)) { setClubs(clubs.filter((_, j) => j !== i)); setExpandedClubs(prev => { const n = {}; Object.keys(prev).forEach(k => { if (Number(k) < i) n[k] = prev[k]; else if (Number(k) > i) n[Number(k)-1] = prev[k] }); return n }) } }}
+                    style={{ background: 'none', border: 'none', color: C.textFaint, cursor: 'pointer', fontSize: 15, padding: '4px 6px', textAlign: 'center', minWidth: 28, minHeight: 28, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                     title="Remove club"
+                    aria-label={`Remove ${c.club}`}
                   >×</button>
                 </div>
                 {isOpen && (
@@ -272,12 +274,14 @@ export default function PlayerTab({
 
       {/* ── Data Import sub-tab ── */}
       {playerSubTab === 'import' && (
-        <ImportTab clubs={clubs} setClubs={setClubs} C={C} card={card} inp={inp} lbl={lbl} btnP={btnP} btnG={btnG} />
+        <div id="ppanel-import" role="tabpanel" aria-labelledby="ptab-import">
+          <ImportTab clubs={clubs} setClubs={setClubs} C={C} card={card} inp={inp} lbl={lbl} btnP={btnP} btnG={btnG} />
+        </div>
       )}
 
       {/* ── Scoring History sub-tab ── */}
       {playerSubTab === 'scoring' && (
-        <div>
+        <div id="ppanel-scoring" role="tabpanel" aria-labelledby="ptab-scoring">
           <div style={{ ...card, marginBottom: 12, borderColor: C.accentMuted }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14, flexWrap: 'wrap', gap: 8 }}>
               <p style={{ fontSize: 13, color: C.textMuted, margin: 0, lineHeight: 1.6, maxWidth: 600 }}>
@@ -300,13 +304,22 @@ export default function PlayerTab({
                 {scoringHistory.map((r, i) => {
                   const hs = historySearch[i] || {}
                   return (
-                    <div key={i} style={{ background: C.bgInput, border: `1px solid ${C.border}`, borderRadius: 10, padding: '12px 14px' }}>
+                    <details key={i} style={{ background: C.bgInput, border: `1px solid ${C.border}`, borderRadius: 10 }}>
+                      <summary style={{ padding: '12px 14px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between', listStyle: 'none', WebkitAppearance: 'none' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
+                          <span style={{ fontSize: 13, fontWeight: 500, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.course || 'Untitled round'}</span>
+                          {r.score && <span style={{ fontSize: 12, color: C.accent, fontWeight: 600, flexShrink: 0 }}>{r.score}</span>}
+                          {r.toPar && <span style={{ fontSize: 11, color: C.textFaint, flexShrink: 0 }}>({r.toPar})</span>}
+                          {r.date && <span style={{ fontSize: 11, color: C.textFaint, flexShrink: 0 }}>{r.date}</span>}
+                        </div>
+                        <button style={{ background: 'transparent', border: 'none', color: C.textFaint, cursor: 'pointer', fontSize: 18, padding: '2px 6px', flexShrink: 0 }}
+                          onClick={e => { e.preventDefault(); setScoringHistory(h => h.filter((_, j) => j !== i)) }} title="Remove">×</button>
+                      </summary>
+                      <div style={{ padding: '0 14px 12px' }}>
                       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
                         <input style={{ ...inp, flex: 1, padding: '6px 10px', fontSize: 13 }} value={r.course}
                           onChange={e => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, course: e.target.value } : rr))}
                           placeholder="Course name" />
-                        <button style={{ background: 'transparent', border: 'none', color: C.textFaint, cursor: 'pointer', fontSize: 18, padding: '2px 6px', flexShrink: 0 }}
-                          onClick={() => setScoringHistory(h => h.filter((_, j) => j !== i))} title="Remove">×</button>
                       </div>
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px 8px', marginBottom: 8 }}>
                         <div><label style={lbl}>City / State</label><input style={{ ...inp, padding: '5px 8px', fontSize: 12 }} value={r.location} onChange={e => setScoringHistory(h => h.map((rr, j) => j === i ? { ...rr, location: e.target.value } : rr))} placeholder="City, ST" /></div>
@@ -350,14 +363,15 @@ export default function PlayerTab({
                           )}
                         </div>
                       )}
-                    </div>
+                      </div>
+                    </details>
                   )
                 })}
               </div>
             ) : (
               /* Desktop scoring history - same as before */
-              <div style={{ overflowX: 'auto' }}>
-                <div style={{ minWidth: 740 }}>
+              <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+                <div style={{ minWidth: 740, paddingBottom: 2 }}>
                   <div style={{ display: 'grid', gridTemplateColumns: '140px 90px 105px 46px 40px 40px 105px 105px 1fr 28px', gap: '4px 8px', marginBottom: 6 }}>
                     {['Course','City / State','Date','Score','Par','+/-','Round type','Conditions','Notes',''].map((h, i) =>
                       <span key={i} style={{ fontSize: 10, color: C.textFaint, letterSpacing: '0.07em', textTransform: 'uppercase' }}>{h}</span>

@@ -1,3 +1,4 @@
+import { useRef, useState } from 'react'
 import PlanRenderer from '../components/PlanRenderer.jsx'
 import { rollupConfidence } from '../lib/recommendation/confidence.js'
 import { validateCourseTotals } from '../lib/recommendation/courseValidation.js'
@@ -50,10 +51,13 @@ export default function PrepTab() {
     courseSearchResetKey: courseSearchResetKeyRaw,
     handleHoleContribution,
     setTab, setExpandedBrief,
+    canInstall,
   } = usePrepContext()
   const enrichProgress = enrichProgressRaw || EMPTY_PROGRESS
   const genProgress = genProgressRaw || EMPTY_PROGRESS
   const courseSearchResetKey = courseSearchResetKeyRaw ?? 0
+  const swipeStartRef = useRef(null)
+  const [showSwipeHint, setShowSwipeHint] = useState(true)
   return (
     <div>
       <SectionHead title="Round Prep" sub="Set up your round step by step" />
@@ -405,26 +409,40 @@ export default function PrepTab() {
 
             {planView === 'companion' && parsedHoles.holes.length > 0 ? (
               <div
-                onTouchStart={e => { e.currentTarget._swipeX = e.touches[0].clientX }}
+                onTouchStart={e => { swipeStartRef.current = e.touches[0].clientX }}
                 onTouchEnd={e => {
-                  const dx = e.changedTouches[0].clientX - (e.currentTarget._swipeX || 0)
-                  if (Math.abs(dx) > 60) {
+                  const startX = swipeStartRef.current
+                  if (startX == null) return
+                  const dx = e.changedTouches[0].clientX - startX
+                  swipeStartRef.current = null
+                  if (Math.abs(dx) > 50) {
+                    setShowSwipeHint(false)
                     if (dx < 0 && currentHole < parsedHoles.holes.length - 1) setCurrentHole(h => h + 1)
                     if (dx > 0 && currentHole > 0) setCurrentHole(h => h - 1)
                   }
                 }}>
-                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 12 }}>
+                {isMobile && showSwipeHint && parsedHoles.holes.length > 1 && (
+                  <div style={{ textAlign: 'center', padding: '6px 0 2px', fontSize: 11, color: C.textFaint }}>
+                    Swipe left/right to change holes
+                  </div>
+                )}
+                <div style={{
+                  display: 'flex', gap: 4, marginBottom: 12,
+                  ...(isMobile ? { overflowX: 'auto', WebkitOverflowScrolling: 'touch', scrollbarWidth: 'none', msOverflowStyle: 'none', flexWrap: 'nowrap', paddingBottom: 4 } : { flexWrap: 'wrap' }),
+                }}>
+                  {isMobile && <style>{`.hole-scroll::-webkit-scrollbar{display:none}`}</style>}
                   {parsedHoles.holes.map((h, i) => (
                     <button key={h.num} onClick={() => setCurrentHole(i)} style={{
-                      width: 36, height: 36, borderRadius: 8, border: `1px solid ${currentHole === i ? C.accent : C.border}`,
+                      width: 36, height: 36, minWidth: 36, borderRadius: 8, border: `1px solid ${currentHole === i ? C.accent : C.border}`,
                       background: currentHole === i ? C.accentMuted : C.bgInput,
                       color: currentHole === i ? C.accent : C.textMuted,
                       fontSize: 13, fontWeight: 600, fontFamily: F, cursor: 'pointer',
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      flexShrink: 0,
                     }}>{h.num}</button>
                   ))}
                 </div>
-                {(() => {
+                {!isMobile && (() => {
                   const holesPlayed = parsedHoles.holes.filter(h => holeScores[h.num] != null)
                   if (!holesPlayed.length && !holeScores[parsedHoles.holes[currentHole]?.num]) return null
                   const totalStrokes = holesPlayed.reduce((sum, h) => sum + (holeScores[h.num] || 0), 0)
@@ -498,9 +516,24 @@ export default function PrepTab() {
                     )
                   })()}
                 </div>
+                {isMobile && (() => {
+                  const holesPlayed = parsedHoles.holes.filter(h => holeScores[h.num] != null)
+                  if (!holesPlayed.length && !holeScores[parsedHoles.holes[currentHole]?.num]) return null
+                  const totalStrokes = holesPlayed.reduce((sum, h) => sum + (holeScores[h.num] || 0), 0)
+                  const totalPar = holesPlayed.reduce((sum, h) => { const m = h.content.match(/Par\s+(\d)/i); return sum + (m ? parseInt(m[1]) : 4) }, 0)
+                  const diff = totalStrokes - totalPar
+                  return (
+                    <div style={{ background: C.bgInput, borderRadius: 8, padding: '8px 14px', marginTop: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: diff <= 0 ? C.green : diff <= 3 ? C.amber : C.red }}>
+                        {diff === 0 ? 'E' : diff > 0 ? `+${diff}` : diff} thru {holesPlayed.length}
+                      </span>
+                      <span style={{ fontSize: 11, color: C.textMuted }}>Strokes: {totalStrokes} · Par: {totalPar}</span>
+                    </div>
+                  )
+                })()}
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 12, gap: 8 }}>
-                  <button style={{ ...btnG, flex: 1, opacity: currentHole === 0 ? 0.4 : 1, textAlign: 'center' }} disabled={currentHole === 0} onClick={() => setCurrentHole(h => Math.max(0, h - 1))}>← Hole {parsedHoles.holes[currentHole - 1]?.num || ''}</button>
-                  <button style={{ ...btnG, flex: 1, opacity: currentHole >= parsedHoles.holes.length - 1 ? 0.4 : 1, textAlign: 'center' }} disabled={currentHole >= parsedHoles.holes.length - 1} onClick={() => setCurrentHole(h => Math.min(parsedHoles.holes.length - 1, h + 1))}>Hole {parsedHoles.holes[currentHole + 1]?.num || ''} →</button>
+                  <button style={{ ...btnG, flex: 1, opacity: currentHole === 0 ? 0.4 : 1, textAlign: 'center', minHeight: 44, padding: '10px 8px' }} disabled={currentHole === 0} onClick={() => setCurrentHole(h => Math.max(0, h - 1))}>← {currentHole > 0 ? `Hole ${parsedHoles.holes[currentHole - 1]?.num}` : 'Prev'}</button>
+                  <button style={{ ...btnG, flex: 1, opacity: currentHole >= parsedHoles.holes.length - 1 ? 0.4 : 1, textAlign: 'center', minHeight: 44, padding: '10px 8px' }} disabled={currentHole >= parsedHoles.holes.length - 1} onClick={() => setCurrentHole(h => Math.min(parsedHoles.holes.length - 1, h + 1))}>{currentHole < parsedHoles.holes.length - 1 ? `Hole ${parsedHoles.holes[currentHole + 1]?.num}` : 'Next'} →</button>
                 </div>
                 {parsedHoles.postamble.trim() && <div style={{ ...card, marginTop: 12 }}><PlanRenderer text={parsedHoles.postamble} /></div>}
               </div>
@@ -555,6 +588,8 @@ export default function PrepTab() {
         weather={weather}
         prepStep={prepStep}
         setPrepStep={setPrepStep}
+        pwaBannerVisible={!!canInstall}
+        onStartOver={resetPrep}
       />
     </div>
   )

@@ -37,6 +37,8 @@ export default function PrepContextStrip({
   weather,
   prepStep,
   setPrepStep,
+  pwaBannerVisible,
+  onStartOver,
 }) {
   const hasCourse = !!course?.name
   if (!hasCourse) return null  // Strip stays hidden until there's something to summarize.
@@ -81,15 +83,18 @@ export default function PrepContextStrip({
     <div
       role="region"
       aria-label="Round Prep context"
+      className="prep-ctx-strip"
       style={{
-        position: 'sticky', bottom: 8, marginTop: 16, zIndex: 5,
+        position: 'sticky', bottom: pwaBannerVisible ? 64 : 8, marginTop: 16, zIndex: 5,
         background: C.bgCard, border: `1px solid ${C.border}`,
         borderRadius: 12, padding: 8,
-        display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap',
-        overflowX: 'auto',
+        display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'nowrap',
+        overflowX: 'auto', WebkitOverflowScrolling: 'touch',
+        scrollbarWidth: 'none', msOverflowStyle: 'none',
         boxShadow: '0 6px 18px rgba(0,0,0,0.25)',
       }}
     >
+      <style>{`.prep-ctx-strip::-webkit-scrollbar{display:none}`}</style>
       {courseChip}
       {teeChip}
       {teeChip3}
@@ -97,6 +102,20 @@ export default function PrepContextStrip({
         <span style={{ fontSize: 10, color: C.textFaint, marginLeft: 'auto' }}>
           {coords.lat.toFixed(2)}, {coords.lng.toFixed(2)}
         </span>
+      )}
+      {onStartOver && (
+        <button
+          type="button"
+          onClick={onStartOver}
+          style={{
+            background: 'transparent', border: `1px solid ${C.border}`,
+            borderRadius: 8, padding: '6px 10px',
+            fontFamily: F, fontSize: 11, color: C.textMuted,
+            cursor: 'pointer', whiteSpace: 'nowrap', marginLeft: coords?.lat ? 0 : 'auto',
+          }}
+        >
+          Start over
+        </button>
       )}
     </div>
   )

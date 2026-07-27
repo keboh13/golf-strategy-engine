@@ -6,7 +6,7 @@ export const C = {
   blue: '#38bdf8', blueMuted: '#0c2a3d',
   red: '#f87171', redMuted: '#3a1515',
   green: '#34d399', greenMuted: '#064e3b',
-  text: '#e4e6f0', textMuted: '#8b8fa8', textFaint: '#44475a',
+  text: '#e4e6f0', textMuted: '#8b8fa8', textFaint: '#787da0',
 }
 
 export const F = "'Inter', 'Helvetica Neue', sans-serif"
