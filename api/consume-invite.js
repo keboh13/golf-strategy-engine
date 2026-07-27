@@ -10,8 +10,10 @@
 
 export const config = { runtime: 'edge' }
 
+import { checkRateLimit, getClientIP } from './_lib/rateLimit.js'
+
 const CORS_HEADERS = {
-  'Access-Control-Allow-Origin':  process.env.ALLOWED_ORIGIN || '*',
+  'Access-Control-Allow-Origin':  process.env.ALLOWED_ORIGIN || '',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
 }
@@ -56,6 +58,16 @@ export default async function handler(req) {
 
   // ── POST: consume invite — user must be authenticated ────────────────────
   if (req.method === 'POST') {
+    // Rate limit: 10 attempts per 15 minutes per IP
+    const clientIP = getClientIP(req)
+    const { limited } = await checkRateLimit(supabaseUrl, svcKey, {
+      identifier: clientIP,
+      endpoint: 'consume-invite',
+      maxAttempts: 10,
+      windowMinutes: 15,
+    })
+    if (limited) return json({ error: 'Too many requests. Please try again later.' }, 429)
+
     const bearerToken = (req.headers.get('Authorization') || '').replace('Bearer ', '')
     if (!bearerToken) return json({ error: 'Unauthorized — sign in first.' }, 401)
 

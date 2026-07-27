@@ -28,11 +28,11 @@ describe('validateAuth', () => {
     expect(await validateAuth(req)).toBeNull()
   })
 
-  it('returns dev-user when supabase env vars are missing', async () => {
+  it('returns null when supabase env vars are missing (no dev-user fallback)', async () => {
     delete process.env.SUPABASE_URL
     delete process.env.SUPABASE_SERVICE_ROLE_KEY
     const req = { headers: new Headers({ Authorization: 'Bearer some-token' }) }
-    expect(await validateAuth(req)).toBe('dev-user')
+    expect(await validateAuth(req)).toBeNull()
   })
 
   it('returns user id on successful auth', async () => {
@@ -80,8 +80,12 @@ describe('isAdminUser', () => {
     expect(await isAdminUser(undefined)).toBe(false)
   })
 
-  it('returns true for dev-user', async () => {
-    expect(await isAdminUser('dev-user')).toBe(true)
+  it('returns false for dev-user (no special treatment)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve([]),
+    }))
+    expect(await isAdminUser('dev-user')).toBe(false)
   })
 
   it('returns false when supabase env vars are missing', async () => {

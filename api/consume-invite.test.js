@@ -53,6 +53,10 @@ describe('consume-invite', () => {
   })
 
   it('POST returns 401 without Authorization header', async () => {
+    // Rate limit check (count query + record attempt)
+    fetch.mockResolvedValueOnce({ ok: true, json: async () => [], headers: new Headers({ 'content-range': '*/0' }) })
+    fetch.mockResolvedValueOnce({ ok: true })
+
     const res = await handler(new Request('https://x/api/consume-invite', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -62,6 +66,10 @@ describe('consume-invite', () => {
   })
 
   it('POST returns 401 with invalid JWT', async () => {
+    // Rate limit check (count query + record attempt)
+    fetch.mockResolvedValueOnce({ ok: true, json: async () => [], headers: new Headers({ 'content-range': '*/0' }) })
+    fetch.mockResolvedValueOnce({ ok: true })
+    // Auth check
     fetch.mockResolvedValueOnce({ ok: false, status: 401 })
 
     const res = await handler(new Request('https://x/api/consume-invite', {

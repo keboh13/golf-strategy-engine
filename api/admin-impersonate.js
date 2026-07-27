@@ -6,8 +6,10 @@
 
 export const config = { runtime: 'edge' }
 
+import { checkRateLimit } from './_lib/rateLimit.js'
+
 const CORS_HEADERS = {
-  'Access-Control-Allow-Origin':  process.env.ALLOWED_ORIGIN || '*',
+  'Access-Control-Allow-Origin':  process.env.ALLOWED_ORIGIN || '',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 }
@@ -39,6 +41,16 @@ export default async function handler(req) {
   const requesterId = await validateAuth(req)
   if (!requesterId) return json({ error: 'Unauthorized' }, 401)
   if (!(await isAdminUser(requesterId))) return json({ error: 'Forbidden — admin access only.' }, 403)
+
+  // Rate limit: 5 attempts per hour per admin user
+  const { limited } = await checkRateLimit(supabaseUrl, svcKey, {
+    identifier: requesterId,
+    endpoint: 'admin-impersonate',
+    maxAttempts: 5,
+    windowMinutes: 60,
+  })
+  if (limited) return json({ error: 'Too many requests. Please try again later.' }, 429)
+
   const requester = { id: requesterId }
 
   let body

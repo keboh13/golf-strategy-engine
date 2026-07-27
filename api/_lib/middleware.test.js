@@ -24,9 +24,9 @@ describe('corsHeaders', () => {
       else process.env.ALLOWED_ORIGIN = origEnv
     })
 
-    it('defaults origin to * when ALLOWED_ORIGIN is unset', () => {
+    it('defaults origin to empty string when ALLOWED_ORIGIN is unset (fail-closed)', () => {
       delete process.env.ALLOWED_ORIGIN
-      expect(corsHeaders()['Access-Control-Allow-Origin']).toBe('*')
+      expect(corsHeaders()['Access-Control-Allow-Origin']).toBe('')
     })
 
     it('uses ALLOWED_ORIGIN env var when set', () => {

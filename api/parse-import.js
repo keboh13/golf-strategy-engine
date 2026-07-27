@@ -16,7 +16,7 @@ import { validateNormalizedSession } from '../src/lib/aiImport.js'
 export const config = { runtime: 'edge' }
 
 const CORS_HEADERS = {
-  'Access-Control-Allow-Origin':  process.env.ALLOWED_ORIGIN || '*',
+  'Access-Control-Allow-Origin':  process.env.ALLOWED_ORIGIN || '',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 }

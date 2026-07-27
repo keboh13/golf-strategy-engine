@@ -59,7 +59,14 @@ describe('delete-account', () => {
       json: async () => ({ id: mockUserId }),
     })
 
-    // 4x data table deletes (Promise.allSettled)
+    // Rate limit check (count query) — under limit
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => [],
+      headers: new Headers({ 'content-range': '*/0' }),
+    })
+
+    // Rate limit record attempt + 4x data table deletes + 1 admin delete
     fetch.mockResolvedValue({ ok: true })
 
     const res = await handler(new Request('https://x/api/delete-account', {
@@ -70,9 +77,9 @@ describe('delete-account', () => {
     const body = await res.json()
     expect(body.ok).toBe(true)
 
-    // Should have called fetch: 1 (auth) + 4 (data) + 1 (admin delete) = 6
-    expect(fetch.mock.calls.length).toBe(6)
-    const deleteCall = fetch.mock.calls[5]
+    // Should have called fetch: 1 (auth) + 1 (rate limit count) + 1 (rate limit record) + 4 (data) + 1 (admin delete) = 8
+    expect(fetch.mock.calls.length).toBe(8)
+    const deleteCall = fetch.mock.calls[7]
     expect(deleteCall[0]).toContain(`/auth/v1/admin/users/${mockUserId}`)
     expect(deleteCall[1].method).toBe('DELETE')
   })
