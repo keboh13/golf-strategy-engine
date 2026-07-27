@@ -197,6 +197,57 @@ export async function getAllCachedCoursesDB() {
   return (data || []).map(r => ({ ...r.course_data, source: r.source, _cachedAt: new Date(r.cached_at).getTime(), _cacheKey: r.cache_key, _hitCount: r.hit_count, _editVersion: r.edit_version ?? 0, _updatedAt: r.updated_at, is_public: !!r.is_public }))
 }
 
+// Shared course_cache query builder. Encapsulates column selection, filtering,
+// sorting, and pagination so every call site stays in sync when the schema
+// changes.  Options:
+//   search:     ilike filter on cache_key
+//   publicOnly: restrict to is_public = true
+//   sort:       'recent' (default) | 'popular' | 'name'
+//   limit:      max rows (default 500)
+//   offset:     pagination offset (default 0)
+//   count:      if true, request Supabase row count
+//   columns:    override the default select string
+//   raw:        if true, return raw Supabase rows without normalization
+const COURSE_CACHE_COLS = 'cache_key,course_data,source,cached_at,hit_count,is_public,updated_at,edit_version'
+
+export async function queryCourseCacheDB(opts = {}) {
+  const {
+    search, publicOnly, sort = 'recent',
+    limit: lim = 500, offset = 0, count: wantCount = false,
+    columns = COURSE_CACHE_COLS, raw = false,
+  } = opts
+
+  let query = supabase
+    .from('course_cache')
+    .select(columns, wantCount ? { count: 'exact' } : undefined)
+
+  if (publicOnly) query = query.eq('is_public', true)
+  if (search && search.trim()) query = query.ilike('cache_key', `%${search.trim().toLowerCase()}%`)
+
+  if (sort === 'popular') query = query.order('hit_count', { ascending: false })
+  else if (sort === 'name') query = query.order('cache_key', { ascending: true })
+  else query = query.order('cached_at', { ascending: false })
+
+  query = query.range(offset, offset + lim - 1)
+
+  const { data, error, count: totalCount } = await query
+  if (error) throw error
+
+  if (raw) return { rows: data || [], count: totalCount }
+
+  const normalized = (data || []).map(r => ({
+    ...r.course_data,
+    source: r.source,
+    _cachedAt: new Date(r.cached_at).getTime(),
+    _cacheKey: r.cache_key,
+    _hitCount: r.hit_count,
+    _editVersion: r.edit_version ?? 0,
+    _updatedAt: r.updated_at,
+    is_public: !!r.is_public,
+  }))
+  return { rows: normalized, count: totalCount }
+}
+
 // Returns the set of canonical cache_keys currently in course_cache. Used by
 // the client on boot to purge orphaned localStorage entries (courses that
 // were renamed away from a key the user previously visited).

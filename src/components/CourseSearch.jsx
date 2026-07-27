@@ -9,7 +9,7 @@ import {
   fetchScorecardViaClaudeSearch, fetchYardageBookViaClaudeSearch,
 } from '../lib/courseApi.js'
 import { getCachedCourse, setCachedCourse, searchLocalCache } from '../lib/courseCache.js'
-import { getCachedCourseDB, setCachedCourseDB, supabase } from '../lib/supabase.js'
+import { getCachedCourseDB, setCachedCourseDB, queryCourseCacheDB } from '../lib/supabase.js'
 import { STEP_STATES } from '../lib/progress.js'
 
 // Step IDs are stable so ProgressTracker can map states to rows.
@@ -88,19 +88,11 @@ export default function CourseSearch({ authToken, onSelect, onBrowseLibrary }) {
   // Fuzzy search course_cache for courses matching the current query.
   // Called when fast sources fail so we surface library options before Claude.
   const searchLibrary = async (q, loc) => {
-    const needle = `%${(q + (loc ? ' ' + loc : '')).trim().toLowerCase()}%`
-    const { data } = await supabase
-      .from('course_cache')
-      .select('cache_key,course_data,source,hit_count,is_public')
-      .ilike('cache_key', needle)
-      .order('hit_count', { ascending: false })
-      .limit(5)
-    if (!data?.length) return
-    const hits = data.map(r => ({
-      ...r.course_data,
-      source: r.source,
-      _cacheKey: r.cache_key,
-      _hitCount: r.hit_count,
+    const searchStr = (q + (loc ? ' ' + loc : '')).trim()
+    const { rows } = await queryCourseCacheDB({ search: searchStr, sort: 'popular', limit: 5 })
+    if (!rows?.length) return
+    const hits = rows.map(r => ({
+      ...r,
       _isPublic: r.is_public,
     }))
     setLibraryResults(hits)

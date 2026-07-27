@@ -3,20 +3,8 @@ import { C, F, card, inp, lbl, btnP, btnG } from '../theme.js'
 import { Badge } from './ui.jsx'
 import { supabase } from '../lib/supabase.js'
 import CourseHoleMap from './CourseHoleMap.jsx'
-
-function shortDate(iso) {
-  if (!iso) return '—'
-  try { return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) }
-  catch { return iso }
-}
-
-function sourceBadge(source) {
-  if (source === 'GolfCourseAPI') return { label: '✓ GolfCourseAPI', bg: C.greenMuted,  fg: C.green }
-  if (source === 'yardage_book')  return { label: '📄 Yardage book',  bg: C.blueMuted,   fg: C.blue }
-  if (source === 'OpenGolfAPI')   return { label: '~ OpenGolf',       bg: C.amberMuted,  fg: C.amber }
-  if (source === 'Claude')        return { label: '⚡ AI-derived',     bg: C.accentMuted, fg: C.accent }
-  return { label: source || 'Unknown', bg: C.bgInput, fg: C.textMuted }
-}
+import { shortDate, sourceBadge } from '../lib/formatters.js'
+import useEscapeClose from '../hooks/useEscapeClose.js'
 
 function ScorecardTable({ holes }) {
   if (!Array.isArray(holes) || holes.length === 0) return null
@@ -241,11 +229,7 @@ export default function CourseDetailDrawer({ course, onClose, onUseForPrep, sess
   }, [course, loadGeo])
 
   // Trap Escape key
-  useEffect(() => {
-    const handler = (e) => { if (e.key === 'Escape') onClose?.() }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [onClose])
+  useEscapeClose(onClose)
 
   if (!course) return null
 

@@ -12,11 +12,33 @@ import AdminReparseQueue   from './AdminReparseQueue.jsx'
 import AdminBulkImport     from './AdminBulkImport.jsx'
 import AdminContributions  from './AdminContributions.jsx'
 import AdminGeometryEditor from './AdminGeometryEditor.jsx'
+import { shortDate, sourceBadge as sourceBadgeFromFormatters } from '../lib/formatters.js'
+
+// ── Cache-health stat bar (merged from AdminDataPanel) ────────────────────
+function StatBar({ label, value, total, color }) {
+  const pct = total > 0 ? Math.round((value / total) * 100) : 0
+  return (
+    <div style={{ marginBottom: 8 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+        <span style={{ fontSize: 12, color: C.textMuted }}>{label}</span>
+        <span style={{ fontSize: 12, color: C.text, fontVariantNumeric: 'tabular-nums' }}>{value} <span style={{ color: C.textFaint }}>({pct}%)</span></span>
+      </div>
+      <div style={{ height: 6, background: C.bgCard, borderRadius: 99, overflow: 'hidden' }}>
+        <div style={{ height: '100%', width: `${pct}%`, background: color || C.accent, borderRadius: 99, transition: 'width 0.3s' }} />
+      </div>
+    </div>
+  )
+}
+
+const SOURCE_THEME = {
+  GolfCourseAPI: { fg: C.green },
+  yardage_book:  { fg: C.blue },
+  OpenGolfAPI:   { fg: C.amber },
+  claude_vision: { fg: C.accent },
+}
 
 const COURSE_SUBS = [
-  { id: 'browser',      label: 'Browser',      icon: '⛳' },
-  { id: 'reparse',      label: 'Reparse queue', icon: '🔄' },
-  { id: 'import',       label: 'Bulk import',   icon: '📥' },
+  { id: 'browser',      label: 'Browser',       icon: '⛳' },
   { id: 'contribs',     label: 'Contributions', icon: '📍' },
   { id: 'geometry',     label: 'Geometry',      icon: '🗺' },
 ]
@@ -34,16 +56,8 @@ const SORT_OPTIONS = [
   { id: 'name',     label: 'Course name (A→Z)' },
 ]
 
-function shortDate(iso) {
-  if (!iso) return '—'
-  try { return new Date(iso).toLocaleDateString() } catch { return iso }
-}
-
 function sourceBadge(c) {
-  if (c.source === 'GolfCourseAPI') return { label: '✓ API', bg: C.greenMuted, fg: C.green }
-  if (c.source === 'yardage_book')  return { label: '📄 Yardage book', bg: C.blueMuted, fg: C.blue }
-  if (c.source === 'OpenGolfAPI')   return { label: '~ OpenGolf', bg: C.amberMuted, fg: C.amber }
-  return { label: c.source || '—', bg: C.bgInput, fg: C.textMuted }
+  return sourceBadgeFromFormatters(c.source)
 }
 
 export default function AdminCoursesPanel({ authToken, onEditCourse, onCourseChanged }) {
@@ -62,6 +76,9 @@ export default function AdminCoursesPanel({ authToken, onEditCourse, onCourseCha
   const [onlyNeedsReview, setOnlyNeedsReview] = useState(false)
   const [onlyHasPdf, setOnlyHasPdf] = useState(false)
   const [sort, setSort] = useState('recent')
+  const [showHealth, setShowHealth] = useState(false)
+  const [showImport, setShowImport] = useState(false)
+  const [showReparse, setShowReparse] = useState(false)
 
   const load = async () => {
     setLoading(true); setError(''); setMsg('')
@@ -217,12 +234,54 @@ export default function AdminCoursesPanel({ authToken, onEditCourse, onCourseCha
         ))}
       </div>
 
-      {sub === 'reparse'  && <AdminReparseQueue  authToken={authToken} />}
-      {sub === 'import'   && <AdminBulkImport />}
       {sub === 'contribs' && <AdminContributions authToken={authToken} />}
       {sub === 'geometry' && <AdminGeometryEditor />}
 
       {sub === 'browser' && <>
+      {/* ── Action buttons for import / reparse / health ─────────── */}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+        <button style={{ ...btnG, fontSize: 12 }} onClick={() => { setShowHealth(h => !h); setShowImport(false); setShowReparse(false) }}>
+          {showHealth ? '▾ Cache health' : '▸ Cache health'}
+        </button>
+        <button style={{ ...btnG, fontSize: 12 }} onClick={() => { setShowImport(i => !i); setShowHealth(false); setShowReparse(false) }}>
+          {showImport ? '▾ Bulk import' : '▸ Bulk import'}
+        </button>
+        <button style={{ ...btnG, fontSize: 12 }} onClick={() => { setShowReparse(r => !r); setShowHealth(false); setShowImport(false) }}>
+          {showReparse ? '▾ Reparse queue' : '▸ Reparse queue'}
+        </button>
+      </div>
+
+      {showHealth && rows && (() => {
+        const total = rows.length
+        const bySource = {}
+        for (const c of rows) bySource[c.source || 'unknown'] = (bySource[c.source || 'unknown'] || 0) + 1
+        const needsReviewCount = rows.filter(c => !!c._needs_review).length
+        const hasPdfCount      = rows.filter(c => (c._pdfs?.length || 0) > 0 || !!c._sourcePdf).length
+        const totalHits        = rows.reduce((s, c) => s + (c._hitCount || 0), 0)
+        return (
+          <div style={{ ...card, marginBottom: 8 }}>
+            <p style={{ ...lbl, margin: '0 0 12px' }}>Cache health ({total} courses · {totalHits.toLocaleString()} total hits)</p>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16 }}>
+              <div>
+                <p style={{ fontSize: 12, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase', letterSpacing: '.06em', margin: '0 0 10px' }}>By source</p>
+                {Object.entries(bySource).sort((a, b) => b[1] - a[1]).map(([src, count]) => (
+                  <StatBar key={src} label={src} value={count} total={total}
+                    color={SOURCE_THEME[src]?.fg || C.textFaint} />
+                ))}
+              </div>
+              <div>
+                <p style={{ fontSize: 12, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase', letterSpacing: '.06em', margin: '0 0 10px' }}>Health flags</p>
+                <StatBar label="Needs review" value={needsReviewCount} total={total} color={C.red} />
+                <StatBar label="Has PDF on file" value={hasPdfCount} total={total} color={C.green} />
+                <StatBar label="Fully reviewed" value={total - needsReviewCount} total={total} color={C.accent} />
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+      {showImport && <AdminBulkImport />}
+      {showReparse && <AdminReparseQueue authToken={authToken} />}
+
       {/* ── Toolbar ──────────────────────────────────────────────────── */}
       <div style={{ ...card }}>
         <p style={{ ...lbl, margin: '0 0 6px' }}>Course browser</p>

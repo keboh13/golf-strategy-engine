@@ -1,35 +1,7 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState } from 'react'
 import { parseScorePaste } from '../lib/scoreImport.js'
-
-function useIsMobile() {
-  const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 640)
-  useEffect(() => {
-    const mq = window.matchMedia('(max-width: 640px)')
-    const handler = (e) => setIsMobile(e.matches)
-    mq.addEventListener('change', handler)
-    return () => mq.removeEventListener('change', handler)
-  }, [])
-  return isMobile
-}
-
-// Default 14-club bag the user can adjust on Step 2 (or skip). Carry blanks
-// are intentional — the user is supposed to fill in their own. The promptly-
-// imported plan still works with blanks; the AI just uses the club ladder.
-const DEFAULT_CLUBS = [
-  { club: 'Driver',  carry: '', shape: 'Straight' },
-  { club: '3-wood',  carry: '', shape: 'Straight' },
-  { club: '5-wood',  carry: '', shape: 'Straight' },
-  { club: '4-iron',  carry: '', shape: 'Straight' },
-  { club: '5-iron',  carry: '', shape: 'Straight' },
-  { club: '6-iron',  carry: '', shape: 'Straight' },
-  { club: '7-iron',  carry: '', shape: 'Straight' },
-  { club: '8-iron',  carry: '', shape: 'Straight' },
-  { club: '9-iron',  carry: '', shape: 'Straight' },
-  { club: 'PW',      carry: '', shape: 'Straight' },
-  { club: 'GW',      carry: '', shape: 'Straight' },
-  { club: 'SW',      carry: '', shape: 'Straight' },
-  { club: 'LW',      carry: '', shape: 'Straight' },
-]
+import { useIsMobile } from '../components/ui.jsx'
+import { DEFAULT_CLUBS } from '../lib/appConstants.js'
 
 const SHAPES = ['Draw', 'Straight', 'Fade']
 const MISS   = ['Left', 'Right', 'Short', 'Long', 'Pull', 'Push']

@@ -3,44 +3,7 @@ import { C, F, card, inp, lbl, btnP, btnG } from '../theme.js'
 import { Badge, SectionHead } from '../components/ui.jsx'
 import { deleteSavedPlan, saveRecQuality } from '../lib/supabase.js'
 import PlanRenderer from '../components/PlanRenderer.jsx'
-
-// ── Star rating widget ────────────────────────────────────────────────────────
-// Renders 5 stars; hover preview, click to commit. After commit the stars are
-// static (re-click to change). Only shown when the brief has a rec_log_id
-// (i.e. it was generated after step 13 of the optimisation plan shipped).
-function StarRating({ value, onChange, saving }) {
-  const [hovered, setHovered] = useState(null)
-  const display = hovered ?? value ?? 0
-  return (
-    <div
-      style={{ display: 'flex', gap: 2, alignItems: 'center' }}
-      onMouseLeave={() => setHovered(null)}
-    >
-      {[1, 2, 3, 4, 5].map(n => (
-        <button
-          key={n}
-          disabled={saving}
-          onClick={() => onChange(n)}
-          onMouseEnter={() => setHovered(n)}
-          aria-label={`Rate ${n} star${n !== 1 ? 's' : ''}`}
-          style={{
-            background: 'transparent',
-            border: 'none',
-            padding: '2px 1px',
-            cursor: saving ? 'default' : 'pointer',
-            fontSize: 18,
-            color: n <= display ? '#f59e0b' : C.textFaint,
-            lineHeight: 1,
-            transition: 'color 0.1s',
-            WebkitTapHighlightColor: 'transparent',
-          }}
-        >
-          {n <= display ? '★' : '☆'}
-        </button>
-      ))}
-    </div>
-  )
-}
+import StarRating from '../components/StarRating.jsx'
 
 // ── History tab ───────────────────────────────────────────────────────────────
 export default function HistoryTab({

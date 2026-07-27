@@ -18,14 +18,7 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
 }
 
-async function isAdmin(supabaseUrl, supabaseServiceKey, userId) {
-  const res = await fetch(
-    `${supabaseUrl}/rest/v1/admins?user_id=eq.${userId}&select=user_id&limit=1`,
-    { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` } }
-  )
-  const rows = res.ok ? await res.json() : []
-  return Array.isArray(rows) && rows.length > 0
-}
+import { validateAuth, isAdminUser } from './_lib/admin.js'
 
 async function writeAudit(supabaseUrl, svcKey, actorId, action, targetType, targetId, payload) {
   await fetch(`${supabaseUrl}/rest/v1/audit_log`, {
@@ -47,30 +40,19 @@ export default async function handler(req) {
     })
   }
 
-  // Auth — validate the requesting user's session
-  const token = (req.headers.get('Authorization') || '').replace('Bearer ', '')
-  if (!token) {
+  // Auth — validate via shared admin helper
+  const requesterId = await validateAuth(req)
+  if (!requesterId) {
     return new Response(JSON.stringify({ error: 'Unauthorized' }), {
       status: 401, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
     })
   }
-
-  const userRes = await fetch(`${supabaseUrl}/auth/v1/user`, {
-    headers: { Authorization: `Bearer ${token}`, apikey: supabaseServiceKey },
-  })
-  if (!userRes.ok) {
-    return new Response(JSON.stringify({ error: 'Invalid or expired session.' }), {
-      status: 401, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-    })
-  }
-  const requester = await userRes.json()
-
-  // Gate: admins table check
-  if (!(await isAdmin(supabaseUrl, supabaseServiceKey, requester.id))) {
+  if (!(await isAdminUser(requesterId))) {
     return new Response(JSON.stringify({ error: 'Forbidden — admin access only.' }), {
       status: 403, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
     })
   }
+  const requester = { id: requesterId }
 
   const svcHeaders = {
     apikey: supabaseServiceKey,

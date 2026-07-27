@@ -26,6 +26,9 @@ import SettingsTab from './screens/SettingsTab.jsx'
 import PrepTab from './screens/PrepTab.jsx'
 import AdminTab from './screens/AdminTab.jsx'
 import LibraryTab from './screens/LibraryTab.jsx'
+import useAccountSettings from './hooks/useAccountSettings.js'
+import { parsePlanHoles } from './lib/planParser.js'
+import { printPlan as doPrintPlan } from './lib/printPlan.js'
 import {
   ENV_MAPS_KEY,
   LS_PLAYER, LS_HISTORY, LS_KEYS, LS_PROFILES, LS_CURRENT_PROFILE, LS_COURSE_CACHE, LS_MODEL,
@@ -33,6 +36,8 @@ import {
   DEFAULT_CLUBS, DEFAULT_PLAYER,
   loadProfiles, saveProfiles, loadSavedKeys, saveKeys,
   clubsFromProfile, stripClubs,
+  makeDefaultCourse,
+  clearAppStorage,
 } from './lib/appConstants.js'
 
 // ─── Error boundary ───────────────────────────────────────────────────────────
@@ -52,7 +57,7 @@ class ErrorBoundary extends Component {
               style={{ background: '#818cf8', color: '#0f1117', border: 'none', borderRadius: 8, padding: '9px 20px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
               Reload app
             </button>
-            <button onClick={() => { localStorage.clear(); window.location.reload() }}
+            <button onClick={() => { clearAppStorage(); window.location.reload() }}
               style={{ background: 'transparent', color: '#8b8fa8', border: '1px solid #2a2d3a', borderRadius: 8, padding: '9px 20px', fontSize: 13, cursor: 'pointer' }}>
               Clear data &amp; reload
             </button>
@@ -86,12 +91,14 @@ function AppInner({ user, session, onSignOut, onRunOnboarding }) {
   const setSelectedModel = (m) => { setSelectedModelRaw(m); localStorage.setItem(LS_MODEL, m) }
 
   // ── Account management state ──────────────────────────────────────────────
-  const [acctSection,     setAcctSection]     = useState(null)  // null | 'password' | 'email' | 'delete'
-  const [acctNewPass,     setAcctNewPass]     = useState('')
-  const [acctConfirmPass, setAcctConfirmPass] = useState('')
-  const [acctNewEmail,    setAcctNewEmail]    = useState('')
-  const [acctMsg,         setAcctMsg]         = useState(null)  // { type: 'ok'|'err', text }
-  const [acctLoading,     setAcctLoading]     = useState(false)
+  const {
+    acctSection, setAcctSection,
+    acctNewPass, setAcctNewPass,
+    acctConfirmPass, setAcctConfirmPass,
+    acctNewEmail, setAcctNewEmail,
+    acctMsg, setAcctMsg,
+    acctLoading, setAcctLoading,
+  } = useAccountSettings()
 
   // ── Prep flow step ───────────────────────────────────────────────────────
   const [prepStep, setPrepStep] = useState(1)
@@ -167,18 +174,7 @@ function AppInner({ user, session, onSignOut, onRunOnboarding }) {
   })
 
   // Course — session-only
-  const [course, setCourse] = useState({
-    name: '', location: '', yardage: '', rating: '', slope: '', par: 72,
-    conditions: 'Normal', roundType: 'Stroke play tournament',
-    targetScore: '', notes: '', source: '', elevation: '',
-    holes: Array.from({ length: 18 }, (_, i) => ({
-      par:      [4,4,3,5,4,3,4,5,4,4,3,4,5,4,3,4,4,5][i] || 4,
-      yardage:  '',
-      handicap: i + 1,
-      notes:    '',
-      elevation: '',
-    })),
-  })
+  const [course, setCourse] = useState(makeDefaultCourse)
 
   // Tee time & weather
   const [teeTime,  setTeeTime]  = useState('10:00')
@@ -337,18 +333,7 @@ function AppInner({ user, session, onSignOut, onRunOnboarding }) {
   const holeWeather = holeTimes.map(dt => weather ? getWeatherAtHour(weather, dt) : null)
 
   const resetPrep = useCallback(() => {
-    setCourse({
-      name: '', location: '', yardage: '', rating: '', slope: '', par: 72,
-      conditions: 'Normal', roundType: 'Stroke play tournament',
-      targetScore: '', notes: '', source: '', elevation: '',
-      holes: Array.from({ length: 18 }, (_, i) => ({
-        par:      [4,4,3,5,4,3,4,5,4,4,3,4,5,4,3,4,4,5][i] || 4,
-        yardage:  '',
-        handicap: i + 1,
-        notes:    '',
-        elevation: '',
-      })),
-    })
+    setCourse(makeDefaultCourse())
     setPlan('')
     setPlanError('')
     setPlanPhase('')
@@ -532,103 +517,9 @@ function AppInner({ user, session, onSignOut, onRunOnboarding }) {
     setTimeout(() => setCopied(false), 2000)
   }
 
-  const printPlan = () => {
-    const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-    const cleanPlan = plan.replace(/```green-json\s*\n[\s\S]*?\n```/g, '')
-    const html = esc(cleanPlan)
-      .replace(/^## (.+)$/gm, '</p><h2>$1</h2><p>')
-      .replace(/^### (.+)$/gm, '</p><h3>$1</h3><p>')
-      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-      .replace(/^[-•] (.+)$/gm, '<div class="li">$1</div>')
-      .replace(/^\d+\.\s+(.+)$/gm, '<div class="li">$1</div>')
-      .replace(/\n{2,}/g, '</p><p>')
-      .replace(/\n/g, '<br>')
-    const doc = `<!DOCTYPE html><html><head>
-      <meta charset="utf-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1">
-      <title>Game Plan — ${esc(course.name || 'Golf')}</title>
-      <style>
-        *{box-sizing:border-box;margin:0;padding:0}
-        body{font-family:-apple-system,system-ui,'Segoe UI',Roboto,sans-serif;
-          max-width:640px;margin:0 auto;padding:16px;color:#1a1a1a;line-height:1.6;font-size:14px;
-          -webkit-text-size-adjust:100%}
-        .header{background:#1a4d2e;color:#fff;padding:16px;border-radius:10px;margin-bottom:16px}
-        .header h1{font-size:18px;font-weight:700;margin-bottom:4px}
-        .header .meta{font-size:12px;color:#a8d5ba;line-height:1.5}
-        h2{font-size:16px;font-weight:700;color:#1a4d2e;margin:20px 0 8px;padding:8px 0 4px;border-bottom:2px solid #e8e8e8}
-        h3{font-size:14px;font-weight:600;color:#333;margin:14px 0 4px}
-        p{margin:4px 0 8px;font-size:14px}
-        strong{color:#111;font-weight:600}
-        .li{padding:3px 0 3px 16px;position:relative;font-size:13px;line-height:1.5}
-        .li::before{content:"▸";position:absolute;left:0;color:#1a4d2e}
-        .hole-card{border:1px solid #e0e0e0;border-radius:8px;padding:12px;margin:10px 0;page-break-inside:avoid}
-        @media print{
-          body{padding:12px;font-size:13px}
-          .header{-webkit-print-color-adjust:exact;print-color-adjust:exact}
-          h2{page-break-after:avoid}
-          .hole-card{page-break-inside:avoid}
-        }
-        @media(max-width:480px){
-          body{padding:12px;font-size:13px}
-          h2{font-size:15px}
-          .header h1{font-size:16px}
-        }
-      </style></head><body>
-      <div class="header">
-        <h1>${esc(course.name || 'Game Plan')}</h1>
-        <div class="meta">
-          ${esc(playerInfo.name || 'Player')} · HCP ${esc(playerInfo.handicap)}<br>
-          ${esc(teeDate)} · ${esc(teeTime)} · Par ${esc(course.par)} · ${Number(course.yardage || 0).toLocaleString()}y<br>
-          ${course.selectedTee ? esc(course.selectedTee) + ' tees · ' : ''}${course.conditions ? esc(course.conditions) : ''}
-        </div>
-      </div>
-      <p>${html}</p>
-    </body></html>`
-    const url = URL.createObjectURL(new Blob([doc], { type: 'text/html' }))
-    const w = window.open(url, '_blank')
-    w?.addEventListener('load', () => { w.print(); URL.revokeObjectURL(url) })
-  }
+  const printPlan = () => doPrintPlan({ plan, course, playerInfo, teeDate, teeTime })
 
-  const parsedHoles = useMemo(() => {
-    if (!plan) return { preamble: '', holes: [], postamble: '' }
-    const lines = plan.split('\n')
-    const holeRegex = /^###?\s*Hole\s+(\d+)/i
-    const sectionRegex = /^##\s/
-    let preambleEnd = -1
-    const holes = []
-    let cur = null
-
-    for (let i = 0; i < lines.length; i++) {
-      const m = lines[i].match(holeRegex)
-      if (m) {
-        if (cur) { cur.end = i; holes.push(cur) }
-        if (preambleEnd < 0) preambleEnd = i
-        cur = { num: parseInt(m[1], 10), start: i, end: lines.length }
-      } else if (cur && sectionRegex.test(lines[i]) && !holeRegex.test(lines[i])) {
-        cur.end = i
-        holes.push(cur)
-        cur = null
-      }
-    }
-    if (cur) holes.push(cur)
-
-    const preamble = preambleEnd > 0 ? lines.slice(0, preambleEnd).join('\n') : plan
-    const postStart = holes.length ? holes[holes.length - 1].end : lines.length
-    const postamble = lines.slice(postStart).join('\n')
-
-    const greenJsonRegex = /```green-json\s*\n([\s\S]*?)\n```/
-    const holeData = holes.map(h => {
-      const content = lines.slice(h.start, h.end).join('\n')
-      const gm = content.match(greenJsonRegex)
-      let green = null
-      if (gm) {
-        try { green = JSON.parse(gm[1].trim()) } catch {}
-      }
-      return { num: h.num, content: content.replace(greenJsonRegex, '').trim(), green }
-    })
-
-    return { preamble, holes: holeData, postamble }
-  }, [plan])
+  const parsedHoles = useMemo(() => parsePlanHoles(plan), [plan])
 
   // ── API key panel helpers ─────────────────────────────────────────────────
   const saveKeysFromPanel = () => {

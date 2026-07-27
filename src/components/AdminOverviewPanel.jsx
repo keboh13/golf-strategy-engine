@@ -1,42 +1,15 @@
 import { useEffect, useState } from 'react'
 import { C, F, card, btnG, lbl } from '../theme.js'
-
-function fmtMs(ms) {
-  if (ms == null) return '—'
-  if (ms < 1000) return `${Math.round(ms)} ms`
-  return `${(ms / 1000).toFixed(1)} s`
-}
+import { fmtMs } from '../lib/formatters.js'
+import { StarDisplay } from './StarRating.jsx'
+import MetricTile from './MetricTile.jsx'
 
 function fmtNum(n, fallback = '—') {
   if (n == null || n === 0 && fallback === '—') return n === 0 ? '0' : fallback
   return typeof n === 'number' ? n.toLocaleString() : n
 }
 
-function KpiTile({ label, value, sub, color = C.text, wide = false }) {
-  return (
-    <div style={{
-      background: C.bgInput, border: `1px solid ${C.border}`, borderRadius: 10,
-      padding: '12px 16px', gridColumn: wide ? 'span 2' : undefined,
-    }}>
-      <p style={{ ...lbl, margin: '0 0 6px' }}>{label}</p>
-      <p style={{ fontSize: 24, fontWeight: 700, color, margin: 0, fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>
-        {value}
-      </p>
-      {sub && <p style={{ fontSize: 11, color: C.textFaint, margin: '4px 0 0' }}>{sub}</p>}
-    </div>
-  )
-}
-
-function StarDisplay({ value }) {
-  if (value == null) return <span style={{ fontSize: 24, fontWeight: 700, color: C.textFaint }}>—</span>
-  return (
-    <span style={{ fontSize: 22, fontWeight: 700, color: '#f59e0b', fontVariantNumeric: 'tabular-nums' }}>
-      {value.toFixed(1)} <span style={{ fontSize: 14, color: C.textMuted }}>/ 5</span>
-    </span>
-  )
-}
-
-export default function AdminOverviewPanel({ authToken }) {
+export default function AdminOverviewPanel({ authToken, onSubNav }) {
   const [data,    setData]    = useState(null)
   const [loading, setLoading] = useState(false)
   const [error,   setError]   = useState('')
@@ -89,33 +62,33 @@ export default function AdminOverviewPanel({ authToken }) {
       {/* ── KPI grid ──────────────────────────────────────────── */}
       {(data || loading) && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
-          <KpiTile
+          <MetricTile size="lg"
             label="Registered users"
             value={loading ? '…' : fmtNum(data?.totalUsers)}
             color={C.accent}
           />
-          <KpiTile
+          <MetricTile size="lg"
             label="Courses cached"
             value={loading ? '…' : fmtNum(data?.totalCourses)}
             sub={data?.needsReview > 0 ? `${data.needsReview} need review` : 'all reviewed'}
             color={C.text}
           />
-          <KpiTile
+          <MetricTile size="lg"
             label="Calls today"
             value={loading ? '…' : fmtNum(data?.callsToday)}
             color={data?.callsToday > 0 ? C.green : C.textMuted}
           />
-          <KpiTile
+          <MetricTile size="lg"
             label="Calls this week"
             value={loading ? '…' : fmtNum(data?.callsThisWeek)}
             sub={data ? `${(data.tokensThisWeek || 0).toLocaleString()} tokens` : undefined}
           />
-          <KpiTile
+          <MetricTile size="lg"
             label="Avg brief rating"
             value={loading ? '…' : <StarDisplay value={data?.avgRating ?? null} />}
             sub={data?.ratingCount > 0 ? `${data.ratingCount} rating${data.ratingCount === 1 ? '' : 's'} (30d)` : 'No ratings yet'}
           />
-          <KpiTile
+          <MetricTile size="lg"
             label="Gen latency p50"
             value={loading ? '…' : fmtMs(data?.phaseP50)}
             sub={data?.phaseP95 != null ? `p95 ${fmtMs(data.phaseP95)}` : '14-day window'}
@@ -137,10 +110,7 @@ export default function AdminOverviewPanel({ authToken }) {
           ].map(({ icon, label, hint, tab }) => (
             <button
               key={tab}
-              onClick={() => {
-                // Dispatch a custom event that AdminTab listens for to switch its sub-tab.
-                window.dispatchEvent(new CustomEvent('admin:sub', { detail: tab }))
-              }}
+              onClick={() => onSubNav?.(tab)}
               style={{
                 background: C.bgInput, border: `1px solid ${C.border}`, borderRadius: 10,
                 padding: '12px 14px', cursor: 'pointer', textAlign: 'left', fontFamily: F,
