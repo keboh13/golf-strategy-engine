@@ -371,17 +371,65 @@ export async function fetchHoleDesignViaSearch(authToken, courseName, location, 
   return data.result
 }
 
+// Normalize a web-search hole design entry into the structured hazard format
+// used by PDF parsing. Handles both the old loose-string schema (water, bunkers,
+// ob as strings) and the new structured schema (hazards array). This lets the
+// dispersion calculator and prompt builder consume either source interchangeably.
+export function normalizeWebDesignHazards(design) {
+  if (!design) return design
+  // Already has structured hazards array — pass through
+  if (Array.isArray(design.hazards) && design.hazards.length) return design
+
+  const hazards = []
+  if (design.water) {
+    hazards.push({
+      type: 'water',
+      side: /left/i.test(design.water) ? 'L' : /right/i.test(design.water) ? 'R' : /front/i.test(design.water) ? 'front' : /back/i.test(design.water) ? 'back' : 'C',
+      category: /green/i.test(design.water) ? 'greenside' : 'fairway',
+      carry_yards: null,
+      position_description: design.water,
+      notes: design.water,
+    })
+  }
+  if (design.bunkers) {
+    hazards.push({
+      type: 'bunker',
+      side: /left/i.test(design.bunkers) ? 'L' : /right/i.test(design.bunkers) ? 'R' : /front/i.test(design.bunkers) ? 'front' : /back/i.test(design.bunkers) ? 'back' : 'C',
+      category: /green/i.test(design.bunkers) ? 'greenside' : 'fairway',
+      carry_yards: null,
+      position_description: design.bunkers,
+      notes: design.bunkers,
+    })
+  }
+  if (design.ob) {
+    hazards.push({
+      type: 'OB',
+      side: design.ob === 'both' ? 'C' : /left/i.test(design.ob) ? 'L' : /right/i.test(design.ob) ? 'R' : 'C',
+      category: 'fairway',
+      carry_yards: null,
+      position_description: `OB ${design.ob}`,
+      notes: `OB ${design.ob}`,
+    })
+  }
+  return { ...design, hazards }
+}
+
 export function mergeDesignDataIntoHoles(courseHoles, designData) {
   if (!designData?.holes?.length) return courseHoles
   return courseHoles.map((hole, i) => {
-    const design = designData.holes.find(d => d.hole === i + 1)
-    if (!design) return hole
+    const rawDesign = designData.holes.find(d => d.hole === i + 1)
+    if (!rawDesign) return hole
+    const design = normalizeWebDesignHazards(rawDesign)
 
     const parts = []
     if (design.dogleg && design.dogleg !== 'straight') parts.push(`dogleg ${design.dogleg}`)
-    if (design.water) parts.push(`water: ${design.water}`)
-    if (design.bunkers) parts.push(`bunkers: ${design.bunkers}`)
-    if (design.ob) parts.push(`OB ${design.ob}`)
+    // Use structured hazards for the text summary
+    if (Array.isArray(design.hazards) && design.hazards.length) {
+      for (const hz of design.hazards) {
+        const desc = hz.position_description || hz.notes || `${hz.type} ${hz.side}`
+        parts.push(`${hz.type}: ${desc}`)
+      }
+    }
     if (design.green_notes) parts.push(`green: ${design.green_notes}`)
 
     if (!parts.length) return hole

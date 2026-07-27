@@ -6,17 +6,19 @@
 // typically" copy in ProgressTracker and the over-due tipping point. Refined
 // from telemetry once rec_log.phase_durations starts collecting samples.
 export const ENRICH_STEP_IDS = {
-  GEOCODE:  'geocode',
-  OSM:      'osm',
-  DESIGN:   'design',
-  CONTRIB:  'contrib',
-  HAZARDS:  'hazards',
+  GEOCODE:       'geocode',
+  OSM:           'osm',
+  PDF_DISCOVERY: 'pdf_discovery',
+  DESIGN:        'design',
+  CONTRIB:       'contrib',
+  HAZARDS:       'hazards',
 }
 
 export const ENRICH_STEPS = Object.freeze([
-  { id: ENRICH_STEP_IDS.GEOCODE,  label: 'Resolving coordinates',  expectedMs: 1500 },
-  { id: ENRICH_STEP_IDS.OSM,      label: 'OSM geometry',           expectedMs: 3000 },
-  { id: ENRICH_STEP_IDS.DESIGN,   label: 'Hole design',            expectedMs: 12000 },
-  { id: ENRICH_STEP_IDS.CONTRIB,  label: 'Community contributions', expectedMs: 600 },
-  { id: ENRICH_STEP_IDS.HAZARDS,  label: 'Hazard intel',           expectedMs: 600 },
+  { id: ENRICH_STEP_IDS.GEOCODE,       label: 'Resolving coordinates',     expectedMs: 1500 },
+  { id: ENRICH_STEP_IDS.OSM,           label: 'OSM geometry',              expectedMs: 3000 },
+  { id: ENRICH_STEP_IDS.PDF_DISCOVERY, label: 'Searching for yardage PDF', expectedMs: 15000 },
+  { id: ENRICH_STEP_IDS.DESIGN,        label: 'Hole design',               expectedMs: 12000 },
+  { id: ENRICH_STEP_IDS.CONTRIB,       label: 'Community contributions',   expectedMs: 600 },
+  { id: ENRICH_STEP_IDS.HAZARDS,       label: 'Hazard intel',              expectedMs: 600 },
 ])

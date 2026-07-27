@@ -61,7 +61,14 @@ For EACH hole 1-18, extract hazards, design features, written content, and a vis
 
 (3) **Hazards and dogleg**, in "hazardsByHole":
    - "dogleg": "left" | "right" | "straight"
-   - "hazards": array of {"type": "bunker"|"water"|"creek"|"native"|"OB"|"trees", "side": "L"|"R"|"C"|"front"|"back", "carry_yards": <int or null>, "notes": short positional label}
+   - "hazards": array of objects, each with:
+     - "type": "bunker"|"water"|"creek"|"native"|"OB"|"trees"
+     - "side": "L"|"R"|"C"|"front"|"back" (where C = centerline, in play)
+     - "category": "greenside"|"fairway"|"tee" — where in the hole architecture this hazard lives. "greenside" = within ~30y of green edge; "fairway" = along the fairway corridor; "tee" = carry off the tee box or within ~50y of the tee.
+     - "carry_yards": carry distance from the back tee if labeled on the diagram, otherwise null
+     - "distances_by_tee": object mapping tee names to distances in yards, e.g. {"blue": 230, "white": 210}. Extract ONLY distances explicitly labeled in the PDF diagram. Omit or use {} if not labeled.
+     - "position_description": a caddie-style positional description, e.g. "fairway bunkers on right side ~230 yards from blue tees", "bunkers short left of green meant to trouble golfers who try to drive the green", "creek crosses fairway at 280 from tips". Be specific about yardages and placement. Use null if no meaningful description is possible.
+     - "notes": short positional label (e.g. "fairway 240-260", "greenside")
    - "green_notes": tier/slope/shape notes if visible
    - "recommended_line": short caddie-style advice if a clear ideal line is implied
 
@@ -70,7 +77,7 @@ CRITICAL: never guess. If a hole's diagram is illegible or a field isn't found, 
 Return ONLY this JSON (no markdown):
 {
   "hazardsByHole": [
-    {"hole":1,"holeName":"Outward Right","description":"This medium-length, dogleg right plays along…","greenDepth":31,"visualNotes":"FW narrows to ~28y at 240; cross-bunker carved into inside corner; green angled left-to-right with hollow short-left","distanceMarkers":[{"label":"sprinkler to front green","yards":62},{"label":"sprinkler to back","yards":108}],"dogleg":"left","hazards":[{"type":"bunker","side":"R","carry_yards":235,"notes":"fairway"}],"green_notes":"","recommended_line":""},
+    {"hole":1,"holeName":"Outward Right","description":"This medium-length, dogleg right plays along…","greenDepth":31,"visualNotes":"FW narrows to ~28y at 240; cross-bunker carved into inside corner; green angled left-to-right with hollow short-left","distanceMarkers":[{"label":"sprinkler to front green","yards":62},{"label":"sprinkler to back","yards":108}],"dogleg":"left","hazards":[{"type":"bunker","side":"R","category":"fairway","carry_yards":235,"distances_by_tee":{"blue":230,"white":210},"position_description":"fairway bunkers on right side ~230 yards from blue tees","notes":"fairway 230-250"}],"green_notes":"","recommended_line":""},
     ...all 18
   ]
 }

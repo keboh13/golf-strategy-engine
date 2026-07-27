@@ -5,7 +5,7 @@ import { getCachedGeo, setCachedGeo } from './courseGeoCache.js'
 import { getContrib, mergeContribIntoGeojson } from './holeContributions.js'
 import { setCachedCourse } from './courseCache.js'
 import { setCachedCourseDB, loadCourseHazards } from './supabase.js'
-import { fetchHoleDesignViaSearch, mergeDesignDataIntoHoles, geocodeViaClaudeSearch } from './courseApi.js'
+import { fetchHoleDesignViaSearch, fetchYardageBookViaClaudeSearch, mergeDesignDataIntoHoles, geocodeViaClaudeSearch } from './courseApi.js'
 import { ENRICH_STEP_IDS } from './enrichSteps.js'
 import { STEP_STATES } from './progress.js'
 
@@ -171,8 +171,58 @@ export function useEnrichment({ course, coords, setCourse, setCoords, session })
         { endedAt: Date.now(), error: osmLastError ? osmLastError.message : undefined },
       )
 
-      // #149: Run Phases 2, 3, 4 concurrently after OSM completes
+      // Phase 2: PDF auto-discovery — attempt to find and parse a public
+      // yardage book PDF before falling back to web-search scraping. Only runs
+      // when the course has no cached yardage_book source (i.e., no admin PDF).
       const authToken = session?.access_token || ''
+      const hasYardageBookSource = course._source === 'yardage_book' || course.source === 'yardage_book'
+      if (!hasYardageBookSource && authToken) {
+        markStep(ENRICH_STEP_IDS.PDF_DISCOVERY, STEP_STATES.RUNNING, { startedAt: Date.now() })
+        let pdfDiscoveryWorked = false
+        try {
+          if (ctrl.signal.aborted || myId !== enrichLoadIdRef.current) return
+          const ybResult = await fetchYardageBookViaClaudeSearch(authToken, course.name, course.location, { signal: ctrl.signal })
+          if (myId !== enrichLoadIdRef.current) return
+          if (ybResult && ybResult.holes?.length === 18 && ybResult._confidence !== 'low') {
+            pdfDiscoveryWorked = true
+            setCourse(prev => {
+              // Merge discovered PDF data into existing holes, preserving OSM enrichment
+              const mergedHoles = prev.holes.map((h, i) => {
+                const discoveredHole = ybResult.holes[i]
+                if (!discoveredHole) return h
+                return {
+                  ...h,
+                  // Only update yardage/par if not already set from a higher-quality source
+                  yardage: h.yardage || String(discoveredHole.yardage || ''),
+                  par: h.par || discoveredHole.par,
+                  hzDesign: discoveredHole.hzDesign || h.hzDesign || null,
+                }
+              })
+              const updated = {
+                ...prev,
+                holes: mergedHoles,
+                _source: 'yardage_book',
+                _sourcePdf: ybResult._sourcePdf || null,
+                _discoveredVia: 'auto_discovery',
+              }
+              setCachedCourse(updated)
+              setCachedCourseDB(updated).catch(() => {})
+              return updated
+            })
+          }
+        } catch (e) {
+          console.warn('[pdf-discovery] auto-discovery failed:', e.message)
+        }
+        markStep(
+          ENRICH_STEP_IDS.PDF_DISCOVERY,
+          pdfDiscoveryWorked ? STEP_STATES.DONE : STEP_STATES.SKIPPED,
+          { endedAt: Date.now() },
+        )
+      } else {
+        markStep(ENRICH_STEP_IDS.PDF_DISCOVERY, STEP_STATES.SKIPPED)
+      }
+
+      // Phase 3: Web search enrichment (if OSM coverage is sparse)
       const holesWithDesign = course.holes.filter(h => h.osmDesign?.hazards?.length > 0 || h.notes).length
 
       // Phase 2: Web search enrichment (if OSM coverage is sparse)
@@ -258,7 +308,7 @@ export function useEnrichment({ course, coords, setCourse, setCoords, session })
         setCourse(prev => ({ ...prev, osmEnriched: true }))
       }
 
-      // #149: Run Design, Contrib, and Hazards concurrently
+      // Run Design, Contrib, and Hazards concurrently
       await Promise.allSettled([designTask(), contribTask(), hazardsTask()])
 
       // #154: Single deferred DB cache write after all enrichment completes

@@ -61,6 +61,103 @@ export function validateHazardDesignBatch(parsed, { totalHoles = 18 } = {}) {
   return issues
 }
 
+// Plausibility cross-checks for parsed hazard data. Catches data-accuracy
+// issues that structural validation (validateHazardDesignBatch) misses:
+// e.g. a hazard at 400y on a 350y hole, or "fairway bunkers" at 250y on a par 3.
+export function validateHazardPlausibility(hazardsByHole, scorecardHoles = []) {
+  const issues = []
+  if (!Array.isArray(hazardsByHole)) return issues
+
+  for (const entry of hazardsByHole) {
+    if (!entry || typeof entry !== 'object') continue
+    const hole = entry.hole
+    const holeIdx = (Number.isInteger(hole) && hole >= 1 && hole <= 18) ? hole - 1 : -1
+    const scorecard = holeIdx >= 0 && scorecardHoles[holeIdx] ? scorecardHoles[holeIdx] : null
+    const holeYardage = scorecard ? parseInt(scorecard.yardage) || 0 : 0
+    const holePar = scorecard ? parseInt(scorecard.par) || 0 : 0
+
+    if (!Array.isArray(entry.hazards)) continue
+
+    for (const hz of entry.hazards) {
+      if (!hz || typeof hz !== 'object') continue
+
+      // Check 1: Hazard distance exceeds hole length
+      if (Number.isFinite(hz.carry_yards) && holeYardage > 0) {
+        if (hz.carry_yards > holeYardage) {
+          issues.push({
+            hole,
+            check: 'hazard_exceeds_hole_length',
+            detail: `${hz.type} ${hz.side} carry ${hz.carry_yards}y > hole length ${holeYardage}y`,
+          })
+        }
+      }
+
+      // Check 2: Par 3s should not have fairway bunkers at 250+ yards
+      if (holePar === 3 && hz.category === 'fairway' && Number.isFinite(hz.carry_yards) && hz.carry_yards >= 250) {
+        issues.push({
+          hole,
+          check: 'par3_distant_fairway_hazard',
+          detail: `par-3 hole has fairway ${hz.type} at ${hz.carry_yards}y`,
+        })
+      }
+
+      // Check 3: Water carry distances should be plausible (not > 300y for
+      // a forced carry, and not negative)
+      if ((hz.type === 'water' || hz.type === 'creek') && Number.isFinite(hz.carry_yards)) {
+        if (hz.carry_yards > 300) {
+          issues.push({
+            hole,
+            check: 'implausible_water_carry',
+            detail: `water carry ${hz.carry_yards}y exceeds plausible max (300y)`,
+          })
+        }
+        if (hz.carry_yards < 0) {
+          issues.push({
+            hole,
+            check: 'negative_carry',
+            detail: `${hz.type} has negative carry_yards: ${hz.carry_yards}`,
+          })
+        }
+      }
+
+      // Check 4: Greenside hazards should not be > 50y from end of hole
+      if (hz.category === 'greenside' && Number.isFinite(hz.carry_yards) && holeYardage > 0) {
+        if (hz.carry_yards < holeYardage - 50) {
+          issues.push({
+            hole,
+            check: 'greenside_too_far_from_green',
+            detail: `greenside ${hz.type} at ${hz.carry_yards}y is ${holeYardage - hz.carry_yards}y from green on ${holeYardage}y hole`,
+          })
+        }
+      }
+
+      // Check 5: Tee hazards should be within the first 100y
+      if (hz.category === 'tee' && Number.isFinite(hz.carry_yards) && hz.carry_yards > 100) {
+        issues.push({
+          hole,
+          check: 'tee_hazard_too_far',
+          detail: `tee ${hz.type} at ${hz.carry_yards}y — expected within 100y of tee`,
+        })
+      }
+
+      // Check 6: Per-tee distances should not exceed hole yardage
+      if (hz.distances_by_tee && typeof hz.distances_by_tee === 'object') {
+        for (const [tee, dist] of Object.entries(hz.distances_by_tee)) {
+          if (Number.isFinite(dist) && holeYardage > 0 && dist > holeYardage) {
+            issues.push({
+              hole,
+              check: 'tee_distance_exceeds_hole',
+              detail: `${hz.type} distance from ${tee} tee (${dist}y) > hole length (${holeYardage}y)`,
+            })
+          }
+        }
+      }
+    }
+  }
+
+  return issues
+}
+
 // Shape a raw hazardsByHole array into course_hole_hazards rows. Shared by
 // every caller that persists PDF/vision-extracted hazard data (direct
 // upload, auto web-search discovery, admin reparse, the reparse queue) so
