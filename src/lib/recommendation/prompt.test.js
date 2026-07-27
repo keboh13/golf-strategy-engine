@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildRecommendationPrompt } from './prompt.js'
+import { buildRecommendationPrompt, computeMissSideConflicts, findClubForDistance, windAdjustedClubSuggestion, buildScoringStrategy } from './prompt.js'
 
 const player = {
   name: 'Test', handicap: '8', handedness: 'Right',
@@ -135,5 +135,189 @@ describe('buildRecommendationPrompt', () => {
     })
     const h1 = prompt.split('\n').find(l => l.startsWith('H1:'))
     expect(h1).not.toMatch(/wind: plays/)
+  })
+
+  it('includes miss-side conflict caution when miss direction matches hazard', () => {
+    // Player fades right, hole 1 has bunker R
+    const { prompt } = buildRecommendationPrompt({
+      playerInfo: player, clubs, course,
+      teeTime: '10:00', teeDate: '2026-06-22', pace: 11, scoringHistory: [],
+    })
+    expect(prompt).toMatch(/CAUTION.*fade.*bunker.*R/i)
+  })
+
+  it('includes SCORING_STRATEGY section', () => {
+    const { prompt } = buildRecommendationPrompt({
+      playerInfo: player, clubs, course,
+      teeTime: '10:00', teeDate: '2026-06-22', pace: 11, scoringHistory: [],
+    })
+    expect(prompt).toContain('SCORING_STRATEGY:')
+  })
+})
+
+// ── Issue #196: Miss-side conflict tests ──────────────────────────────────
+
+describe('computeMissSideConflicts', () => {
+  it('flags conflict when righty fade meets right hazard', () => {
+    const conflicts = computeMissSideConflicts(
+      { shape: 'fade', magnitudeYds: 15, trigger: 'pressure' },
+      [{ type: 'water', side: 'R' }],
+      false, // righty
+    )
+    expect(conflicts).toHaveLength(1)
+    expect(conflicts[0]).toMatch(/CAUTION.*fade.*water.*R/)
+    expect(conflicts[0]).toContain('~15y')
+    expect(conflicts[0]).toContain('especially pressure')
+  })
+
+  it('flags conflict when lefty fade meets left hazard', () => {
+    const conflicts = computeMissSideConflicts(
+      { shape: 'fade' },
+      [{ type: 'bunker', side: 'L' }],
+      true, // lefty
+    )
+    expect(conflicts).toHaveLength(1)
+    expect(conflicts[0]).toMatch(/CAUTION.*fade.*bunker.*L/)
+  })
+
+  it('returns empty when miss goes away from hazard', () => {
+    const conflicts = computeMissSideConflicts(
+      'fade',
+      [{ type: 'water', side: 'L' }],
+      false, // righty fade goes R, hazard is L → no conflict
+    )
+    expect(conflicts).toHaveLength(0)
+  })
+
+  it('handles legacy string miss', () => {
+    const conflicts = computeMissSideConflicts(
+      'slice',
+      [{ type: 'OB', side: 'R' }],
+      false,
+    )
+    expect(conflicts).toHaveLength(1)
+  })
+
+  it('handles draw/hook for righty → left hazard', () => {
+    const conflicts = computeMissSideConflicts(
+      'draw',
+      [{ type: 'water', side: 'L' }],
+      false,
+    )
+    expect(conflicts).toHaveLength(1)
+  })
+
+  it('returns empty on null miss', () => {
+    expect(computeMissSideConflicts(null, [{ type: 'water', side: 'R' }], false)).toEqual([])
+  })
+
+  it('returns empty on no hazards', () => {
+    expect(computeMissSideConflicts('fade', [], false)).toEqual([])
+  })
+})
+
+// ── Issue #200: Wind-adjusted club suggestion tests ───────────────────────
+
+const fullBag = [
+  { club: 'Driver', carry: 275 },
+  { club: '3-wood', carry: 245 },
+  { club: '5-iron', carry: 195 },
+  { club: '6-iron', carry: 180 },
+  { club: '7-iron', carry: 165 },
+  { club: '8-iron', carry: 152 },
+  { club: '9-iron', carry: 140 },
+  { club: 'PW', carry: 128 },
+]
+
+describe('findClubForDistance', () => {
+  it('finds exact match', () => {
+    const result = findClubForDistance(fullBag, 165)
+    expect(result.club).toBe('7-iron')
+  })
+  it('finds closest club', () => {
+    const result = findClubForDistance(fullBag, 170)
+    expect(result.club).toBe('7-iron')
+  })
+  it('returns null on empty clubs', () => {
+    expect(findClubForDistance([], 165)).toBeNull()
+  })
+  it('returns null on invalid distance', () => {
+    expect(findClubForDistance(fullBag, -5)).toBeNull()
+  })
+})
+
+describe('windAdjustedClubSuggestion', () => {
+  it('suggests club change when wind delta exceeds 10y', () => {
+    const suggestion = windAdjustedClubSuggestion(fullBag, 165, 15)
+    expect(suggestion).not.toBeNull()
+    expect(suggestion).toContain('Wind-adjusted')
+    expect(suggestion).toContain('165y plays as 180y')
+    expect(suggestion).toContain('6-iron')
+    expect(suggestion).toContain('normally 7-iron')
+  })
+  it('returns null when delta is small', () => {
+    expect(windAdjustedClubSuggestion(fullBag, 165, 5)).toBeNull()
+  })
+  it('returns null when same club for both distances', () => {
+    // 165 and 167 both map to 7-iron
+    expect(windAdjustedClubSuggestion(fullBag, 165, 2)).toBeNull()
+  })
+  it('handles negative wind delta (tailwind)', () => {
+    const suggestion = windAdjustedClubSuggestion(fullBag, 180, -15)
+    expect(suggestion).not.toBeNull()
+    expect(suggestion).toContain('180y plays as 165y')
+  })
+})
+
+// ── Issue #204: Scoring strategy tests ────────────────────────────────────
+
+describe('buildScoringStrategy', () => {
+  const testClubs = [
+    { club: 'Driver', carry: 275 },
+    { club: '3-wood', carry: 245 },
+    { club: '5-iron', carry: 195 },
+    { club: '7-iron', carry: 165 },
+  ]
+
+  it('categorizes reachable par 5 as birdie target', () => {
+    const holes = [{ par: 5, yardage: '510', handicap: 10 }]
+    const result = buildScoringStrategy(holes, testClubs, {}, {})
+    expect(result).toContain('birdie target')
+    expect(result).toContain('SCORING_STRATEGY')
+  })
+
+  it('categorizes short par 4 as birdie opportunity', () => {
+    const holes = [{ par: 4, yardage: '320', handicap: 14 }]
+    const result = buildScoringStrategy(holes, testClubs, {}, {})
+    expect(result).toContain('birdie opportunity')
+  })
+
+  it('categorizes short par 3 as birdie chance', () => {
+    const holes = [{ par: 3, yardage: '145', handicap: 16 }]
+    const result = buildScoringStrategy(holes, testClubs, {}, {})
+    expect(result).toContain('birdie chance')
+  })
+
+  it('categorizes long par 4 as par-save', () => {
+    const holes = [{ par: 4, yardage: '450', handicap: 1 }]
+    const result = buildScoringStrategy(holes, testClubs, {}, {})
+    expect(result).toContain('par')
+  })
+
+  it('flags bogey risk when miss conflicts with hazards', () => {
+    const holes = [{
+      par: 4, yardage: '440', handicap: 2,
+      osmDesign: { hazards: [{ type: 'water', loc: 'R' }, { type: 'bunker', loc: 'R' }] },
+    }]
+    const result = buildScoringStrategy(holes, testClubs, { miss: { shape: 'fade' }, handedness: 'Right' }, {})
+    expect(result).toContain('elevated risk')
+  })
+
+  it('returns empty string on no holes', () => {
+    expect(buildScoringStrategy([], testClubs, {}, {})).toBe('')
+  })
+
+  it('returns empty string on null holes', () => {
+    expect(buildScoringStrategy(null, testClubs, {}, {})).toBe('')
   })
 })

@@ -127,3 +127,152 @@ export function formatOverlapLine(clubLabel, overlaps) {
   })
   return `${clubLabel} dispersion overlaps: ${parts.join(', ')}`
 }
+
+// ── Issue #193: Approach-shot dispersion analysis ──────────────────────────
+//
+// After the tee shot lands, we need to evaluate the approach shot's dispersion
+// against greenside hazards. This uses the same statistical model as tee shots
+// but from the expected landing zone to the green.
+
+/**
+ * Pick the best club stats for a given approach distance from the player's bag.
+ * Returns { clubLabel, carryYds, offlineBiasYds, lateralSigmaYds } or null.
+ */
+export function pickApproachClubStats(clubs, distanceYds) {
+  if (!Array.isArray(clubs) || !Number.isFinite(distanceYds) || distanceYds <= 0) return null
+
+  // Filter to irons and wedges (approach clubs)
+  const approachClubs = clubs.filter(c => {
+    const name = (c.club || '').toLowerCase()
+    return /iron|wedge|hybrid/i.test(name) && !/driver|wood/i.test(name)
+  })
+  if (!approachClubs.length) return null
+
+  let best = null
+  let bestDiff = Infinity
+  for (const c of approachClubs) {
+    const carry = c.stats?.carryP50 ?? c.stats?.carryAvg ?? c.carry
+    if (!Number.isFinite(carry)) continue
+    const diff = Math.abs(carry - distanceYds)
+    if (diff < bestDiff) {
+      bestDiff = diff
+      best = c
+    }
+  }
+  if (!best) return null
+
+  const carryYds = best.stats?.carryP50 ?? best.stats?.carryAvg ?? best.carry
+  const stats = best.stats
+  let sigma = null
+  if (stats && Number.isFinite(stats.offlineStd)) {
+    sigma = stats.offlineStd
+  } else if (stats && Number.isFinite(stats.dispLeftP80) && Number.isFinite(stats.dispRightP80)) {
+    sigma = (stats.dispLeftP80 + stats.dispRightP80) / 2 / 1.28
+  } else {
+    const dispLeft = Number.isFinite(best.dispLeft) ? best.dispLeft : 0
+    const dispRight = Number.isFinite(best.dispRight) ? best.dispRight : 0
+    sigma = (dispLeft + dispRight) > 0 ? (dispLeft + dispRight) / 2 : null
+  }
+
+  return {
+    clubLabel: best.club,
+    carryYds,
+    offlineBiasYds: Number.isFinite(stats?.offlineBias) ? stats.offlineBias : 0,
+    lateralSigmaYds: sigma,
+  }
+}
+
+/**
+ * Compute approach-shot dispersion overlaps with greenside hazards.
+ *
+ * Takes the expected landing zone from the tee shot as starting point,
+ * computes dispersion ellipses for the appropriate approach club,
+ * and checks overlap vs greenside hazards.
+ *
+ * @param {object} params
+ * @param {number} params.holeYardage - total hole yardage
+ * @param {number} params.teeCarryYds - tee shot carry distance
+ * @param {Array}  params.hazards - greenside hazards [{type, side, carry_yards}]
+ * @param {Array}  params.clubs - player's full bag
+ * @param {number} [params.threshold=0.10] - minimum prob to flag
+ * @returns {{ clubStats, overlaps, approachYds }|null}
+ */
+export function approach_overlaps({ holeYardage, teeCarryYds, hazards, clubs, threshold = 0.10 }) {
+  if (!Number.isFinite(holeYardage) || !Number.isFinite(teeCarryYds)) return null
+  if (!Array.isArray(hazards) || !Array.isArray(clubs)) return null
+
+  const approachYds = holeYardage - teeCarryYds
+  if (approachYds <= 0) return null
+
+  // Filter to greenside hazards (front, back, or lateral near green)
+  const greensideHazards = hazards.filter(hz => {
+    const side = (hz.side || hz.loc || '').toLowerCase()
+    // Include front/back/L/R hazards that are near the green
+    if (side === 'front' || side === 'back') return true
+    // For lateral hazards, include those with carry_yards near or past the approach distance
+    if (Number.isFinite(hz.carry_yards)) {
+      return hz.carry_yards >= teeCarryYds - 20
+    }
+    // Include lateral hazards without carry info (assume they could be greenside)
+    return side === 'l' || side === 'r' || side === 'c'
+  })
+
+  const clubStats = pickApproachClubStats(clubs, approachYds)
+  if (!clubStats) return null
+
+  // For front/back hazards, map them to a lateral-compatible format for overlap calc
+  const mappedHazards = greensideHazards.map(hz => {
+    const side = (hz.side || hz.loc || '').toLowerCase()
+    if (side === 'front' || side === 'back') {
+      // Front/back hazards: treat as centerline hazard
+      return { ...hz, side: 'C' }
+    }
+    return hz
+  })
+
+  const flagged = []
+  for (const hz of mappedHazards) {
+    const p = hazardOverlapProb(hz, clubStats)
+    if (p != null && p > 0 && p >= threshold) {
+      flagged.push({
+        type: hz.type,
+        side: hz.side || hz.loc,
+        carry_yards: Number.isFinite(hz.carry_yards) ? hz.carry_yards : null,
+        prob: p,
+      })
+    }
+  }
+  flagged.sort((a, b) => b.prob - a.prob)
+
+  return { clubStats, overlaps: flagged, approachYds }
+}
+
+/**
+ * Compare approach dispersion from a layup position vs going for it.
+ *
+ * @param {object} params
+ * @param {number} params.holeYardage
+ * @param {number} params.teeCarryYds - carry if going for it
+ * @param {number} params.layupCarryYds - carry if laying up
+ * @param {Array}  params.hazards
+ * @param {Array}  params.clubs
+ * @returns {{ goForIt, layup }|null}
+ */
+export function compareLayupApproach({ holeYardage, teeCarryYds, layupCarryYds, hazards, clubs }) {
+  if (!Number.isFinite(layupCarryYds)) return null
+
+  const goForIt = approach_overlaps({ holeYardage, teeCarryYds, hazards, clubs, threshold: 0 })
+  const layup = approach_overlaps({ holeYardage, teeCarryYds: layupCarryYds, hazards, clubs, threshold: 0 })
+
+  if (!goForIt && !layup) return null
+  return { goForIt, layup }
+}
+
+export function formatApproachOverlapLine(result) {
+  if (!result || !result.overlaps?.length) return null
+  const parts = result.overlaps.map(o => {
+    const carry = o.carry_yards ? ` @${o.carry_yards}y` : ''
+    return `${o.type} ${o.side}${carry} ~${Math.round(o.prob * 100)}%`
+  })
+  return `${result.clubStats.clubLabel} approach from ${result.approachYds}y: ${parts.join(', ')}`
+}
