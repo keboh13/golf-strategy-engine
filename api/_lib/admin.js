@@ -9,7 +9,7 @@ export async function validateAuth(req) {
 
   const supabaseUrl = process.env.SUPABASE_URL
   const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-  if (!supabaseUrl || !supabaseServiceKey) return 'dev-user'
+  if (!supabaseUrl || !supabaseServiceKey) return null
 
   try {
     const res = await fetch(`${supabaseUrl}/auth/v1/user`, {
@@ -25,7 +25,6 @@ export async function validateAuth(req) {
 
 export async function isAdminUser(userId) {
   if (!userId) return false
-  if (userId === 'dev-user') return true
   const supabaseUrl = process.env.SUPABASE_URL
   const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
   if (!supabaseUrl || !supabaseServiceKey) return false

@@ -4,8 +4,10 @@
 
 export const config = { runtime: 'edge' }
 
+import { checkRateLimit } from './_lib/rateLimit.js'
+
 const CORS_HEADERS = {
-  'Access-Control-Allow-Origin':  process.env.ALLOWED_ORIGIN || '*',
+  'Access-Control-Allow-Origin':  process.env.ALLOWED_ORIGIN || '',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
   'Access-Control-Allow-Methods': 'DELETE, OPTIONS',
 }
@@ -51,6 +53,19 @@ export default async function handler(req) {
   }
   const user = await userRes.json()
   const userId = user.id
+
+  // Rate limit: 3 attempts per hour per user
+  const { limited } = await checkRateLimit(supabaseUrl, supabaseServiceKey, {
+    identifier: userId,
+    endpoint: 'delete-account',
+    maxAttempts: 3,
+    windowMinutes: 60,
+  })
+  if (limited) {
+    return new Response(JSON.stringify({ error: 'Too many requests. Please try again later.' }), {
+      status: 429, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+    })
+  }
 
   // Delete user data from all app tables (RLS bypass via service role)
   const base    = `${supabaseUrl}/rest/v1`
