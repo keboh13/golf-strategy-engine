@@ -438,6 +438,65 @@ export async function saveRecQuality(recLogId, raterId, rating, dimension = 'ove
   if (error) throw error
 }
 
+// ── Post-round feedback ─────────────────────────────────────────────────────
+// Persists per-hole scores + notes for a specific brief so mobile users don't
+// lose feedback when localStorage is evicted. Keyed on (user_id, brief_id).
+
+export async function savePostRound(userId, briefId, postRound) {
+  if (!supabase) throw new Error('Supabase not configured')
+  const { error } = await supabase
+    .from('post_round_feedback')
+    .upsert(
+      {
+        user_id: userId,
+        brief_id: briefId,
+        scores: postRound.scores || {},
+        notes: postRound.notes || {},
+        general_notes: postRound.generalNotes || '',
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'user_id,brief_id' }
+    )
+  if (error) throw error
+}
+
+export async function loadPostRound(userId, briefId) {
+  if (!supabase) return null
+  const { data, error } = await supabase
+    .from('post_round_feedback')
+    .select('scores, notes, general_notes, updated_at')
+    .eq('user_id', userId)
+    .eq('brief_id', briefId)
+    .maybeSingle()
+  if (error) throw error
+  if (!data) return null
+  return {
+    scores: data.scores || {},
+    notes: data.notes || {},
+    generalNotes: data.general_notes || '',
+    updatedAt: data.updated_at,
+  }
+}
+
+export async function loadAllPostRounds(userId) {
+  if (!supabase) return {}
+  const { data, error } = await supabase
+    .from('post_round_feedback')
+    .select('brief_id, scores, notes, general_notes, updated_at')
+    .eq('user_id', userId)
+  if (error) throw error
+  const byBriefId = {}
+  for (const row of (data || [])) {
+    byBriefId[row.brief_id] = {
+      scores: row.scores || {},
+      notes: row.notes || {},
+      generalNotes: row.general_notes || '',
+      updatedAt: row.updated_at,
+    }
+  }
+  return byBriefId
+}
+
 export async function savePrepSession(userId, profileName, state) {
   const { error } = await supabase
     .from('prep_sessions')

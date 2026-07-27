@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { C, F, card, inp, lbl, btnP, btnG } from '../theme.js'
 import { Badge, SectionHead } from '../components/ui.jsx'
-import { deleteSavedPlan, saveRecQuality } from '../lib/supabase.js'
+import { deleteSavedPlan, saveRecQuality, savePostRound, loadPostRound } from '../lib/supabase.js'
 import PlanRenderer from '../components/PlanRenderer.jsx'
 import StarRating from '../components/StarRating.jsx'
 
@@ -159,6 +159,7 @@ export default function HistoryTab({
                   brief={b}
                   index={i}
                   setSavedBriefs={setSavedBriefs}
+                  user={user}
                 />
 
                 {/* Freeform notes for AI refinement (legacy field — still surfaced) */}
@@ -231,8 +232,21 @@ export function shouldRestoreDraft(saved, fromBrief) {
   return false
 }
 
-function PostRoundEditor({ brief, index, setSavedBriefs }) {
+// Stable brief identifier: prefer the DB id, fall back to rec_log_id, then
+// a deterministic slug from course + date so we never key off array index.
+export function stableBriefId(brief) {
+  if (brief.id) return String(brief.id)
+  if (brief.rec_log_id) return String(brief.rec_log_id)
+  return `${String(brief.course || '').trim().toLowerCase()}::${brief.date || 'unknown'}`
+}
+
+// Debounce delay for Supabase writes (ms)
+export const AUTOSAVE_DEBOUNCE_MS = 2000
+
+function PostRoundEditor({ brief, index, setSavedBriefs, user }) {
   const [open, setOpen] = useState(false)
+  // 'idle' | 'saving' | 'saved' | 'error'
+  const [saveStatus, setSaveStatus] = useState('idle')
   const [restored, setRestored] = useState(() => {
     const saved = readDraft(brief.course)
     return shouldRestoreDraft(saved, briefPostRound(brief))
@@ -249,6 +263,39 @@ function PostRoundEditor({ brief, index, setSavedBriefs }) {
 
   const draftRef = useRef(draft)
   draftRef.current = draft
+
+  const debounceRef = useRef(null)
+  const mountedRef = useRef(true)
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
+
+  // Load from Supabase on mount — prefer server data over localStorage
+  useEffect(() => {
+    if (!user?.id) return
+    const bid = stableBriefId(brief)
+    loadPostRound(user.id, bid)
+      .then(serverData => {
+        if (!mountedRef.current || !serverData) return
+        const fromBrief = briefPostRound(brief)
+        const localDraft = readDraft(brief.course)
+        // Prefer server data unless local draft is strictly newer
+        const serverTs = serverData.updatedAt ? new Date(serverData.updatedAt).getTime() : 0
+        const localTs = localDraft?.updatedAt ? new Date(localDraft.updatedAt).getTime() : 0
+        if (localTs > serverTs && draftHasContent(localDraft)) {
+          // Local is newer — keep it but schedule a server sync
+          return
+        }
+        if (draftHasContent(serverData)) {
+          setDraft({ scores: serverData.scores, notes: serverData.notes, generalNotes: serverData.generalNotes })
+          draftRef.current = { scores: serverData.scores, notes: serverData.notes, generalNotes: serverData.generalNotes }
+          setSavedBriefs(prev => prev.map((bb, j) => j === index ? { ...bb, postRound: serverData } : bb))
+        }
+      })
+      .catch(() => {}) // Silently fall back to localStorage data
+  }, [user?.id, brief.id, brief.rec_log_id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (restored) {
@@ -275,12 +322,40 @@ function PostRoundEditor({ brief, index, setSavedBriefs }) {
     }
   }, [brief.course])
 
+  // Debounced Supabase save
+  const scheduleSave = useCallback((nextDraft) => {
+    if (!user?.id) return
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    setSaveStatus('saving')
+    debounceRef.current = setTimeout(() => {
+      const bid = stableBriefId(brief)
+      savePostRound(user.id, bid, nextDraft)
+        .then(() => { if (mountedRef.current) setSaveStatus('saved') })
+        .catch(() => { if (mountedRef.current) setSaveStatus('error') })
+    }, AUTOSAVE_DEBOUNCE_MS)
+  }, [user?.id, brief]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Clean up debounce timer
+  useEffect(() => {
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
+  }, [])
+
+  // Clear "Saved" indicator after a few seconds
+  useEffect(() => {
+    if (saveStatus === 'saved') {
+      const t = setTimeout(() => setSaveStatus('idle'), 3000)
+      return () => clearTimeout(t)
+    }
+  }, [saveStatus])
+
   const holesLogged = Object.keys(draft.scores).filter(k => Number.isFinite(draft.scores[k])).length
   const notesLogged = Object.values(draft.notes).filter(Boolean).length
 
   function persist(next) {
     setDraft(next)
     draftRef.current = next
+    // Update parent state using stable brief ID approach — also write by index
+    // for backward compat with existing localStorage consumers
     setSavedBriefs(prev => prev.map((bb, j) => j === index ? { ...bb, postRound: next } : bb))
     try {
       const ls = JSON.parse(localStorage.getItem('golf_saved_briefs') || '[]')
@@ -293,6 +368,8 @@ function PostRoundEditor({ brief, index, setSavedBriefs }) {
         localStorage.removeItem(draftKey(brief.course))
       }
     } catch {}
+    // Schedule debounced Supabase write
+    scheduleSave(next)
   }
 
   function handleToggle() {
@@ -305,21 +382,33 @@ function PostRoundEditor({ brief, index, setSavedBriefs }) {
 
   return (
     <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 10 }}>
-      <button
-        onClick={handleToggle}
-        style={{
-          background: 'transparent', border: 'none', padding: 0, cursor: 'pointer',
-          display: 'flex', alignItems: 'center', gap: 6, fontFamily: F, color: C.text,
-        }}
-      >
-        <span style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', color: C.textMuted }}>
-          Post-round
-        </span>
-        {(holesLogged > 0 || notesLogged > 0) && (
-          <Badge label={`${holesLogged}/18 · ${notesLogged} note${notesLogged === 1 ? '' : 's'}`} bg={C.accentMuted} fg={C.accent} />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <button
+          onClick={handleToggle}
+          style={{
+            background: 'transparent', border: 'none', padding: 0, cursor: 'pointer',
+            display: 'flex', alignItems: 'center', gap: 6, fontFamily: F, color: C.text,
+          }}
+        >
+          <span style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', color: C.textMuted }}>
+            Post-round
+          </span>
+          {(holesLogged > 0 || notesLogged > 0) && (
+            <Badge label={`${holesLogged}/18 · ${notesLogged} note${notesLogged === 1 ? '' : 's'}`} bg={C.accentMuted} fg={C.accent} />
+          )}
+          <span style={{ fontSize: 12, color: C.textMuted }}>{open ? '▾' : '▸'}</span>
+        </button>
+        {/* Save-state indicator */}
+        {saveStatus === 'saving' && (
+          <span data-testid="save-status" style={{ fontSize: 11, color: C.textFaint, marginLeft: 4 }}>Saving...</span>
         )}
-        <span style={{ fontSize: 12, color: C.textMuted }}>{open ? '▾' : '▸'}</span>
-      </button>
+        {saveStatus === 'saved' && (
+          <span data-testid="save-status" style={{ fontSize: 11, color: C.green, marginLeft: 4 }}>Saved</span>
+        )}
+        {saveStatus === 'error' && (
+          <span data-testid="save-status" style={{ fontSize: 11, color: C.red, marginLeft: 4 }}>Save failed</span>
+        )}
+      </div>
       {restored && (
         <p style={{ fontSize: 11, color: C.green, margin: '4px 0 0' }}>
           Restored unsaved feedback
@@ -359,7 +448,7 @@ function PostRoundEditor({ brief, index, setSavedBriefs }) {
                     else delete notes[n]
                     persist({ ...draft, notes })
                   }}
-                  placeholder="what went wrong…"
+                  placeholder="what went wrong..."
                   style={{ width: '100%', boxSizing: 'border-box', marginTop: 4, height: 22, background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, padding: '0 6px', fontSize: 11, fontFamily: F }}
                 />
               </div>
@@ -370,7 +459,7 @@ function PostRoundEditor({ brief, index, setSavedBriefs }) {
             style={{ ...inp, height: 40, resize: 'vertical', fontSize: 12 }}
             value={draft.generalNotes}
             onChange={e => persist({ ...draft, generalNotes: e.target.value })}
-            placeholder="Overall — wind was stronger than forecast; putts felt fast."
+            placeholder="Overall -- wind was stronger than forecast; putts felt fast."
           />
         </div>
       )}
