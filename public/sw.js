@@ -1,27 +1,44 @@
 // Golf Strategy Engine — Service Worker
-// v2: proper runtime caching for Vite content-hashed assets so the app
+// v3: proper runtime caching for Vite content-hashed assets so the app
 // works fully offline. Strategy:
 //   /api/*          → network-only (never cache)
 //   /assets/*       → cache-first (Vite output is content-hashed, immutable)
 //   everything else → network-first, stale-while-revalidate with cache fallback
+//
+// Update flow: new SW waits until all tabs close (no more skipWaiting),
+// then notifies clients via postMessage so the app can show a refresh banner.
 
-const CACHE_NAME = 'golf-strategy-v2'
+const CACHE_NAME = 'golf-strategy-v3'
 const SHELL_ASSETS = ['/', '/index.html']
 
 self.addEventListener('install', (e) => {
   e.waitUntil(
     caches.open(CACHE_NAME).then(cache => cache.addAll(SHELL_ASSETS))
   )
-  self.skipWaiting()
+  // Do NOT call skipWaiting — let the new SW wait until all tabs using the
+  // old version are closed, preventing mixed-version asset bugs.
 })
 
 self.addEventListener('activate', (e) => {
   e.waitUntil(
-    caches.keys().then(keys =>
-      Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k)))
-    )
+    caches.keys()
+      .then(keys => Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k))))
+      .then(() => self.clients.claim())
+      .then(() => {
+        // Notify all open tabs that a new version is active
+        return self.clients.matchAll({ type: 'window' }).then(clients => {
+          for (const client of clients) {
+            client.postMessage({ type: 'SW_UPDATED', version: CACHE_NAME })
+          }
+        })
+      })
   )
-  self.clients.claim()
+})
+
+self.addEventListener('message', (e) => {
+  if (e.data && e.data.type === 'SKIP_WAITING') {
+    self.skipWaiting()
+  }
 })
 
 self.addEventListener('fetch', (e) => {

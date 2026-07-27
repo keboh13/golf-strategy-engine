@@ -69,7 +69,7 @@ class ErrorBoundary extends Component {
 // ─── Main App ─────────────────────────────────────────────────────────────────
 function AppInner({ user, session, onSignOut, onRunOnboarding }) {
   const isMobile = useIsMobile()
-  const { canInstall, isOnline, installApp, dismiss: dismissInstall } = usePwa()
+  const { canInstall, isOnline, updateReady, installApp, dismiss: dismissInstall, applyUpdate } = usePwa()
   // ── API keys — loaded from localStorage, falling back to .env ────────────
   const [apiKey,          setApiKeyRaw]       = useState(() => loadSavedKeys().anthropic  || '')
   const [mapsKey,         setMapsKeyRaw]      = useState(() => loadSavedKeys().maps        || ENV_MAPS_KEY)
@@ -672,8 +672,10 @@ function AppInner({ user, session, onSignOut, onRunOnboarding }) {
       <PwaBanner
         isOnline={isOnline}
         canInstall={canInstall}
+        updateReady={updateReady}
         onInstall={installApp}
         onDismiss={dismissInstall}
+        onApplyUpdate={applyUpdate}
       />
       <style>{`
         @keyframes spin{to{transform:rotate(360deg)}}

@@ -18,7 +18,11 @@ import { computeHoleDistances, formatDistancesLine, getHoleAnchor, buildCarryRin
 //      synthesizes a centerline. The saved pair flows back to the parent
 //      via onContribute and ends up in Supabase so the next user benefits.
 
-const ESRI_TILES = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+const SATELLITE_TILES = import.meta.env.VITE_SATELLITE_TILE_URL
+  || 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+
+const SATELLITE_ATTRIBUTION = import.meta.env.VITE_SATELLITE_ATTRIBUTION
+  || 'Imagery &copy; Esri, Maxar, Earthstar Geographics &middot; Course data &copy; OpenStreetMap contributors (ODbL)'
 
 const STYLE = {
   version: 8,
@@ -26,9 +30,9 @@ const STYLE = {
   sources: {
     sat: {
       type: 'raster',
-      tiles: [ESRI_TILES],
+      tiles: [SATELLITE_TILES],
       tileSize: 256,
-      attribution: 'Imagery © Esri, Maxar, Earthstar Geographics · Course data © OpenStreetMap contributors (ODbL)',
+      attribution: SATELLITE_ATTRIBUTION,
     },
   },
   layers: [{ id: 'sat', type: 'raster', source: 'sat' }],
