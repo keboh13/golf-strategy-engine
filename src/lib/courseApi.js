@@ -1,12 +1,28 @@
-export async function geocodeViaClaudeSearch(authToken, courseName, location) {
-  const res = await fetch('/api/course-ai', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
-    },
-    body: JSON.stringify({ action: 'geocode', courseName, location: location || '' }),
-  })
+export async function geocodeViaClaudeSearch(authToken, courseName, location, { signal } = {}) {
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 15_000)
+  // Forward parent signal (enrichment abort)
+  if (signal) {
+    if (signal.aborted) { clearTimeout(timer); ctrl.abort() }
+    else signal.addEventListener('abort', () => { clearTimeout(timer); ctrl.abort() }, { once: true })
+  }
+  let res
+  try {
+    res = await fetch('/api/course-ai', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+      },
+      body: JSON.stringify({ action: 'geocode', courseName, location: location || '' }),
+      signal: ctrl.signal,
+    })
+  } catch (e) {
+    clearTimeout(timer)
+    if (e.name === 'AbortError' && !signal?.aborted) throw new Error('Geocode timed out after 15s')
+    throw e
+  }
+  clearTimeout(timer)
   const data = await res.json()
   if (!res.ok || data.error) throw new Error(data.error || 'Geocode failed')
   const r = data.result
@@ -307,15 +323,31 @@ export async function extractHazardsForHole(authToken, { course_key, hole, image
   return data.result
 }
 
-export async function fetchHoleDesignViaSearch(authToken, courseName, location) {
-  const res = await fetch('/api/course-ai', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
-    },
-    body: JSON.stringify({ action: 'hole-design-search', courseName, location: location || '' }),
-  })
+export async function fetchHoleDesignViaSearch(authToken, courseName, location, { signal } = {}) {
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 35_000)
+  // Forward parent signal (enrichment abort)
+  if (signal) {
+    if (signal.aborted) { clearTimeout(timer); ctrl.abort() }
+    else signal.addEventListener('abort', () => { clearTimeout(timer); ctrl.abort() }, { once: true })
+  }
+  let res
+  try {
+    res = await fetch('/api/course-ai', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+      },
+      body: JSON.stringify({ action: 'hole-design-search', courseName, location: location || '' }),
+      signal: ctrl.signal,
+    })
+  } catch (e) {
+    clearTimeout(timer)
+    if (e.name === 'AbortError' && !signal?.aborted) throw new Error('Design search timed out after 35s')
+    throw e
+  }
+  clearTimeout(timer)
   const data = await res.json()
   if (!res.ok || data.error) throw new Error(data.error || 'Hole design search failed')
   return data.result

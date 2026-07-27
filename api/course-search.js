@@ -48,10 +48,21 @@ export default async function handler(req) {
   if (!query || typeof query !== 'string') return jsonResponse({ error: 'Missing search query.' }, 400)
 
   try {
-    const res = await fetch(
-      `https://api.golfcourseapi.com/v1/search?search_query=${encodeURIComponent(query)}`,
-      { headers: { Authorization: `Key ${apiKey}` } }
-    )
+    // #151: 10s timeout for the upstream GolfCourseAPI fetch
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 10_000)
+    let res
+    try {
+      res = await fetch(
+        `https://api.golfcourseapi.com/v1/search?search_query=${encodeURIComponent(query)}`,
+        { headers: { Authorization: `Key ${apiKey}` }, signal: controller.signal }
+      )
+    } catch (e) {
+      clearTimeout(timer)
+      if (e.name === 'AbortError') throw new Error('GolfCourseAPI request timed out after 10s')
+      throw e
+    }
+    clearTimeout(timer)
     if (!res.ok) throw new Error(`GolfCourseAPI error: ${res.status}`)
     const data = await res.json()
     return jsonResponse({ courses: data.courses || [] }, 200)

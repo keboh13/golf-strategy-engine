@@ -94,6 +94,15 @@ export function useGeneration({ session, buildPrompt, selectedModel, planStyle, 
         content: [{ type: 'text', text: promptText, cache_control: { type: 'ephemeral' } }],
       }],
     }
+    // #147: secondary auto-timeout (180s) that races against the user abort
+    const autoTimeoutCtrl = new AbortController()
+    const autoTimer = setTimeout(() => autoTimeoutCtrl.abort(), 180_000)
+    // Link: if either user or auto-timeout fires, cancel both
+    const onUserAbort = () => { clearTimeout(autoTimer); autoTimeoutCtrl.abort() }
+    const onAutoAbort = () => ctrl.abort()
+    ctrl.signal.addEventListener('abort', onUserAbort, { once: true })
+    autoTimeoutCtrl.signal.addEventListener('abort', onAutoAbort, { once: true })
+
     try {
       const res = await fetch('/api/generate', {
         method: 'POST',
@@ -110,8 +119,19 @@ export function useGeneration({ session, buildPrompt, selectedModel, planStyle, 
       const reader = res.body.getReader()
       const dec = new TextDecoder()
       let buf = ''
+      // #148: stall detection — abort if 45s pass with no data from reader.read()
+      let stallTimer = null
+      const resetStallTimer = () => {
+        if (stallTimer) clearTimeout(stallTimer)
+        stallTimer = setTimeout(() => {
+          ctrl.abort()
+          setPlanError('Stream stalled — no data received for 45 seconds.')
+        }, 45_000)
+      }
+      resetStallTimer()
       while (true) {
         const { done, value } = await reader.read()
+        resetStallTimer()
         if (done) break
         buf += dec.decode(value, { stream: true })
         const lines = buf.split('\n'); buf = lines.pop()
@@ -136,10 +156,19 @@ export function useGeneration({ session, buildPrompt, selectedModel, planStyle, 
           } catch {}
         }
       }
+      if (stallTimer) clearTimeout(stallTimer)
     } catch (e) {
-      if (e.name === 'AbortError') return
+      clearTimeout(autoTimer)
+      if (e.name === 'AbortError') {
+        // Distinguish auto-timeout from user cancel
+        if (autoTimeoutCtrl.signal.aborted && !ctrl.signal.aborted) {
+          setPlanError('Generation timed out after 180 seconds.')
+        }
+        return
+      }
       setPlanError(e.message)
     }
+    clearTimeout(autoTimer)
     setPlanLoading(false)
     abortRef.current = null
     setGenProgress(p => {
