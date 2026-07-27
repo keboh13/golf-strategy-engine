@@ -140,7 +140,17 @@ export function validateHazardPlausibility(hazardsByHole, scorecardHoles = []) {
         })
       }
 
-      // Check 6: Per-tee distances should not exceed hole yardage
+      // Check 6: Suspiciously short carry distance (< 30y) — likely a data entry
+      // error or misattributed distance marker rather than a real hazard carry.
+      if (Number.isFinite(hz.carry_yards) && hz.carry_yards > 0 && hz.carry_yards < 30) {
+        issues.push({
+          hole,
+          check: 'suspiciously_short_carry',
+          detail: `${hz.type} ${hz.side} carry_yards=${hz.carry_yards} is suspiciously short (< 30y)`,
+        })
+      }
+
+      // Check 7: Per-tee distances should not exceed hole yardage
       if (hz.distances_by_tee && typeof hz.distances_by_tee === 'object') {
         for (const [tee, dist] of Object.entries(hz.distances_by_tee)) {
           if (Number.isFinite(dist) && holeYardage > 0 && dist > holeYardage) {

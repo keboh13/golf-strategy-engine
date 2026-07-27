@@ -193,6 +193,13 @@ describe('PDF parsing pipeline integration', () => {
       expect(tee[0].hole).toBe(8) // tee hazard at 150y
     })
 
+    it('catches suspiciously short carry distance (< 30y)', () => {
+      const issues = validateHazardPlausibility(IMPLAUSIBLE_HAZARDS, SAMPLE_SCORECARD.holes)
+      const shortCarry = issues.filter(i => i.check === 'suspiciously_short_carry')
+      expect(shortCarry.length).toBeGreaterThanOrEqual(1)
+      expect(shortCarry[0].hole).toBe(9) // carry_yards: 15
+    })
+
     it('returns no issues for fixture data when no scorecard holes are provided', () => {
       const issues = validateHazardPlausibility(SAMPLE_HAZARDS_BY_HOLE, [])
       // Without scorecard data, distance-based checks that need hole length

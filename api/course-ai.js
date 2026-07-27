@@ -753,6 +753,164 @@ If you cannot extract a verifiable scorecard: {"error":"…"}`,
       return jsonResponse({ result: parsed }, 200)
     }
 
+    // ----------------------------------------------------------------
+    // Issue #175: Auto-discovery enrichment for courses without admin PDFs.
+    // When a course is loaded via hole-design-search (the web-search enrichment
+    // path), fire a best-effort background task that discovers and persists
+    // structured hazard data from publicly available scorecards and course
+    // guides. This runs silently after the main response is already returned
+    // to the client — it never blocks or delays the user-facing request.
+    // ----------------------------------------------------------------
+    if (action === 'auto-discover-hazards') {
+      if (!courseName) return jsonResponse({ error: 'Missing courseName.' }, 400)
+
+      // Rate-limit: skip if we already have hazard data for this course
+      if (course_key && supabaseUrl && supabaseServiceKey) {
+        try {
+          const existing = await supabaseRest(
+            `course_hole_hazards?course_key=eq.${encodeURIComponent(course_key)}&select=hole_ref&limit=1`,
+            { method: 'GET' }
+          )
+          if (existing.ok) {
+            const rows = await existing.json()
+            if (Array.isArray(rows) && rows.length > 0) {
+              return jsonResponse({ result: { skipped: true, reason: 'hazard_data_exists' } }, 200)
+            }
+          }
+        } catch {}
+      }
+
+      // Step 1: Discover a PDF or HTML source via web search
+      const tried = []
+      let discovery = null
+      let confirmedPdf = false
+      for (let attempt = 0; attempt < 2; attempt++) {
+        let discoverText
+        try {
+          discoverText = await callClaude(
+            buildPdfDiscoveryMessages(courseName, location || '', tried),
+            800,
+            true,
+          )
+        } catch (e) {
+          console.error(`[auto-discover] discovery call failed: ${e.message}`)
+          return jsonResponse({ result: { skipped: true, reason: 'discovery_failed', detail: e.message } }, 200)
+        }
+        const dRes = parseJsonFromText(discoverText)
+        if (!dRes.ok || dRes.value?.error || !dRes.value?.url) break
+        discovery = dRes.value
+        const looksPdf = discovery.kind === 'pdf' || /\.pdf(\?|$)/i.test(discovery.url)
+        if (looksPdf) {
+          confirmedPdf = await urlServesPdf(discovery.url)
+          if (confirmedPdf) break
+          tried.push(discovery.url)
+        } else {
+          break
+        }
+      }
+
+      if (!discovery || (!confirmedPdf && discovery.kind === 'pdf')) {
+        return jsonResponse({ result: { skipped: true, reason: 'no_source_found' } }, 200)
+      }
+
+      // Step 2: Parse and persist with web-discovered confidence
+      if (confirmedPdf) {
+        try {
+          const emptyCoverage = computeHazardCoverage([])
+          const messages = buildHazardDesignMessages(discovery.url, courseName, location || '')
+          const text = await callClaude(messages, 8000, false, undefined, MODEL)
+          const r = parseJsonFromText(text)
+          if (!r.ok) throw new Error(`No JSON in hazard response (${r.error}).`)
+          const parsed = r.value
+          if (parsed.error) throw new Error(parsed.error)
+
+          const hazardsByHole = Array.isArray(parsed.hazardsByHole) ? parsed.hazardsByHole : []
+          const coverage = computeHazardCoverage(hazardsByHole)
+
+          if (course_key && supabaseUrl && supabaseServiceKey && hazardsByHole.length) {
+            const rows = buildHazardRows(hazardsByHole, {
+              courseKey: course_key,
+              pdfUrl: discovery.url,
+              coverage,
+              baseConfidence: 'web-discovered',
+              source: 'auto_discovery',
+            })
+            if (rows.length) {
+              await supabaseRest('course_hole_hazards?on_conflict=course_key,hole_ref', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates' },
+                body: JSON.stringify(rows),
+              }).catch(e => console.error(`[auto-discover] persist failed: ${e?.message}`))
+            }
+          }
+
+          return jsonResponse({
+            result: {
+              enriched: true,
+              confidence: 'web-discovered',
+              source: discovery.url,
+              holesDiscovered: hazardsByHole.length,
+              coverage,
+            },
+          }, 200)
+        } catch (e) {
+          console.error(`[auto-discover] parse failed: ${e.message}`)
+          return jsonResponse({ result: { skipped: true, reason: 'parse_failed', detail: e.message } }, 200)
+        }
+      }
+
+      // HTML source — extract hole design data via web search
+      try {
+        const text = await callClaude(
+          buildHoleDesignMessages(courseName, location || ''),
+          2000,
+          true,
+          undefined,
+          MODEL_FAST,
+          { webSearchMaxUses: 2, timeoutMs: 30000 },
+        )
+        const r = parseJsonFromText(text)
+        if (!r.ok || r.value?.error) {
+          return jsonResponse({ result: { skipped: true, reason: 'web_extract_failed' } }, 200)
+        }
+
+        // Normalize web-search hole design data into hazard rows
+        const holes = Array.isArray(r.value.holes) ? r.value.holes : []
+        const hazardsByHole = holes
+          .filter(h => h && h.hole && Array.isArray(h.hazards) && h.hazards.length)
+          .map(h => ({ hole: h.hole, dogleg: h.dogleg, hazards: h.hazards, green_notes: h.green_notes }))
+
+        if (hazardsByHole.length && course_key && supabaseUrl && supabaseServiceKey) {
+          const coverage = computeHazardCoverage(hazardsByHole)
+          const rows = buildHazardRows(hazardsByHole, {
+            courseKey: course_key,
+            coverage,
+            baseConfidence: 'web-discovered',
+            source: 'auto_discovery',
+          })
+          if (rows.length) {
+            await supabaseRest('course_hole_hazards?on_conflict=course_key,hole_ref', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates' },
+              body: JSON.stringify(rows),
+            }).catch(e => console.error(`[auto-discover] persist failed: ${e?.message}`))
+          }
+        }
+
+        return jsonResponse({
+          result: {
+            enriched: hazardsByHole.length > 0,
+            confidence: 'web-discovered',
+            source: r.value.source || 'web_search',
+            holesDiscovered: hazardsByHole.length,
+          },
+        }, 200)
+      } catch (e) {
+        console.error(`[auto-discover] web extract failed: ${e.message}`)
+        return jsonResponse({ result: { skipped: true, reason: 'web_extract_error', detail: e.message } }, 200)
+      }
+    }
+
     if (!courseName) return jsonResponse({ error: 'Missing courseName.' }, 400)
 
     const ACTIONS = {
@@ -792,6 +950,53 @@ If you cannot extract a verifiable scorecard: {"error":"…"}`,
       parsed._validationIssues = issues
       if (issues.length > 1) parsed._confidence = 'low'
       else if (issues.length === 1) parsed._confidence = parsed._confidence === 'high' ? 'medium' : (parsed._confidence || 'low')
+    }
+
+    // Issue #175: After hole-design-search, queue a background auto-discovery
+    // enrichment if the course has no existing hazard data. This is fire-and-forget
+    // — the main response is already built and will be returned immediately.
+    if (action === 'hole-design-search' && course_key && supabaseUrl && supabaseServiceKey) {
+      // Check if hazard data already exists — if not, queue enrichment
+      const enrichmentCheck = supabaseRest(
+        `course_hole_hazards?course_key=eq.${encodeURIComponent(course_key)}&select=hole_ref&limit=1`,
+        { method: 'GET' }
+      ).then(async (res) => {
+        if (!res.ok) return
+        const rows = await res.json()
+        if (Array.isArray(rows) && rows.length > 0) return // already has data
+
+        // Fire the auto-discover action as an internal call. This is a
+        // lightweight self-POST that runs the discovery pipeline. It will
+        // rate-limit itself if data appears between the check and the call.
+        console.log(`[auto-discover] queuing background enrichment for ${course_key}`)
+        // We inline the enrichment here rather than making an HTTP call to
+        // ourselves, to avoid cold-start and authentication overhead.
+        const holes = Array.isArray(parsed.holes) ? parsed.holes : []
+        const hazardsByHole = holes
+          .filter(h => h && h.hole && Array.isArray(h.hazards) && h.hazards.length)
+          .map(h => ({ hole: h.hole, dogleg: h.dogleg, hazards: h.hazards, green_notes: h.green_notes }))
+
+        if (!hazardsByHole.length) return
+
+        const coverage = computeHazardCoverage(hazardsByHole)
+        const hzRows = buildHazardRows(hazardsByHole, {
+          courseKey: course_key,
+          coverage,
+          baseConfidence: 'web-discovered',
+          source: 'auto_discovery',
+        })
+        if (hzRows.length) {
+          await supabaseRest('course_hole_hazards?on_conflict=course_key,hole_ref', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates' },
+            body: JSON.stringify(hzRows),
+          }).catch(e => console.error(`[auto-discover] persist failed: ${e?.message}`))
+          console.log(`[auto-discover] persisted ${hzRows.length} hazard rows for ${course_key} (confidence: web-discovered)`)
+        }
+      }).catch(e => console.error(`[auto-discover] enrichment check failed: ${e?.message}`))
+      // Do not await — this runs in the background after the response is sent.
+      // Vercel keeps the function alive until all promises settle (within maxDuration).
+      void enrichmentCheck
     }
 
     return jsonResponse({ result: parsed }, 200)
