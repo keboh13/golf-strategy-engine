@@ -40,7 +40,7 @@ export function validatePlanContract(text, options = {}) {
   let missingFieldCount = 0
   for (const sec of sections) {
     for (const f of HOLE_FIELDS) {
-      if (!new RegExp(`\\*\\*${f}\\*\\*|${f}:`, 'i').test(sec)) {
+      if (!new RegExp(`\\*\\*${f}[^*]*\\*\\*|${f}:`, 'i').test(sec)) {
         missingFieldCount++
         break
       }

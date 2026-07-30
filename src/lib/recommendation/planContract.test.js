@@ -55,6 +55,18 @@ describe('validatePlanContract', () => {
     expect(r.ok).toBe(false)
     expect(r.issues.some(i => i.startsWith('incomplete_hole_sections:'))).toBe(true)
   })
+  it('accepts **Approach (2nd)** numbered notation on par-5 holes', () => {
+    let s = `## Round strategy\n2-3 sentences.\n\n## Scoring roadmap\nH1 Par 4 — go\n\n## Hole-by-hole\n`
+    for (let i = 1; i <= 18; i++) {
+      const isPar5 = [3, 5, 13, 15].includes(i)
+      const approach = isPar5
+        ? `- **Approach (2nd)**: 5-wood, 230y layup\n- **Approach (3rd)**: GW, 105y, center green`
+        : `- **Approach**: 7i, 165y, center`
+      s += `### Hole ${i} — Par ${isPar5 ? 5 : 4}\n- **Tee**: driver fade\n${approach}\n- **Caddy**: smooth swing\n\`\`\`green-json\n{"depth_y":28,"hazards":[]}\n\`\`\`\n`
+    }
+    const r = validatePlanContract(s)
+    expect(r.issues.filter(i => i.startsWith('incomplete_hole_sections:'))).toEqual([])
+  })
   it('flags malformed green-json', () => {
     const r = validatePlanContract(buildPlan({ badGreenJson: 3 }))
     expect(r.ok).toBe(false)
