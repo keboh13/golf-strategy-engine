@@ -12,16 +12,13 @@ export default function HistoryTab({
   setSavedBriefs,
   expandedBrief,
   setExpandedBrief,
-  briefNotes,
-  setBriefNotes,
-  deleteConfirm,
-  setDeleteConfirm,
-  copied,
-  setCopied,
   setTab,
   setPrepStep,
   setPlan,
 }) {
+  const [briefNotes, setBriefNotes] = useState({})
+  const [deleteConfirm, setDeleteConfirm] = useState({})
+  const [copied, setCopied] = useState(false)
   // Per-brief rating state: { [rec_log_id]: { value: 1-5, saving: bool, saved: bool, error: '' } }
   const [ratings, setRatings] = useState({})
 

@@ -334,8 +334,6 @@ function AppInner({ user, session, onSignOut, onRunOnboarding }) {
   ]
 
   const [playerSubTab, setPlayerSubTab] = useState('details')
-  const [deleteConfirm, setDeleteConfirm] = useState({})
-  const [briefNotes, setBriefNotes] = useState({})
 
 
   return (
@@ -467,12 +465,6 @@ function AppInner({ user, session, onSignOut, onRunOnboarding }) {
             setSavedBriefs={setSavedBriefs}
             expandedBrief={expandedBrief}
             setExpandedBrief={setExpandedBrief}
-            briefNotes={briefNotes}
-            setBriefNotes={setBriefNotes}
-            deleteConfirm={deleteConfirm}
-            setDeleteConfirm={setDeleteConfirm}
-            copied={copied}
-            setCopied={setCopied}
             setTab={setTab}
             setPrepStep={setPrepStep}
             setPlan={setPlan}
