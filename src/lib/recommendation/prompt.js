@@ -565,7 +565,7 @@ One line per hole: "H[N] Par [X] [Yds]y — 🟢/🟡/🔴 — reason"
 ## Hole-by-hole
 ### Hole [N] — Par [X] — [Yds]y — HCP [N]
 - **Tee**: Club, target, shape (specify ball flight direction for this ${isLefty ? 'lefty' : 'righty'})
-- **Approach**: Club, distance, landing zone
+- **Approach**: Club, distance, landing zone (par 5s: **Approach (2nd)** and **Approach (3rd)** if laying up)
 - **Caddy**: One short sentence. Sound like a human, not a manual.
 \`\`\`green-json
 {"depth_y":28,"width_y":24,"shape":"oval","pin":"center","slope":"flat","tiers":0,"tier_desc":"","green_notes":"","confidence":"uncertain","hazards":[]}
